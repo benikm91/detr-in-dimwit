@@ -6,8 +6,26 @@ prediction — there is no batch axis in the architecture, batching is `vmap` at
 level.
 
 ```
-sbt "detr/runMain detrTrain"
+sbt "detr/runMain detrTrain"           # trains, checkpointing every 250 steps into out/detr/<timestamp>
+sbt "detr/runMain detrPlot"            # plots the first drawings of both splits with targets and predictions
+sbt "detr/runMain detrEval"            # scores the newest checkpoint on the whole validation split
+sbt "detr/runMain detrEval out/detr/…" # … or scores a given run
 ```
+
+A checkpoint holds the whole `TrainState`, so training can be resumed from it and both eval
+scripts read the parameters back out of it. `Prediction.detected` turns the raw prediction
+into the same `Detection` type the dataset yields, so targets and predictions render — and
+are scored — through the same code.
+
+`detrEval` matches predictions to targets exactly as training does, then counts:
+
+- an **object** as detected when its class is right and its defining points land within 4
+  pixels — both end points for a part line, the anchor for a text (the target's box size
+  around a text is an artifact of the dataset wrapper, so it is not scored);
+- a **drawing** as detected when every query slot is right: every object detected, none
+  missing and none spurious.
+
+Note that `detrPlot` reads the training split, which downloads 8.6 GB on first use.
 
 ## Divergences from the paper
 
@@ -60,4 +78,5 @@ class head, the three layer perceptron box head, and the set prediction loss.
 | [Boxes.scala](src/main/scala/Boxes.scala) | box geometry: L1 and GIoU |
 | [HungarianMatching.scala](src/main/scala/HungarianMatching.scala) | linear assignment |
 | [HungarianLoss.scala](src/main/scala/HungarianLoss.scala) | matching and set prediction loss |
-| [DETRTrain.scala](src/main/scala/DETRTrain.scala) | training loop |
+| [DETRTrain.scala](src/main/scala/DETRTrain.scala) | training loop and checkpointing |
+| [DETREval.scala](src/main/scala/DETREval.scala) | loads a checkpoint and plots its detections |

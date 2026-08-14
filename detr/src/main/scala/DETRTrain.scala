@@ -4,6 +4,7 @@ import dataset.LShapeBatch
 import dataset.LShapeDetectionDataset
 import dataset.LShapeDetectionDataset.Split
 import deepwit.Monitor
+import deepwit.checkpointing.TensorTreeCheckpointer
 import deepwit.tapEvery
 import deepwit.transformer.MLPEmbeddingMixer
 import deepwit.transformer.attention.Head
@@ -14,6 +15,9 @@ import dimwit.*
 import dimwit.optimizer.Adam
 import dimwit.optimizer.AdamState
 import dimwit.tensor.Tensor4
+
+/** Where [[detrTrain]] writes and [[detrEval]] reads its checkpoints. */
+val CheckpointRoot = "out/detr"
 
 private trait Batch derives Label
 
@@ -91,6 +95,8 @@ def detrTrain(): Unit =
   def gradientStep(batch: LShapeBatch[Batch, Width, Height, Channel, BoundingBox], state: TrainState): TrainState =
     jitOptimize(batch.images, matchTargets(batch, state.params), state)
 
+  val startedAt = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+  val checkpointer = TensorTreeCheckpointer(s"$CheckpointRoot/$startedAt")
   val monitor = Monitor.default[TrainState](batchSize = batchSize, lossLens = _.lastCost.item)
   batches
     .scanLeft(TrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):
@@ -99,5 +105,9 @@ def detrTrain(): Unit =
         gradientStep(batch, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))
+    .tapEvery(250):
+      case (state, step) =>
+        checkpointer.save(state, step)
+        println(s"Step $step | checkpoint saved to $CheckpointRoot/$startedAt")
     .drop(numIterations)
     .next()

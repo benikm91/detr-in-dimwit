@@ -1,3 +1,4 @@
+import dataset.Detection
 import dataset.ObjectClass
 import deepwit.base.AffineLayer
 import deepwit.base.relu
@@ -72,6 +73,16 @@ object DETR:
       height: Tensor1[BoundingBox, V],
       classLogits: Tensor2[BoundingBox, ObjectClasses, V]
   ):
+    /** The detected objects: the most likely class per query, with its box. */
+    def detected(using IsFloating[V]): Detection[BoundingBox] =
+      Detection(
+        centerX = centerX.asFloat32,
+        centerY = centerY.asFloat32,
+        width = width.asFloat32,
+        height = height.asFloat32,
+        label = classLogits.argmax(Axis[ObjectClasses])
+      )
+
     /** `vmap` cannot return a case class, so batching goes through the plain tuple. */
     def toTuple: (
         Tensor1[BoundingBox, V],

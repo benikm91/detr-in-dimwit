@@ -18,5 +18,5 @@ ide-*.json
 .envrc
 
 **/target/*
-
+detr/out
 .claude
