@@ -1,0 +1,13 @@
+[project]
+name = "detr-python-env"
+version = "0.1.0"
+description = "Python environment accessed through ScalaPy by DimWit and the l-shape dataset loader"
+requires-python = ">=3.12"
+dependencies = [
+    "einops>=0.8.1",
+    "jax[cuda12]>=0.8.2",
+    "numpy>=2.0",
+    # Used by src/main/resources/python/l_shape_dataset.py to fetch the dataset;
+    # hf-xet makes the ~8.6 GB train split download noticeably faster.
+    "huggingface-hub[hf-xet]>=0.36",
+]
