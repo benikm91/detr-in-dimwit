@@ -10,56 +10,28 @@ import me.shadaj.scalapy.py.SeqConverters
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
-/** The objects in an image: axis aligned boxes normalized to `[0, 1]` of the image,
-  * labelled with an [[ObjectClass.id]].
-  */
-case class Detection[Box](
-    centerX: Tensor1[Box, Float32],
-    centerY: Tensor1[Box, Float32],
-    width: Tensor1[Box, Float32],
-    height: Tensor1[Box, Float32],
-    label: Tensor1[Box, Int32]
+/** The objects in an image: a [[Box]] per slot, labelled with an [[ObjectClass.id]]. */
+final case class Detection[Slot, V](
+    box: Box[Tuple1[Slot], V],
+    label: Tensor1[Slot, Int32]
 )
 
 /** [[Detection]] for a batch of images along the axis `S`. */
-case class DetectionBatch[S, Box](
-    centerX: Tensor2[S, Box, Float32],
-    centerY: Tensor2[S, Box, Float32],
-    width: Tensor2[S, Box, Float32],
-    height: Tensor2[S, Box, Float32],
-    label: Tensor2[S, Box, Int32]
-):
-
-  def at(sample: Int)(using Label[S], Label[Box]): Detection[Box] =
-    Detection(
-      centerX = centerX.slice(Axis[S].at(sample)),
-      centerY = centerY.slice(Axis[S].at(sample)),
-      width = width.slice(Axis[S].at(sample)),
-      height = height.slice(Axis[S].at(sample)),
-      label = label.slice(Axis[S].at(sample))
-    )
-
-object DetectionBatch:
-
-  def stacked[S: Label, Box: Label](samples: Seq[Detection[Box]]): DetectionBatch[S, Box] =
-    DetectionBatch(
-      centerX = stack(samples.map(_.centerX), Axis[S]),
-      centerY = stack(samples.map(_.centerY), Axis[S]),
-      width = stack(samples.map(_.width), Axis[S]),
-      height = stack(samples.map(_.height), Axis[S]),
-      label = stack(samples.map(_.label), Axis[S])
-    )
+final case class DetectionBatch[S, Slot, V](
+    box: Box[(S, Slot), V],
+    label: Tensor2[S, Slot, Int32]
+)
 
 /** One drawing together with the objects to detect in it. */
-final case class LShapeSample[W, H, C, Box](
+final case class LShapeSample[W, H, C, Slot](
     image: Tensor3[W, H, C, Float32],
-    objects: Detection[Box]
+    objects: Detection[Slot, Float32]
 )
 
 /** A batch of drawings together with the objects to detect in them. */
-final case class LShapeBatch[S, W, H, C, Box](
+final case class LShapeBatch[S, W, H, C, Slot](
     images: Tensor4[S, W, H, C, Float32],
-    objects: DetectionBatch[S, Box]
+    objects: DetectionBatch[S, Slot, Float32]
 )
 
 /** [[NoObject]] is DETR's "no object" class and marks an unused query slot. */
@@ -157,12 +129,12 @@ object LShapeDetectionDataset:
     * The axes name what the loaded tensors are labelled with: `width` and `height` the
     * image directions, `channel` its single greyscale channel and `box` the target slots.
     */
-  def open[W: Label, H: Label, C: Label, Box: Label](
+  def open[W: Label, H: Label, C: Label, Slot: Label](
       width: Axis[W],
       height: Axis[H],
       channel: Axis[C],
-      box: Axis[Box]
-  )(split: Split, config: Config = Config()): LShapeDetectionDataset[W, H, C, Box] =
+      slot: Axis[Slot]
+  )(split: Split, config: Config = Config()): LShapeDetectionDataset[W, H, C, Slot] =
     require(config.numQueries.forall(_ > 0), "numQueries must be positive")
     val detected = ObjectClass.actionTypes.toSeq
     val handle = module.open_split(
@@ -204,7 +176,7 @@ object LShapeDetectionDataset:
     py.module(ModuleName)
 
 /** A single split of the l-shape dataset. Use [[LShapeDetectionDataset.open]] to create one. */
-final class LShapeDetectionDataset[W: Label, H: Label, C: Label, Box: Label] private[dataset] (
+final class LShapeDetectionDataset[W: Label, H: Label, C: Label, Slot: Label] private[dataset] (
     private val handle: py.Dynamic,
     val split: LShapeDetectionDataset.Split,
     val config: LShapeDetectionDataset.Config
@@ -228,17 +200,19 @@ final class LShapeDetectionDataset[W: Label, H: Label, C: Label, Box: Label] pri
     * @param shuffle draws the samples in a random order instead of storage order. Reusing
     *                the same `Random` across passes gives a fresh order each time.
     */
-  def samples(shuffle: Option[scala.util.Random] = None): Iterator[LShapeSample[W, H, C, Box]] =
+  def samples(shuffle: Option[scala.util.Random] = None): Iterator[LShapeSample[W, H, C, Slot]] =
     readOrder(shuffle).iterator.map: index =>
       val sample = handle.sample(index)
       LShapeSample(
         image = liftPyTensor[(W, H, C), Float32](sample.images),
         objects = Detection(
-          centerX = liftPyTensor1(Axis[Box], VType[Float32])(sample.center_x),
-          centerY = liftPyTensor1(Axis[Box], VType[Float32])(sample.center_y),
-          width = liftPyTensor1(Axis[Box], VType[Float32])(sample.width),
-          height = liftPyTensor1(Axis[Box], VType[Float32])(sample.height),
-          label = liftPyTensor1(Axis[Box], VType[Int32])(sample.label)
+          box = Box(
+            centerX = liftPyTensor1(Axis[Slot], VType[Float32])(sample.center_x),
+            centerY = liftPyTensor1(Axis[Slot], VType[Float32])(sample.center_y),
+            width = liftPyTensor1(Axis[Slot], VType[Float32])(sample.width),
+            height = liftPyTensor1(Axis[Slot], VType[Float32])(sample.height)
+          ),
+          label = liftPyTensor1(Axis[Slot], VType[Int32])(sample.label)
         )
       )
 
@@ -250,7 +224,7 @@ final class LShapeDetectionDataset[W: Label, H: Label, C: Label, Box: Label] pri
   def batches[S: Label](
       batchExtent: AxisExtent[S],
       shuffle: Option[scala.util.Random] = None
-  ): Iterator[LShapeBatch[S, W, H, C, Box]] =
+  ): Iterator[LShapeBatch[S, W, H, C, Slot]] =
     val batchSize = batchExtent.size
     require(batchSize > 0, "batch size must be positive")
     require(
@@ -262,11 +236,13 @@ final class LShapeDetectionDataset[W: Label, H: Label, C: Label, Box: Label] pri
       LShapeBatch(
         images = liftPyTensor[(S, W, H, C), Float32](batch.images),
         objects = DetectionBatch(
-          centerX = liftPyTensor[(S, Box), Float32](batch.center_x),
-          centerY = liftPyTensor[(S, Box), Float32](batch.center_y),
-          width = liftPyTensor[(S, Box), Float32](batch.width),
-          height = liftPyTensor[(S, Box), Float32](batch.height),
-          label = liftPyTensor[(S, Box), Int32](batch.label)
+          box = Box(
+            centerX = liftPyTensor[(S, Slot), Float32](batch.center_x),
+            centerY = liftPyTensor[(S, Slot), Float32](batch.center_y),
+            width = liftPyTensor[(S, Slot), Float32](batch.width),
+            height = liftPyTensor[(S, Slot), Float32](batch.height)
+          ),
+          label = liftPyTensor[(S, Slot), Int32](batch.label)
         )
       )
 

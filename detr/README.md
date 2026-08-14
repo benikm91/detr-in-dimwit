@@ -6,16 +6,16 @@ prediction — there is no batch axis in the architecture, batching is `vmap` at
 level.
 
 ```
-sbt "detr/runMain detrTrain"           # trains, checkpointing every 250 steps into out/detr/<timestamp>
+sbt "detr/runMain detrTrain"           # trains, checkpointing every 500 steps into out/detr/<timestamp>
 sbt "detr/runMain detrPlot"            # plots the first drawings of both splits with targets and predictions
 sbt "detr/runMain detrEval"            # scores the newest checkpoint on the whole validation split
 sbt "detr/runMain detrEval out/detr/…" # … or scores a given run
 ```
 
 A checkpoint holds the whole `TrainState`, so training can be resumed from it and both eval
-scripts read the parameters back out of it. `Prediction.detected` turns the raw prediction
-into the same `Detection` type the dataset yields, so targets and predictions render — and
-are scored — through the same code.
+scripts read the parameters back out of it. `DETR.logits` gives the raw scores the loss works
+on, while `DETR.apply` decides a class per query and returns the same `Detection` type the
+dataset yields, so targets and predictions render — and are scored — through the same code.
 
 `detrEval` matches predictions to targets exactly as training does, then counts:
 
@@ -48,17 +48,22 @@ through shared heads. Only the final layer is supervised here.
 
 **No dropout.** The paper uses 0.1 throughout the transformer; deepwit has no dropout module.
 
-**Matching runs outside the traced step.** The assignment is a discrete decision on concrete
-values, so it cannot live inside `grad` or `jit`. `HungarianLoss.matchTargets` runs on its
-own forward pass and hands the matched targets to the differentiable `HungarianLoss.apply`
-as constants, which costs one extra forward pass per step. The solver is a shortest
-augmenting path implementation ([HungarianMatching.scala](src/main/scala/HungarianMatching.scala))
-rather than SciPy's `linear_sum_assignment`.
+**The matcher is greedy, not optimal.** The paper solves the assignment exactly with SciPy's
+`linear_sum_assignment`. An augmenting path algorithm needs data dependent control flow,
+which would force the matching out of the traced step and onto the host; instead
+[Matching.scala](src/main/scala/Matching.scala) repeatedly takes the cheapest remaining pair,
+which is a fixed number of steps of plain tensor operations and therefore traces, jits and
+vmaps with everything else. Greedy can be beaten on an ambiguous cost matrix, but keeping the
+matching inside the graph made training about ten times faster, since nothing has to leave
+the device mid-step. Padding slots carry a surcharge derived from the spread of the real
+costs — a constant per column leaves the optimal assignment untouched, and it stops greedy
+from handing its cheapest predictions to slots holding no object.
 
 **Training setup.** The paper uses AdamW at 1e-4 (1e-5 for the backbone), weight decay 1e-4,
 gradients clipped at 0.1, a step schedule over 300 epochs and scale/crop augmentation. This
-trains with plain Adam at 1e-4, no schedule, no clipping and no augmentation — the dataset
-generator already randomizes translation, mirroring and rotation.
+trains with plain Adam at 3e-4 — the model is far smaller and gets far fewer steps — with no
+schedule, no clipping and no augmentation, since the dataset generator already randomizes
+translation, mirroring and rotation.
 
 **Task.** Three classes (`NoObject`, `PartLine`, `Text`) instead of 91 COCO classes, and the
 targets come padded to the query count, which is how the paper pads ground truth to `N`, so
@@ -75,8 +80,10 @@ class head, the three layer perceptron box head, and the set prediction loss.
 |---|---|
 | [Vocabulary.scala](src/main/scala/Vocabulary.scala) | axis labels shared by the model and the dataset |
 | [DETR.scala](src/main/scala/DETR.scala) | the model and its parameters |
-| [Boxes.scala](src/main/scala/Boxes.scala) | box geometry: L1 and GIoU |
-| [HungarianMatching.scala](src/main/scala/HungarianMatching.scala) | linear assignment |
+| [Matching.scala](src/main/scala/Matching.scala) | greedy assignment, in tensor operations |
 | [HungarianLoss.scala](src/main/scala/HungarianLoss.scala) | matching and set prediction loss |
 | [DETRTrain.scala](src/main/scala/DETRTrain.scala) | training loop and checkpointing |
-| [DETREval.scala](src/main/scala/DETREval.scala) | loads a checkpoint and plots its detections |
+| [DETREval.scala](src/main/scala/DETREval.scala) | plots and scores a checkpoint |
+
+Box geometry (L1 and GIoU) lives with `Detection` in the dataset module,
+[Box.scala](../dataset/src/main/scala/Box.scala).

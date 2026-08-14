@@ -1,10 +1,12 @@
+package dataset
+
 import dimwit.*
 import dimwit.Conversions.given
 
 import scala.language.implicitConversions
 
 /** Axis aligned boxes in `(centerX, centerY, width, height)` form, normalized to `[0, 1]`
-  * of the image.
+  * of the image. `T` is the shape the boxes are laid out in.
   */
 case class Box[T <: Tuple, V](
     centerX: Tensor[T, V],

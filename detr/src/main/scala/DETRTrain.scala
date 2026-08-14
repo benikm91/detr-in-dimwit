@@ -1,4 +1,6 @@
+import dataset.Box
 import dataset.Detection
+import dataset.Box
 import dataset.DetectionBatch
 import dataset.LShapeBatch
 import dataset.LShapeDetectionDataset
@@ -31,69 +33,47 @@ case class TrainState(
 def detrTrain(): Unit =
   dimwit.initialize()
 
-  val numIterations = 1_000
-  val batchSize = 8
-  val learningRate = 1e-4f
+  val numIterations = 20_000
+  val batchSize = 64
+  val learningRate = 1e-5f // 3e-4f
 
   val data = LShapeDetectionDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Train)
-  val batches = data.batches(Axis[Batch] -> batchSize, shuffle = Some(scala.util.Random(42)))
+  val shuffle = scala.util.Random(42)
+  val batches = Iterator.continually(data.batches(Axis[Batch] -> batchSize, shuffle = Some(shuffle))).flatten
 
-  val loss = HungarianLoss[Float32]()
   val optimizer = Adam(learningRate = Tensor0(learningRate))
 
-  val initialParams = DETR.Params.init[Float32](numEncoderLayers = 3, numDecoderLayers = 3)(
-    patchWidthExtent = Axis[Width] -> 16,
-    patchHeightExtent = Axis[Height] -> 16,
-    channelExtent = Axis[Channel] -> 1,
-    boundingBoxExtent = Axis[BoundingBox] -> data.numQueries,
-    headExtent = Axis[Head] -> 4,
-    headQueryExtent = Axis[HeadQuery] -> 32,
-    headKeyExtent = Axis[HeadKey] -> 32,
-    headValueExtent = Axis[HeadValue] -> 32,
-    embeddingExtent = Axis[DETR.Embedding] -> 128,
-    embeddingMixedExtent = Axis[MLPEmbeddingMixer.EmbeddingMixed] -> 256,
-    boxHiddenExtent = Axis[DETR.BoxHidden] -> 128,
-    vtype = VType[Float32],
+  val initialParams = DETR.Params.init(
+    numLayers = 3,
+    numHeads = 4,
+    embedding = 128,
+    numQueries = data.numQueries,
     key = Random.Key(0)
   )
 
-  val predict = jit: (params: DETR.Params[Float32], images: Tensor4[Batch, Width, Height, Channel, Float32]) =>
-    images.vmap(Axis[Batch])(DETR(params)(_).toTuple)
-
-  /** Matching cannot be traced, so it runs on its own forward pass and the assignment it
-    * decides on enters the gradient step as a constant.
-    */
-  def matchTargets(
-      batch: LShapeBatch[Batch, Width, Height, Channel, BoundingBox],
-      params: DETR.Params[Float32]
-  ): DetectionBatch[Batch, BoundingBox] =
-    val predictions = DETR.PredictionBatch(predict(params, batch.images))
-    DetectionBatch.stacked:
-      (0 until batch.images.shape(Axis[Batch])).map: sample =>
-        loss.matchTargets(predictions.at(sample), batch.objects.at(sample))
+  val loss = HungarianLoss(VType[Float32])()
 
   def cost(
-      images: Tensor4[Batch, Width, Height, Channel, Float32],
-      matched: DetectionBatch[Batch, BoundingBox]
+      imgs: Tensor4[Batch, Width, Height, Channel, Float32],
+      objects: DetectionBatch[Batch, BoundingBox, Float32]
   )(params: DETR.Params[Float32]): Tensor0[Float32] =
     val model = DETR(params)
-    zipvmap(Axis[Batch])(images, matched.centerX, matched.centerY, matched.width, matched.height, matched.label):
-      case (image, centerX, centerY, width, height, label) =>
-        loss(model(image), Detection(centerX, centerY, width, height, label))
+    zipvmap(Axis[Batch])(imgs, objects.box.centerX, objects.box.centerY, objects.box.width, objects.box.height, objects.label):
+      case (img, centerX, centerY, width, height, label) =>
+        val y = Detection(Box(centerX, centerY, width, height), label)
+        val yHat = model.logits(img)
+        loss(yHat, y)
     .mean
 
-  def optimize(
-      images: Tensor4[Batch, Width, Height, Channel, Float32],
-      matched: DetectionBatch[Batch, BoundingBox],
+  def gradientStep(
+      imgs: Tensor4[Batch, Width, Height, Channel, Float32],
+      y: DetectionBatch[Batch, BoundingBox, Float32],
       state: TrainState
-  ): TrainState =
-    val (cost0, gradients) = Autodiff.valueAndGrad(cost(images, matched))(state.params)
+  ) =
+    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(imgs, y))(state.params)
     val (params, optimizerState) = optimizer.update(gradients, state.params, state.optimizerState)
-    TrainState(params, optimizerState, cost0)
-  val jitOptimize = jitDonatingUnsafe(optimize)
-
-  def gradientStep(batch: LShapeBatch[Batch, Width, Height, Channel, BoundingBox], state: TrainState): TrainState =
-    jitOptimize(batch.images, matchTargets(batch, state.params), state)
+    TrainState(params, optimizerState, lastCost)
+  val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
   val startedAt = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
   val checkpointer = TensorTreeCheckpointer(s"$CheckpointRoot/$startedAt")
@@ -102,10 +82,10 @@ def detrTrain(): Unit =
     .scanLeft(TrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):
       case (state, batch) =>
         dimwit.gc()
-        gradientStep(batch, state)
+        jitGradientStep(batch.images, batch.objects, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))
-    .tapEvery(250):
+    .tapEvery(1_000):
       case (state, step) =>
         checkpointer.save(state, step)
         println(s"Step $step | checkpoint saved to $CheckpointRoot/$startedAt")

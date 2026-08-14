@@ -35,7 +35,7 @@ def detrPlot(run: String*): Unit =
         Seq(
           plots.imagePlot(drawing, _.title := s"${split.fileName} $index"),
           plots.imagePlot(Outlines(drawing, sample.objects), _.title := s"${split.fileName} $index — target"),
-          plots.imagePlot(Outlines(drawing, model(sample.image).detected), _.title := s"${split.fileName} $index — predicted")
+          plots.imagePlot(Outlines(drawing, model(sample.image)), _.title := s"${split.fileName} $index — predicted")
         )
       .toSeq
 
@@ -53,22 +53,22 @@ def detrEval(run: String*): Unit =
   dimwit.initialize()
 
   val model = load(run)
-  val loss = HungarianLoss[Float32]()
+  val loss = HungarianLoss(VType[Float32])()
   val data = LShapeDetectionDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Validation)
-  val predict = jit(model)
+  val predict = jit(model.logits)
 
   val drawings = data
     .samples()
     .map: sample =>
       val prediction = predict(sample.image)
       val targets = slots(loss.matchTargets(prediction, sample.objects), data.imageWidth, data.imageHeight)
-      val predicted = slots(prediction.detected, data.imageWidth, data.imageHeight)
-      targets.zip(predicted).map((target, predicted) => (target, isDetected(target, predicted)))
+      val detected = slots(Detection(prediction.box, prediction.classLogits.argmax(Axis[ObjectClasses])), data.imageWidth, data.imageHeight)
+      targets.zip(detected).map((target, prediction) => (target, isDetected(target, prediction)))
     .toSeq
 
-  val objects = drawings.flatten.filter((target, _) => target.objectClass != ObjectClass.NoObject)
-  report("objects detected", objects.count((_, detected) => detected), objects.size)
-  report("drawings fully detected", drawings.count(_.forall((_, detected) => detected)), drawings.size)
+  val objects = drawings.flatten.filter(_._1.objectClass != ObjectClass.NoObject)
+  report("objects detected", objects.count(_._2), objects.size)
+  report("drawings fully detected", drawings.count(_.forall(_._2)), drawings.size)
 
 private def report(what: String, correct: Int, total: Int): Unit =
   println(f"$what%-24s $correct%6d / $total%-6d ${100f * correct / total}%5.1f%%")
@@ -81,12 +81,12 @@ private case class Slot(objectClass: ObjectClass, centerX: Float, centerY: Float
   def bottom: Float = centerY + height / 2
   def isHorizontal: Boolean = width >= height
 
-private def slots(detection: Detection[BoundingBox], imageWidth: Int, imageHeight: Int): Seq[Slot] =
+private def slots(detection: ObjectDetection[Float32], imageWidth: Int, imageHeight: Int): Seq[Slot] =
   val label = detection.label.toArray
-  val centerX = detection.centerX.toArray
-  val centerY = detection.centerY.toArray
-  val width = detection.width.toArray
-  val height = detection.height.toArray
+  val centerX = detection.box.centerX.toArray
+  val centerY = detection.box.centerY.toArray
+  val width = detection.box.width.toArray
+  val height = detection.box.height.toArray
   label.indices.map: slot =>
     Slot(
       objectClass = ObjectClass.fromId(label(slot)),

@@ -22,12 +22,12 @@ object Outlines:
     (image.squeeze(Axis[C]).asFloat32 *! 255f).asInt(VType[UInt8])
 
   /** The image with a one pixel outline around every object. */
-  def apply[W: Label, H: Label, Box: Label](image: Tensor2[W, H, UInt8], objects: Detection[Box]): Tensor2[W, H, UInt8] =
+  def apply[W: Label, H: Label, Slot: Label](image: Tensor2[W, H, UInt8], objects: Detection[Slot, Float32]): Tensor2[W, H, UInt8] =
     // Both are ink on a blank canvas, so the darker of the two wins per pixel.
     minimum(image, outlines(objects, image.shape))
 
-  private def outlines[W: Label, H: Label, Box: Label](
-      objects: Detection[Box],
+  private def outlines[W: Label, H: Label, Slot: Label](
+      objects: Detection[Slot, Float32],
       image: Shape2[W, H]
   ): Tensor2[W, H, UInt8] =
     val imageWidth = image(Axis[W])
@@ -35,22 +35,22 @@ object Outlines:
     val boxes = Shape3(
       Axis[W] -> imageWidth,
       Axis[H] -> imageHeight,
-      Axis[Box] -> objects.label.shape(Axis[Box])
+      Axis[Slot] -> objects.label.shape(Axis[Slot])
     )
 
     val x = coordinates(Axis[W], imageWidth).broadcastTo(boxes)
     val y = coordinates(Axis[H], imageHeight).broadcastTo(boxes)
-    val centerX = (objects.centerX *! imageWidth.toFloat).broadcastTo(boxes)
-    val centerY = (objects.centerY *! imageHeight.toFloat).broadcastTo(boxes)
-    val halfWidth = (objects.width *! (imageWidth / 2f)).broadcastTo(boxes)
-    val halfHeight = (objects.height *! (imageHeight / 2f)).broadcastTo(boxes)
+    val centerX = (objects.box.centerX *! imageWidth.toFloat).broadcastTo(boxes)
+    val centerY = (objects.box.centerY *! imageHeight.toFloat).broadcastTo(boxes)
+    val halfWidth = (objects.box.width *! (imageWidth / 2f)).broadcastTo(boxes)
+    val halfHeight = (objects.box.height *! (imageHeight / 2f)).broadcastTo(boxes)
 
     // Signed distance to the box border in pixels: negative inside, zero on it.
     val distance = maximum((x - centerX).abs - halfWidth, (y - centerY).abs - halfHeight)
     val onBorder = (distance +! 0.5f).abs <= Tensor(boxes).fill(0.5f)
 
     val shade = shades.take(Axis[Shade])(objects.label).broadcastTo(boxes)
-    where(onBorder, shade, Tensor(boxes).fill(Blank)).min(Axis[Box]).asInt(VType[UInt8])
+    where(onBorder, shade, Tensor(boxes).fill(Blank)).min(Axis[Slot]).asInt(VType[UInt8])
 
   private def coordinates[L: Label](axis: Axis[L], size: Int): Tensor1[L, Float32] =
     Tensor1(axis).fromArray(Array.tabulate(size)(_.toFloat))

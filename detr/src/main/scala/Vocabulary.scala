@@ -11,4 +11,4 @@ trait BoundingBox derives Label
 /** Axis over the `ObjectClass` values a box is classified into. */
 trait ObjectClasses derives Label
 
-type ObjectDetection = Detection[BoundingBox]
+type ObjectDetection[V] = Detection[BoundingBox, V]
