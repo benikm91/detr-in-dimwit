@@ -65,7 +65,7 @@ class HungarianLoss[V: IsFloating](
     val predicted = prediction.box.map(_.broadcastTo(pairs))
     val actual = target.box.map(_.relabelTo(Axis[Target]).broadcastTo(pairs))
     val probability = prediction.classLogits.vapply(Axis[ObjectClasses])(softmax)
-    val classCost = -probability.take(Axis[ObjectClasses])(targetClass).transpose
+    val classCost = -probability.take(Axis[ObjectClasses])(targetClass)
     val real = classCost *! classWeight +
       Box.l1(predicted, actual) *! l1Weight +
       (1f -! Box.giou(predicted, actual)) *! giouWeight

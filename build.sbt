@@ -45,5 +45,10 @@ lazy val detr = project
       munit,
       "ch.contrafactus" %% "plotwit-core" % "0.1.0-SNAPSHOT" changing (),
       "ch.contrafactus" %% "deepwit-core" % "0.1.0-SNAPSHOT" changing ()
+    ),
+    javaOptions ++= Seq(
+      // "-XX:G1PeriodicGCInterval=1000"
+      "-XX:+UseZGC",
+      "-XX:ZCollectionInterval=1" // Forces a GC cycle every 1 second, regardless of heap usage
     )
   )

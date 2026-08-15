@@ -33,7 +33,7 @@ case class TrainState(
 def detrTrain(): Unit =
   dimwit.initialize()
 
-  val numIterations = 20_000
+  val numIterations = 100_000
   val batchSize = 64
   val learningRate = 1e-5f // 3e-4f
 
@@ -67,12 +67,26 @@ def detrTrain(): Unit =
 
   def gradientStep(
       imgs: Tensor4[Batch, Width, Height, Channel, Float32],
-      y: DetectionBatch[Batch, BoundingBox, Float32],
+      objects: DetectionBatch[Batch, BoundingBox, Float32],
       state: TrainState
   ) =
-    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(imgs, y))(state.params)
+    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(imgs, objects))(state.params)
     val (params, optimizerState) = optimizer.update(gradients, state.params, state.optimizerState)
-    TrainState(params, optimizerState, lastCost)
+    val newState = TrainState(params, optimizerState, lastCost)
+    summon[TensorTree[TrainState]].map(
+      state,
+      [T <: Tuple, V] =>
+        (labels: Labels[T]) ?=>
+          (x: Tensor[T, V]) =>
+            if !x.isTracer then
+              dimwit.python.PyBridge.toPyTensor(x).addressable_data(0).delete()
+            x
+    )
+    if !imgs.isTracer then
+      dimwit.python.PyBridge.toPyTensor(imgs).addressable_data(0).delete()
+    if !objects.box.centerX.isTracer then
+      dimwit.python.PyBridge.toPyTensor(objects.box.centerX).addressable_data(0).delete
+    newState
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
   val startedAt = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
