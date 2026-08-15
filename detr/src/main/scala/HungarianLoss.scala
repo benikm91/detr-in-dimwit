@@ -31,11 +31,38 @@ class HungarianLoss[V: IsFloating](
 
   /** The targets in the order of the predictions they are matched to. */
   def matchTargets(prediction: DETR.Prediction[V], target: ObjectDetection[V]): ObjectDetection[V] =
-    val matched = Matching.greedy(cost(prediction, target))
+    val padded = padToQueries(prediction, target)
+    val matched = Matching.greedy(cost(prediction, padded))
     Detection(
-      box = target.box.map(_.take(Axis[BoundingBox])(matched)),
-      label = target.label.take(Axis[BoundingBox])(matched)
+      box = padded.box.map(_.take(Axis[BoundingBox])(matched)),
+      label = padded.label.take(Axis[BoundingBox])(matched)
     )
+
+  /** Pads the targets out to one slot per query.
+    *
+    * A dataset only carries as many slots as a sample can hold objects, while DETR predicts a
+    * fixed set of queries and matches them one to one, so the surplus queries need a slot to be
+    * matched against. Padding here, with [[ObjectClass.NoObject]], is what lets a prediction be
+    * matched to "nothing" — and is why the query count stays a property of the model rather than
+    * something the dataset has to be told.
+    */
+  private def padToQueries(prediction: DETR.Prediction[V], target: ObjectDetection[V]): ObjectDetection[V] =
+    val queries = prediction.classLogits.shape(Axis[BoundingBox])
+    val slots = target.label.shape(Axis[BoundingBox])
+    require(
+      queries >= slots,
+      s"a model with $queries queries cannot cover $slots target slots: every query is matched to a distinct slot"
+    )
+    if queries == slots then target
+    else
+      val padding = Axis[BoundingBox] -> (queries - slots)
+      // The boxes of padding slots are masked out of every term, so their value is arbitrary.
+      val padBox = Tensor1(padding, vtype).fill(0f)
+      val padLabel = Tensor1(padding, VType[Int32]).fill(ObjectClass.NoObject.id)
+      Detection(
+        box = target.box.map(concatenate(_, padBox, Axis[BoundingBox])),
+        label = concatenate(target.label, padLabel, Axis[BoundingBox])
+      )
 
   private def score(prediction: DETR.Prediction[V], target: ObjectDetection[V]): Tensor0[V] =
     val isObject = objectMask(target.label)

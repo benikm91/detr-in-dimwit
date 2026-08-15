@@ -99,7 +99,7 @@ def _objects_of(actions, geometry):
     return rows
 
 
-def _parse_labels(labels_path, geometry, num_queries):
+def _parse_labels(labels_path, geometry, max_num_objects):
     """Parse the JSONL label file into padded ``(boxes, labels)`` arrays."""
     rows = []
     counts = []
@@ -118,10 +118,10 @@ def _parse_labels(labels_path, geometry, num_queries):
     num_samples = len(counts)
     counts = np.asarray(counts, dtype=np.int64)
     observed_max = int(counts.max()) if num_samples else 0
-    queries = num_queries if num_queries > 0 else max(observed_max, 1)
+    slots = max_num_objects if max_num_objects > 0 else max(observed_max, 1)
 
-    boxes = np.zeros((num_samples, queries, 4), dtype=np.float32)
-    labels = np.full((num_samples, queries), NO_OBJECT, dtype=np.int32)
+    boxes = np.zeros((num_samples, slots, 4), dtype=np.float32)
+    labels = np.full((num_samples, slots), NO_OBJECT, dtype=np.int32)
     truncated = 0
 
     if rows:
@@ -130,28 +130,28 @@ def _parse_labels(labels_path, geometry, num_queries):
         # Rows are emitted in sample order, so the slot of a row is its offset
         # from the first row belonging to the same sample.
         starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
-        slots = np.arange(len(table), dtype=np.int64) - starts[sample_of_row]
-        keep = slots < queries
-        boxes[sample_of_row[keep], slots[keep]] = table[keep, 1:5]
-        labels[sample_of_row[keep], slots[keep]] = table[keep, 5].astype(np.int32)
+        row_slots = np.arange(len(table), dtype=np.int64) - starts[sample_of_row]
+        keep = row_slots < slots
+        boxes[sample_of_row[keep], row_slots[keep]] = table[keep, 1:5]
+        labels[sample_of_row[keep], row_slots[keep]] = table[keep, 5].astype(np.int32)
         truncated = int((~keep).sum())
 
     return boxes, labels, observed_max, truncated
 
 
-def load_targets(labels_path, geometry, num_queries=0, use_cache=True):
+def load_targets(labels_path, geometry, max_num_objects=0, use_cache=True):
     """Parsed detection targets for a split, memoized on disk.
 
     Returns ``(boxes, labels, observed_max_objects, truncated)`` where ``boxes``
-    has shape ``(N, queries, 4)`` in ``(cx, cy, w, h)`` order and ``labels`` shape
-    ``(N, queries)``.
+    has shape ``(N, slots, 4)`` in ``(cx, cy, w, h)`` order and ``labels`` shape
+    ``(N, slots)``.
     """
     identity = json.dumps(
         {
             "path": os.path.realpath(labels_path),
             "size": os.path.getsize(labels_path),
             "geometry": sorted(geometry.items()),
-            "queries": int(num_queries),
+            "slots": int(max_num_objects),
             "version": 2,
         },
         sort_keys=True,
@@ -170,7 +170,7 @@ def load_targets(labels_path, geometry, num_queries=0, use_cache=True):
         except (OSError, ValueError, KeyError):
             pass  # corrupt or outdated cache: fall through and re-parse
 
-    boxes, labels, observed_max, truncated = _parse_labels(labels_path, geometry, num_queries)
+    boxes, labels, observed_max, truncated = _parse_labels(labels_path, geometry, max_num_objects)
 
     if use_cache:
         staging = "%s.%d.tmp.npz" % (cache, os.getpid())  # savez keeps an .npz suffix as is
@@ -215,7 +215,7 @@ class Split:
         revision="",
         class_names=(),
         class_ids=(),
-        num_queries=0,
+        max_num_objects=0,
         min_size_pixels=4.0,
         text_size_pixels=12.0,
         normalize=True,
@@ -242,7 +242,7 @@ class Split:
         }
 
         self.boxes, self.labels, self.observed_max_objects, self.truncated_objects = load_targets(
-            labels_path, geometry, num_queries, use_cache
+            labels_path, geometry, max_num_objects, use_cache
         )
 
         if len(self.labels) != self.num_samples:
@@ -252,7 +252,7 @@ class Split:
             )
 
         self.normalize = bool(normalize)
-        self.num_queries = int(self.labels.shape[1])
+        self.max_num_objects = int(self.labels.shape[1])
 
     def _images(self, selection):
         """Read the selected images as ``(..., width, height, channel)`` float arrays.
@@ -315,7 +315,7 @@ def open_split(
     revision="",
     class_names=(),
     class_ids=(),
-    num_queries=0,
+    max_num_objects=0,
     min_size_pixels=4.0,
     text_size_pixels=12.0,
     normalize=True,
@@ -328,7 +328,7 @@ def open_split(
         revision=revision,
         class_names=class_names,
         class_ids=class_ids,
-        num_queries=num_queries,
+        max_num_objects=max_num_objects,
         min_size_pixels=min_size_pixels,
         text_size_pixels=text_size_pixels,
         normalize=normalize,

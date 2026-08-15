@@ -47,7 +47,7 @@ def detrTrain(): Unit =
     numLayers = 3,
     numHeads = 4,
     embedding = 128,
-    numQueries = data.numQueries,
+    numQueries = 100,
     key = Random.Key(0)
   )
 

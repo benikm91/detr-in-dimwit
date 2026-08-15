@@ -23,7 +23,7 @@ def lShapeDemo(): Unit =
 
   val data = LShapeDetectionDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Validation)
   println(data)
-  println(s"most objects in a sample: ${data.maxObjects}")
+  println(s"most objects in a sample: ${data.observedMaxObjects}")
 
   val rows = data.samples().take(3).zipWithIndex.map: (sample, index) =>
     val drawing = Outlines.greyLevels(sample.image)

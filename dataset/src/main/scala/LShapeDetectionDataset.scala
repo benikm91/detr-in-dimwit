@@ -72,7 +72,7 @@ object ObjectClass:
   *
   * Everything else (`ConnectTwoElementsWithId` relations, the `HelpLine` and
   * `BothSidedArrow` decorations of an annotation, `FinishDrawing`) is dropped. Targets
-  * are padded to [[LShapeDetectionDataset.numQueries]] slots with [[ObjectClass.NoObject]],
+  * are padded to [[LShapeDetectionDataset.maxNumObjects]] slots with [[ObjectClass.NoObject]],
   * so samples and batches are rectangular.
   *
   * Call `dimwit.initialize()` once before using this loader — it configures the Python
@@ -99,10 +99,13 @@ object LShapeDetectionDataset:
     case Train extends Split("train")
     case Validation extends Split("val")
 
-  /** @param numQueries      Number of target slots per sample. `None` uses the largest
-    *                        number of objects occurring in the split; pin it when
-    *                        training across splits, since a smaller value truncates
-    *                        (reported by [[LShapeDetectionDataset.truncatedObjects]]).
+  /** @param maxNumObjects   How many objects a sample can hold, i.e. the number of target
+    *                        slots it is padded to. `None` uses the largest number of objects
+    *                        occurring in the split; pin it when training across splits, since
+    *                        a smaller value truncates (reported by
+    *                        [[LShapeDetectionDataset.truncatedObjects]]). This is a property of
+    *                        the data — a model's query count is its own, and is matched against
+    *                        these slots by the loss.
     * @param minObjectSizePixels Minimum box extent, so that an axis aligned line gets a
     *                        non-degenerate box.
     * @param textBoxSizePixels Box extent of a text annotation, which the dataset locates
@@ -116,7 +119,7 @@ object LShapeDetectionDataset:
   final case class Config(
       repoId: String = "benikm91/l-shape",
       revision: Option[String] = None,
-      numQueries: Option[Int] = None,
+      maxNumObjects: Option[Int] = None,
       minObjectSizePixels: Double = 4.0,
       textBoxSizePixels: Double = 12.0,
       normalizeImages: Boolean = true,
@@ -135,7 +138,7 @@ object LShapeDetectionDataset:
       channel: Axis[C],
       slot: Axis[Slot]
   )(split: Split, config: Config = Config()): LShapeDetectionDataset[W, H, C, Slot] =
-    require(config.numQueries.forall(_ > 0), "numQueries must be positive")
+    require(config.maxNumObjects.forall(_ > 0), "maxNumObjects must be positive")
     val detected = ObjectClass.actionTypes.toSeq
     val handle = module.open_split(
       config.repoId,
@@ -143,7 +146,7 @@ object LShapeDetectionDataset:
       config.revision.getOrElse(""),
       detected.map((_, actionType) => actionType).toPythonCopy,
       detected.map((objectClass, _) => objectClass.id).toPythonCopy,
-      config.numQueries.getOrElse(0),
+      config.maxNumObjects.getOrElse(0),
       config.minObjectSizePixels,
       config.textBoxSizePixels,
       config.normalizeImages,
@@ -186,13 +189,13 @@ final class LShapeDetectionDataset[W: Label, H: Label, C: Label, Slot: Label] pr
   val imageWidth: Int = handle.image_width.as[Int]
   val imageHeight: Int = handle.image_height.as[Int]
 
-  /** Number of target slots per sample, i.e. the extent of the box axis. */
-  val numQueries: Int = handle.num_queries.as[Int]
+  /** How many objects a sample can hold, i.e. the extent of the box axis. */
+  val maxNumObjects: Int = handle.max_num_objects.as[Int]
 
-  /** Largest number of objects found in a sample of this split. */
-  val maxObjects: Int = handle.observed_max_objects.as[Int]
+  /** Largest number of objects actually found in a sample of this split. */
+  val observedMaxObjects: Int = handle.observed_max_objects.as[Int]
 
-  /** Number of objects dropped because [[numQueries]] was too small. */
+  /** Number of objects dropped because [[maxNumObjects]] was too small. */
   val truncatedObjects: Int = handle.truncated_objects.as[Int]
 
   /** The whole split, one sample at a time.
@@ -252,4 +255,4 @@ final class LShapeDetectionDataset[W: Label, H: Label, C: Label, Slot: Label] pr
 
   override def toString: String =
     s"LShapeDetectionDataset(${config.repoId}, ${split.fileName}, samples=$numSamples, " +
-      s"image=${imageWidth}x${imageHeight}, queries=$numQueries)"
+      s"image=${imageWidth}x${imageHeight}, maxObjects=$maxNumObjects)"
