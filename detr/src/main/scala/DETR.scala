@@ -99,6 +99,7 @@ object DETR:
         numHeads: Int,
         embedding: Int,
         numQueries: Int,
+        patchSize: Int,
         key: Key
     ) =
       val (patchKey, encoderKey, decoderKey, queryKey, headsKey) = key.splitToTuple(5)
@@ -110,8 +111,8 @@ object DETR:
       val boxHiddenExtent2 = Axis[Prime[BoxHidden]] -> embedding
       Params(
         patchEmbedder = ImageToPatchEmbedder.Params.xavierUniform(
-          Axis[Width] -> 16,
-          Axis[Height] -> 16,
+          Axis[Width] -> patchSize,
+          Axis[Height] -> patchSize,
           Axis[Channel] -> 1,
           embeddingExtent,
           VType[Float32],

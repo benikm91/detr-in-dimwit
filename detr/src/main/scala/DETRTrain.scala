@@ -13,9 +13,11 @@ import deepwit.transformer.attention.Head
 import deepwit.transformer.attention.HeadKey
 import deepwit.transformer.attention.HeadQuery
 import deepwit.transformer.attention.HeadValue
+import deepwit.optimizer.clipGlobalNorm
 import dimwit.*
 import dimwit.optimizer.Adam
 import dimwit.optimizer.AdamState
+import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
 
 /** Where [[detrTrain]] writes and [[detrEval]] reads its checkpoints. */
@@ -35,19 +37,34 @@ def detrTrain(): Unit =
 
   val numIterations = 100_000
   val batchSize = 64
-  val learningRate = 1e-4f
+  val learningRate = 3e-4f
+  val weightDecay = 1e-4f
+
+  /** Global L2 norm the gradients are rescaled to, as in the DETR paper. The set loss reassigns
+    * which query is responsible for which object from step to step, so a batch that reshuffles
+    * the matching produces a far larger gradient than a batch that confirms it; clipping keeps
+    * those steps from undoing what the settled ones learned.
+    */
+  val maxGradientNorm = 0.1f
 
   val data = LShapeDetectionDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Train)
   val shuffle = scala.util.Random(42)
   val batches = Iterator.continually(data.batches(Axis[Batch] -> batchSize, shuffle = Some(shuffle))).flatten
 
-  val optimizer = Adam(learningRate = Tensor0(learningRate))
+  val optimizer = AdamW(
+    Adam(learningRate = Tensor0(learningRate)),
+    weightDecayFactor = Tensor0(weightDecay)
+  )
 
   val initialParams = DETR.Params.init(
     numLayers = 3,
     numHeads = 4,
     embedding = 128,
-    numQueries = 100,
+    // The split holds at most 12 objects in a drawing, so the queries only need enough headroom
+    // above that for a few of them to compete over the same object before one wins it. Every
+    // query beyond that is one more slot that has to learn to stay empty.
+    numQueries = 32,
+    patchSize = 10,
     key = Random.Key(0)
   )
 
@@ -71,7 +88,8 @@ def detrTrain(): Unit =
       state: TrainState
   ) =
     val (lastCost, gradients) = Autodiff.valueAndGrad(cost(imgs, objects))(state.params)
-    val (params, optimizerState) = optimizer.update(gradients, state.params, state.optimizerState)
+    val clipped = gradients.clipGlobalNorm(Tensor0(maxGradientNorm))
+    val (params, optimizerState) = optimizer.update(clipped, state.params, state.optimizerState)
     val newState = TrainState(params, optimizerState, lastCost)
     summon[TensorTree[TrainState]].map(
       state,
