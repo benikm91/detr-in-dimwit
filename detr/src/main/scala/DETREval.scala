@@ -49,11 +49,21 @@ def detrPlot(run: String*): Unit =
   *
   * Predictions are matched to targets as in training. An object counts as detected when its
   * class is right and its defining points are within the tolerance in pixels: the two end
-  * points for a part line, the anchor for a text. A drawing counts as detected when every one
-  * of its query slots is right — every object detected, none missing and none spurious, which
-  * includes every query beyond the objects present having to stay empty. The latter makes the
-  * drawing score depend on how many queries the model has, so only compare it between models
-  * of the same query count; the object score is comparable across all of them.
+  * points for a part line, the anchor for a text. Four numbers are reported:
+  *
+  *   - `empty queries kept empty` — of the queries matched to no object, how many say so
+  *     rather than inventing one. Nothing about it depends on the tolerance, so it is
+  *     reported once.
+  *   - `objects detected` — recall: of the objects present, how many are detected.
+  *   - `detections correct` — precision: of the queries claiming an object, how many are a
+  *     detection rather than a spurious or misplaced box.
+  *   - `drawings fully detected` — every query slot of the drawing right at once, which
+  *     includes every query beyond the objects present having to stay empty.
+  *
+  * The last one is all or nothing over the full query set, so it falls off as the empty-query
+  * rate is raised to the power of however many queries a drawing leaves empty. That makes it
+  * depend on how many queries the model has: only compare it between models of the same query
+  * count, while the other three are comparable across all of them.
   */
 @main
 def detrEval(run: String*): Unit =
@@ -74,14 +84,23 @@ def detrEval(run: String*): Unit =
       targets.zip(detected)
     .toSeq
 
-  Tolerances.foreach: tolerance =>
-    val scored = drawings.map(_.map((target, predicted) => (target, isDetected(target, predicted, tolerance))))
-    val objects = scored.flatten.filter(_._1.objectClass != ObjectClass.NoObject)
-    report(tolerance, "objects detected", objects.count(_._2), objects.size)
-    report(tolerance, "drawings fully detected", scored.count(_.forall(_._2)), scored.size)
+  // Whether an empty query stays empty is a matter of its class alone, so any tolerance scores it.
+  val empty = drawings.flatten.filter(_._1.objectClass == ObjectClass.NoObject)
+  report("", "empty queries kept empty", empty.count(_._2.objectClass == ObjectClass.NoObject), empty.size)
 
-private def report(tolerance: Float, what: String, correct: Int, total: Int): Unit =
-  println(f"$tolerance%2.0f px  $what%-24s $correct%6d / $total%-6d ${100f * correct / total}%5.1f%%")
+  Tolerances.foreach: tolerance =>
+    val scored = drawings.map(_.map((target, predicted) => Scored(target, predicted, isDetected(target, predicted, tolerance))))
+    val objects = scored.flatten.filter(_.target.objectClass != ObjectClass.NoObject)
+    val claimed = scored.flatten.filter(_.predicted.objectClass != ObjectClass.NoObject)
+    report(f"$tolerance%2.0f px", "objects detected", objects.count(_.isDetected), objects.size)
+    report(f"$tolerance%2.0f px", "detections correct", claimed.count(_.isDetected), claimed.size)
+    report(f"$tolerance%2.0f px", "drawings fully detected", scored.count(_.forall(_.isDetected)), scored.size)
+
+/** One scored query slot: what it should hold, what it holds, and whether that counts. */
+private case class Scored(target: Slot, predicted: Slot, isDetected: Boolean)
+
+private def report(tolerance: String, what: String, correct: Int, total: Int): Unit =
+  println(f"$tolerance%5s  $what%-24s $correct%6d / $total%-6d ${100f * correct / total}%5.1f%%")
 
 /** One query slot in pixel coordinates. */
 private case class Slot(objectClass: ObjectClass, centerX: Float, centerY: Float, width: Float, height: Float):

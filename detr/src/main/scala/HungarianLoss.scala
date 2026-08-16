@@ -21,7 +21,7 @@ class HungarianLoss[V: IsFloating](
     classWeight: Float = 1f,
     l1Weight: Float = 5f,
     giouWeight: Float = 2f,
-    noObjectWeight: Float = 0.1f
+    noObjectWeight: Float = 1.0f
 ) extends ((DETR.Prediction[V], ObjectDetection[V]) => Tensor0[V]):
 
   private type Target = Prime[BoundingBox]
