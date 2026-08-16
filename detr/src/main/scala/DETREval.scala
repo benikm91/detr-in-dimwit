@@ -10,8 +10,12 @@ import viz.PlotTargets.websocket
 
 import java.io.File
 
-/** How far an object's defining points may be off, in pixels. */
-private val Tolerance = 4f
+/** How far an object's defining points may be off, in pixels.
+  *
+  * The split is scored at every one of them, since a single threshold only says which side of
+  * it the boxes fall on, not how far they still have to travel.
+  */
+private val Tolerances = Seq(2f, 4f, 8f)
 
 /** Plots what a trained model detects: `sbt "detr/runMain detrPlot"`.
   *
@@ -44,9 +48,12 @@ def detrPlot(run: String*): Unit =
 /** Scores a trained model on the whole validation split: `sbt "detr/runMain detrEval"`.
   *
   * Predictions are matched to targets as in training. An object counts as detected when its
-  * class is right and its defining points are within [[Tolerance]] pixels: the two end points
-  * for a part line, the anchor for a text. A drawing counts as detected when every one of its
-  * query slots is right — every object detected, none missing and none spurious.
+  * class is right and its defining points are within the tolerance in pixels: the two end
+  * points for a part line, the anchor for a text. A drawing counts as detected when every one
+  * of its query slots is right — every object detected, none missing and none spurious, which
+  * includes every query beyond the objects present having to stay empty. The latter makes the
+  * drawing score depend on how many queries the model has, so only compare it between models
+  * of the same query count; the object score is comparable across all of them.
   */
 @main
 def detrEval(run: String*): Unit =
@@ -57,21 +64,24 @@ def detrEval(run: String*): Unit =
   val data = LShapeDetectionDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Validation)
   val predict = jit(model.logits)
 
+  // The split is predicted once and every tolerance scored off the same matched slots.
   val drawings = data
     .samples()
     .map: sample =>
       val prediction = predict(sample.image)
       val targets = slots(loss.matchTargets(prediction, sample.objects), data.imageWidth, data.imageHeight)
       val detected = slots(Detection(prediction.box, prediction.classLogits.argmax(Axis[ObjectClasses])), data.imageWidth, data.imageHeight)
-      targets.zip(detected).map((target, prediction) => (target, isDetected(target, prediction)))
+      targets.zip(detected)
     .toSeq
 
-  val objects = drawings.flatten.filter(_._1.objectClass != ObjectClass.NoObject)
-  report("objects detected", objects.count(_._2), objects.size)
-  report("drawings fully detected", drawings.count(_.forall(_._2)), drawings.size)
+  Tolerances.foreach: tolerance =>
+    val scored = drawings.map(_.map((target, predicted) => (target, isDetected(target, predicted, tolerance))))
+    val objects = scored.flatten.filter(_._1.objectClass != ObjectClass.NoObject)
+    report(tolerance, "objects detected", objects.count(_._2), objects.size)
+    report(tolerance, "drawings fully detected", scored.count(_.forall(_._2)), scored.size)
 
-private def report(what: String, correct: Int, total: Int): Unit =
-  println(f"$what%-24s $correct%6d / $total%-6d ${100f * correct / total}%5.1f%%")
+private def report(tolerance: Float, what: String, correct: Int, total: Int): Unit =
+  println(f"$tolerance%2.0f px  $what%-24s $correct%6d / $total%-6d ${100f * correct / total}%5.1f%%")
 
 /** One query slot in pixel coordinates. */
 private case class Slot(objectClass: ObjectClass, centerX: Float, centerY: Float, width: Float, height: Float):
@@ -96,8 +106,8 @@ private def slots(detection: ObjectDetection[Float32], imageWidth: Int, imageHei
       height = height(slot) * imageHeight
     )
 
-private def isDetected(target: Slot, predicted: Slot): Boolean =
-  def near(expected: Float, actual: Float): Boolean = (expected - actual).abs <= Tolerance
+private def isDetected(target: Slot, predicted: Slot, tolerance: Float): Boolean =
+  def near(expected: Float, actual: Float): Boolean = (expected - actual).abs <= tolerance
   target.objectClass == predicted.objectClass && (target.objectClass match
     case ObjectClass.NoObject => true
     case ObjectClass.Text     => near(target.centerX, predicted.centerX) && near(target.centerY, predicted.centerY)

@@ -1,7 +1,7 @@
 import dataset.Box
 import dataset.Detection
 import dataset.ObjectClass
-import deepwit.base.softmax
+import deepwit.activation.softmax
 import deepwit.loss.CategoricalCrossEntropy
 import dimwit.*
 import dimwit.Conversions.given
@@ -70,7 +70,8 @@ class HungarianLoss[V: IsFloating](
 
     val classification = zipvmap(Axis[BoundingBox])(target.label, prediction.classLogits):
       case (objectClass, logits) => CategoricalCrossEntropy.fromLogits(objectClass, logits)
-    val classificationLoss = (classification * (isObject *! (1f - noObjectWeight) +! noObjectWeight)).mean
+    val classWeights = isObject *! (1f - noObjectWeight) +! noObjectWeight
+    val classificationLoss = (classification * classWeights).sum / classWeights.sum
     val boxLoss = (Box.l1(prediction.box, target.box) * isObject).sum
     val giouLoss = ((1f -! Box.giou(prediction.box, target.box)) * isObject).sum
 

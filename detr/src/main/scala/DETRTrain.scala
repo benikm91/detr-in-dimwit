@@ -5,9 +5,9 @@ import dataset.DetectionBatch
 import dataset.LShapeBatch
 import dataset.LShapeDetectionDataset
 import dataset.LShapeDetectionDataset.Split
-import deepwit.Monitor
 import deepwit.checkpointing.TensorTreeCheckpointer
-import deepwit.tapEvery
+import deepwit.training.Monitor
+import deepwit.training.tapEvery
 import deepwit.transformer.MLPEmbeddingMixer
 import deepwit.transformer.attention.Head
 import deepwit.transformer.attention.HeadKey
@@ -35,7 +35,7 @@ def detrTrain(): Unit =
 
   val numIterations = 100_000
   val batchSize = 64
-  val learningRate = 1e-5f // 3e-4f
+  val learningRate = 1e-4f
 
   val data = LShapeDetectionDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Train)
   val shuffle = scala.util.Random(42)

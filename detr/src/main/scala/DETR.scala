@@ -1,14 +1,14 @@
 import dataset.Box
 import dataset.Detection
 import dataset.ObjectClass
+import deepwit.activation.relu
+import deepwit.activation.sigmoid
 import deepwit.base.AffineLayer
-import deepwit.base.relu
-import deepwit.base.sigmoid
 import deepwit.embedder.ImageToPatchEmbedder
 import deepwit.normalization.LayerNorm
 import deepwit.transformer.CrossTransformer
 import deepwit.transformer.CrossTransformerLayer
-import deepwit.transformer.MLPEmbeddingMixer
+import deepwit.transformer.EmbeddingMixed
 import deepwit.transformer.Transformer
 import deepwit.transformer.attention.Head
 import deepwit.transformer.attention.HeadKey
@@ -35,7 +35,7 @@ class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height
 
   private val patches = ImageToPatchEmbedder(params.patchEmbedder)
   private val encoder = Transformer.bidirectional(Axis[Patch], params.encoder)
-  private val decoder = CrossTransformer(Axis[Patch], Axis[BoundingBox], params.decoder)
+  private val decoder = CrossTransformer.bidirectional(Axis[Patch], Axis[BoundingBox], params.decoder)
   private val classify = AffineLayer(params.classification)
   private val boxHidden1 = AffineLayer(params.boxHidden1)
   private val boxHidden2 = AffineLayer(params.boxHidden2)
@@ -105,7 +105,7 @@ object DETR:
       val (classKey, box1Key, box2Key, box3Key) = headsKey.splitToTuple(4)
       val boundingBoxExtent = Axis[BoundingBox] -> numQueries
       val embeddingExtent = Axis[DETR.Embedding] -> embedding
-      val embeddingMixedExtent = Axis[MLPEmbeddingMixer.EmbeddingMixed] -> embeddingExtent.size * 4
+      val embeddingMixedExtent = Axis[EmbeddingMixed] -> embeddingExtent.size * 4
       val boxHiddenExtent = Axis[BoxHidden] -> embedding
       val boxHiddenExtent2 = Axis[Prime[BoxHidden]] -> embedding
       Params(
@@ -132,7 +132,7 @@ object DETR:
           embeddingExtent,
           embeddingMixedExtent,
           VType[Float32],
-          encoderKey
+          decoderKey
         ),
         objectQueries = deepwit.init.xavierUniform(boundingBoxExtent, embeddingExtent, VType[Float32], queryKey),
         classification = AffineLayer.Params.xavierUniform(embeddingExtent, Axis[ObjectClasses] -> ObjectClass.values.length, VType[Float32], classKey),
