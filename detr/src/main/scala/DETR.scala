@@ -6,10 +6,7 @@ import deepwit.activation.sigmoid
 import deepwit.base.AffineLayer
 import deepwit.embedder.ImageToPatchEmbedder
 import deepwit.normalization.LayerNorm
-import deepwit.attention.Head
-import deepwit.attention.HeadKey
-import deepwit.attention.HeadQuery
-import deepwit.attention.HeadValue
+import deepwit.attention.MultiHeadAttention
 import dimwit.*
 import dimwit.tensor.Tensor4
 
@@ -24,6 +21,7 @@ import dimwit.tensor.Tensor4
 class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height, Channel, V] => ObjectDetection[V]):
 
   import DETR.BoxCoordinate
+  import DETR.Decoded
   import DETR.Embedding
   import DETR.Patch
   import DETR.Prediction
@@ -43,7 +41,19 @@ class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height
 
   /** What the model scores before deciding: a box and unnormalized class scores per query. */
   def logits(image: Tensor3[Width, Height, Channel, V]): Prediction[V] =
-    val objects = decoder(encoder(patches(image)), params.objectQueries)
+    predict(decoder(encoder(patches(image)), params.objectQueries))
+
+  /** What [[logits]] reads, together with the decoder by-products a relation extractor reads.
+    *
+    * Kept apart from [[logits]] because the by-products cost a query and a key projection per
+    * decoder block, which a detection alone has no use for.
+    */
+  def decode(image: Tensor3[Width, Height, Channel, V]): Decoded[V] =
+    val (selfAttention, objects) = decoder.applyWithSelfAttentionIntermediates(encoder(patches(image)), params.objectQueries)
+    Decoded(objects, selfAttention)
+
+  /** The class and box heads, on one embedding per query. */
+  def predict(objects: Tensor2[BoundingBox, Embedding, V]): Prediction[V] =
     val boxes = objects.vmap(Axis[BoundingBox])(box)
     Prediction(
       box = Box(
@@ -71,6 +81,18 @@ object DETR:
   case class Prediction[V](
       box: Box[Tuple1[BoundingBox], V],
       classLogits: Tensor2[BoundingBox, ObjectClasses, V]
+  )
+
+  /** What the decoder made of the object queries.
+    *
+    * @param objects       One embedding per query, what the detection heads read.
+    * @param selfAttention Per decoder block, the queries, keys and values its self-attention
+    *                      read the object queries against each other by — see
+    *                      [[DETRDecoder.applyWithSelfAttentionIntermediates]].
+    */
+  case class Decoded[V](
+      objects: Tensor2[BoundingBox, Embedding, V],
+      selfAttention: List[MultiHeadAttention.Intermediates[BoundingBox, BoundingBox, V]]
   )
 
   case class Params[V](

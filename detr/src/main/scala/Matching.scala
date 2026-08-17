@@ -37,5 +37,12 @@ object Matching:
           )
       ._2
 
+  /** What each row pays for the column [[greedy]] assigned it. */
+  def costOf[Row: Label, Column: Label, V: IsFloating](cost: Tensor2[Row, Column, V], assignment: Tensor1[Row, Int32]): Tensor1[Row, V] =
+    val isAssigned = indices(cost.shape.extent(Axis[Column]))
+      .broadcastTo(cost.shape)
+      .elementEquals(assignment.broadcastTo(cost.shape))
+    where(isAssigned, cost, Tensor.like(cost).fill(0f)).sum(Axis[Column])
+
   private def indices[L: Label](extent: AxisExtent[L]): Tensor1[L, Int32] =
     Tensor1(extent.axis, VType[Int32]).fromArray(Array.range(0, extent.size))

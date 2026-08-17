@@ -26,16 +26,35 @@ class HungarianLoss[V: IsFloating](
 
   private type Target = Prime[BoundingBox]
 
+  /** The matching cost of a query that hits its target exactly: the target's class at
+    * probability one, no box error and a full overlap. What [[Match.cost]] is measured against.
+    */
+  val minimumCost: Float = -classWeight
+
   override def apply(prediction: DETR.Prediction[V], target: ObjectDetection[V]): Tensor0[V] =
     score(prediction, matchTargets(prediction, target))
 
   /** The targets in the order of the predictions they are matched to. */
   def matchTargets(prediction: DETR.Prediction[V], target: ObjectDetection[V]): ObjectDetection[V] =
+    matched(prediction, target).targets
+
+  /** Which target slot every query is made responsible for, and at what cost.
+    *
+    * The slot indices are what a prediction over the same slots has to be permuted by to line
+    * up with the targets, and the cost is how well the query does on the slot it got — the
+    * quality of a detected object, which anything predicted on top of the detection can read.
+    */
+  def matched(prediction: DETR.Prediction[V], target: ObjectDetection[V]): HungarianLoss.Match[V] =
     val padded = padToQueries(prediction, target)
-    val matched = Matching.greedy(cost(prediction, padded))
-    Detection(
-      box = padded.box.map(_.take(Axis[BoundingBox])(matched)),
-      label = padded.label.take(Axis[BoundingBox])(matched)
+    val costs = cost(prediction, padded)
+    val slots = Matching.greedy(costs)
+    HungarianLoss.Match(
+      targets = Detection(
+        box = padded.box.map(_.take(Axis[BoundingBox])(slots)),
+        label = padded.label.take(Axis[BoundingBox])(slots)
+      ),
+      slot = slots,
+      cost = Matching.costOf(costs, slots)
     )
 
   /** Pads the targets out to one slot per query.
@@ -64,7 +83,10 @@ class HungarianLoss[V: IsFloating](
         label = concatenate(target.label, padLabel, Axis[BoundingBox])
       )
 
-  private def score(prediction: DETR.Prediction[V], target: ObjectDetection[V]): Tensor0[V] =
+  /** The set prediction loss of an already matched pair, i.e. of the targets as
+    * [[matched]] ordered them.
+    */
+  def score(prediction: DETR.Prediction[V], target: ObjectDetection[V]): Tensor0[V] =
     val isObject = objectMask(target.label)
     val numObjects = maximum(isObject.sum, Tensor0(vtype)(1f))
 
@@ -102,3 +124,18 @@ class HungarianLoss[V: IsFloating](
 
   private def objectMask[L: Label](classes: Tensor1[L, Int32]): Tensor1[L, V] =
     (classes > Tensor.like(classes).fill(ObjectClass.NoObject.id)).asFloat(vtype)
+
+object HungarianLoss:
+
+  /** The one to one assignment of queries to target slots that [[HungarianLoss.matched]] found.
+    *
+    * @param targets The targets in the order of the queries they were assigned to.
+    * @param slot    Per query, which of the padded target slots it was assigned.
+    * @param cost    Per query, what the assignment cost, against
+    *                [[HungarianLoss.minimumCost]] as its floor.
+    */
+  case class Match[V](
+      targets: ObjectDetection[V],
+      slot: Tensor1[BoundingBox, Int32],
+      cost: Tensor1[BoundingBox, V]
+  )

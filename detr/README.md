@@ -17,13 +17,18 @@ scripts read the parameters back out of it. `DETR.logits` gives the raw scores t
 on, while `DETR.apply` decides a class per query and returns the same `Detection` type the
 dataset yields, so targets and predictions render — and are scored — through the same code.
 
-`detrEval` matches predictions to targets exactly as training does, then counts:
+`detrEval` matches predictions to targets exactly as training does, then counts an **object** as
+detected when its class is right and its defining points land within the tolerance in pixels —
+both end points for a part line, the anchor for a text (the target's box size around a text is an
+artifact of the dataset wrapper, so it is not scored). Off that it reports recall
+(`objects detected`), precision (`detections correct`), how many queries beyond the objects
+present stay empty, and a **drawing** as detected when every query slot is right at once: every
+object detected, none missing and none spurious.
 
-- an **object** as detected when its class is right and its defining points land within 4
-  pixels — both end points for a part line, the anchor for a text (the target's box size
-  around a text is an artifact of the dataset wrapper, so it is not scored);
-- a **drawing** as detected when every query slot is right: every object detected, none
-  missing and none spurious.
+That last one is all or nothing over the full query set, so it falls off as the empty-query rate
+is raised to the power of however many queries a drawing leaves empty — at 32 queries and some 7
+objects it saturates at zero long before the objects do. Only compare it between models of the
+same query count; the other three are comparable across all of them.
 
 Note that `detrPlot` reads the training split, which downloads 8.6 GB on first use.
 
@@ -84,6 +89,21 @@ class head, the three layer perceptron box head, and the set prediction loss.
 | [HungarianLoss.scala](src/main/scala/HungarianLoss.scala) | matching and set prediction loss |
 | [DETRTrain.scala](src/main/scala/DETRTrain.scala) | training loop and checkpointing |
 | [DETREval.scala](src/main/scala/DETREval.scala) | plots and scores a checkpoint |
+| [DetectionScoring.scala](src/main/scala/DetectionScoring.scala) | judging a detection in pixels, and reading a run's checkpoints |
 
 Box geometry (L1 and GIoU) lives with `Detection` in the dataset module,
 [Box.scala](../dataset/src/main/scala/Box.scala).
+
+## What a model built on this one can read
+
+The [egtr](../egtr) module predicts a scene graph on top of this detector, and needs three things
+out of it that a detection alone does not:
+
+- `DETR.decode` — the decoder's output *and* `DETRDecoder.applyWithSelfAttentionIntermediates`,
+  the queries and keys every block's self-attention read its object queries by. `DETR.logits`
+  does not pay for those.
+- `HungarianLoss.matched` — the assignment itself: which target slot each query answers for, and
+  at what cost. The first permutes anything else predicted over the same slots, the second says
+  how good a detected object is. `HungarianLoss.score` then takes the loss of an assignment
+  already made, so the matching runs once per step however much is predicted on top of it.
+- `DetectionScoring` — so that a node of a graph is judged exactly as an object of a detection is.

@@ -22,16 +22,24 @@ final case class DetectionBatch[S, Slot, V](
     label: Tensor2[S, Slot, Int32]
 )
 
-/** One drawing together with the objects to detect in it. */
+/** One drawing together with the objects to detect in it and the edges between them.
+  *
+  * `relations` is the adjacency matrix over the same slots `objects` is laid out in: `1` where
+  * the object in the first slot carries the [[RelationClass]] towards the object in the second,
+  * `0` everywhere else — in particular for every pair involving a padding slot. Detection only
+  * models can ignore it.
+  */
 final case class LShapeSample[W, H, C, Slot](
     image: Tensor3[W, H, C, Float32],
-    objects: Detection[Slot, Float32]
+    objects: Detection[Slot, Float32],
+    relations: Tensor3[Slot, Prime[Slot], RelationClasses, Float32]
 )
 
-/** A batch of drawings together with the objects to detect in them. */
+/** A batch of drawings together with the objects to detect in them and the edges between them. */
 final case class LShapeBatch[S, W, H, C, Slot](
     images: Tensor4[S, W, H, C, Float32],
-    objects: DetectionBatch[S, Slot, Float32]
+    objects: DetectionBatch[S, Slot, Float32],
+    relations: Tensor4[S, Slot, Prime[Slot], RelationClasses, Float32]
 )
 
 /** [[NoObject]] is DETR's "no object" class and marks an unused query slot. */
@@ -60,8 +68,8 @@ object ObjectClass:
   * images with `numpy` and turns the drawing programs into detection targets. Only the
   * requested samples are ever read, which matters because the train split is ~8.6 GB.
   *
-  * A drawing program is a graph of element nodes and relationship edges, of which only
-  * the nodes that are drawn as objects are detected:
+  * A drawing program is a graph of element nodes and relationship edges. The nodes that are
+  * drawn as objects become the [[Detection]] targets:
   *
   *   - [[ObjectClass.PartLine]] — a straight segment of the l-shape outline. Its box
   *     spans the two end points, widened to [[LShapeDetectionDataset.Config.minObjectSizePixels]]
@@ -70,10 +78,16 @@ object ObjectClass:
   *     point, so the box is a fixed [[LShapeDetectionDataset.Config.textBoxSizePixels]]
   *     square centred on it.
   *
-  * Everything else (`ConnectTwoElementsWithId` relations, the `HelpLine` and
-  * `BothSidedArrow` decorations of an annotation, `FinishDrawing`) is dropped. Targets
-  * are padded to [[LShapeDetectionDataset.maxNumObjects]] slots with [[ObjectClass.NoObject]],
-  * so samples and batches are rectangular.
+  * and the edges between those nodes become the [[RelationClass]] targets:
+  *
+  *   - [[RelationClass.Connected]] — the corners of the outline, one edge per pair of part
+  *     lines meeting in a point.
+  *   - [[RelationClass.Annotates]] — which part line each dimension annotation measures.
+  *
+  * Everything else (the `HelpLine` and `BothSidedArrow` decorations of an annotation,
+  * `FinishDrawing`) is dropped. Targets are padded to
+  * [[LShapeDetectionDataset.maxNumObjects]] slots with [[ObjectClass.NoObject]], so samples
+  * and batches are rectangular.
   *
   * Call `dimwit.initialize()` once before using this loader — it configures the Python
   * interpreter ScalaPy talks to.
@@ -140,12 +154,19 @@ object LShapeDetectionDataset:
   )(split: Split, config: Config = Config()): LShapeDetectionDataset[W, H, C, Slot] =
     require(config.maxNumObjects.forall(_ > 0), "maxNumObjects must be positive")
     val detected = ObjectClass.actionTypes.toSeq
+    val related = RelationClass.actions.toSeq
     val handle = module.open_split(
       config.repoId,
       split.fileName,
       config.revision.getOrElse(""),
       detected.map((_, actionType) => actionType).toPythonCopy,
       detected.map((objectClass, _) => objectClass.id).toPythonCopy,
+      RelationClass.idActionTypes.toPythonCopy,
+      related.map((_, action) => action.actionType).toPythonCopy,
+      related.map((relationClass, _) => relationClass.id).toPythonCopy,
+      related.map((_, action) => action.kind).toPythonCopy,
+      related.map((_, action) => action.symmetric).toPythonCopy,
+      RelationClass.values.length,
       config.maxNumObjects.getOrElse(0),
       config.minObjectSizePixels,
       config.textBoxSizePixels,
@@ -198,6 +219,14 @@ final class LShapeDetectionDataset[W: Label, H: Label, C: Label, Slot: Label] pr
   /** Number of objects dropped because [[maxNumObjects]] was too small. */
   val truncatedObjects: Int = handle.truncated_objects.as[Int]
 
+  /** Number of edges dropped because they named an element that is not a detected object.
+    *
+    * Zero for both splits of the dataset as it stands: every relation of a drawing program
+    * relates part lines and annotations, which are exactly the classes detected. A non-zero
+    * count means the drawing program grammar and [[RelationClass.actions]] have drifted apart.
+    */
+  val unresolvedRelations: Int = handle.unresolved_relations.as[Int]
+
   /** The whole split, one sample at a time.
     *
     * @param shuffle draws the samples in a random order instead of storage order. Reusing
@@ -216,7 +245,8 @@ final class LShapeDetectionDataset[W: Label, H: Label, C: Label, Slot: Label] pr
             height = liftPyTensor1(Axis[Slot], VType[Float32])(sample.height)
           ),
           label = liftPyTensor1(Axis[Slot], VType[Int32])(sample.label)
-        )
+        ),
+        relations = liftPyTensor[(Slot, Prime[Slot], RelationClasses), Float32](sample.relations)
       )
 
   /** The whole split, one batch at a time. The incomplete tail is dropped, so every batch
@@ -246,7 +276,8 @@ final class LShapeDetectionDataset[W: Label, H: Label, C: Label, Slot: Label] pr
             height = liftPyTensor[(S, Slot), Float32](batch.height)
           ),
           label = liftPyTensor[(S, Slot), Int32](batch.label)
-        )
+        ),
+        relations = liftPyTensor[(S, Slot, Prime[Slot], RelationClasses), Float32](batch.relations)
       )
 
   private def readOrder(shuffle: Option[scala.util.Random]): Seq[Int] =

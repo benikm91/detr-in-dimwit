@@ -14,17 +14,29 @@ the repository rather than as a ``datasets`` config:
 * ``{split}_seeds.npy``   -- generator seeds (unused here).
 
 A drawing program is a graph: nodes carry coordinates, and relationship actions
-(``ConnectTwoElementsWithId``) tie them together. Object detection only cares
-about the nodes, so every action of a requested type becomes one axis aligned
-box in normalized ``(cx, cy, w, h)`` coordinates -- the convention DETR predicts
-in -- and everything else is dropped. All drawn lines are straight and axis
-aligned, so no rotated boxes are needed:
+(``ConnectTwoElementsWithId``) tie them together. Every action of a requested
+type becomes one axis aligned box in normalized ``(cx, cy, w, h)`` coordinates
+-- the convention DETR predicts in -- and everything else is dropped. All drawn
+lines are straight and axis aligned, so no rotated boxes are needed:
 
 * an action with two points spans a box between them, grown to at least
   ``min_width``/``min_height`` so that a horizontal or vertical line keeps a
   non-degenerate box;
 * an action with a single point (the text anchor) becomes a box of the fixed
   size ``fixed_width``/``fixed_height`` centred on it.
+
+The edges are kept as well, as a dense ``(slots, slots, predicates)`` adjacency
+matrix over the same slots the boxes sit in. A drawing program names its nodes
+by an element id, counted over the actions of the ``id_types``, which the
+requested relations refer to in their ``discrete_params``:
+
+* ``between`` -- the action's two trailing discrete params are the ids of the
+  two elements it relates (``ConnectTwoElementsWithId``);
+* ``from_self`` -- the action is itself a node and its trailing discrete param
+  is the id of the element it refers to (``AnnotationTextRefId``).
+
+A ``symmetric`` relation is stored in both directions, since which way round a
+relationship action names its two elements carries no meaning.
 
 Since the training split is ~8.6 GB the images are memory mapped and only the
 requested samples are ever read; parsed targets are small and are cached on disk
@@ -77,32 +89,89 @@ def _cache_file(key):
     return os.path.join(root, key + ".npz")
 
 
-def _objects_of(actions, geometry):
-    """Turn one drawing program into ``(cx, cy, w, h, class_id)`` rows."""
+def _graph_of(actions, geometry, id_types, relations):
+    """Turn one drawing program into its nodes and edges.
+
+    Returns ``(rows, edges, unresolved)``: ``(cx, cy, w, h, class_id)`` per
+    detected node, ``(subject_slot, object_slot, predicate_id)`` per edge, and
+    the number of references that named an element without a detection slot.
+    """
     rows = []
+    edges = []
+    slot_of_element = {}  # element id in the drawing program -> detection slot
+    next_element_id = 0
+    unresolved = 0
+
     for action in actions:
-        box = geometry.get(action["type"])
+        action_type = action["type"]
+        slot = None
+
+        box = geometry.get(action_type)
         points = action.get("coordinates_params")
-        if box is None or not points:
+        if box is not None and points:
+            class_id, min_width, min_height, fixed_width, fixed_height = box
+            xs = [point[0] for point in points]
+            ys = [point[1] for point in points]
+            x_min, x_max = min(xs), max(xs)
+            y_min, y_max = min(ys), max(ys)
+            if len(points) == 1:
+                width, height = fixed_width, fixed_height
+            else:
+                width = max(x_max - x_min, min_width)
+                height = max(y_max - y_min, min_height)
+            slot = len(rows)
+            rows.append((0.5 * (x_min + x_max), 0.5 * (y_min + y_max), width, height, class_id))
+
+        # An id is spent whether or not the element it names is detected, so that
+        # the ids the relations refer to keep lining up with the drawing program.
+        if action_type in id_types:
+            if slot is not None:
+                slot_of_element[next_element_id] = slot
+            next_element_id += 1
+
+        relation = relations.get(action_type)
+        if relation is None:
             continue
-        class_id, min_width, min_height, fixed_width, fixed_height = box
-        xs = [point[0] for point in points]
-        ys = [point[1] for point in points]
-        x_min, x_max = min(xs), max(xs)
-        y_min, y_max = min(ys), max(ys)
-        if len(points) == 1:
-            width, height = fixed_width, fixed_height
+        predicate_id, kind, symmetric = relation
+        params = action.get("discrete_params") or []
+        if kind == "between":
+            ends = params[-2:]
+            if len(ends) < 2:
+                unresolved += 1
+                continue
+            pair = (slot_of_element.get(_element_id(ends[0])), slot_of_element.get(_element_id(ends[1])))
+        elif kind == "from_self":
+            if not params:
+                unresolved += 1
+                continue
+            pair = (slot, slot_of_element.get(_element_id(params[-1])))
         else:
-            width = max(x_max - x_min, min_width)
-            height = max(y_max - y_min, min_height)
-        rows.append((0.5 * (x_min + x_max), 0.5 * (y_min + y_max), width, height, class_id))
-    return rows
+            raise ValueError("unknown relation kind '%s'" % kind)
+        subject, obj = pair
+        if subject is None or obj is None:
+            unresolved += 1
+            continue
+        edges.append((subject, obj, predicate_id))
+        if symmetric:
+            edges.append((obj, subject, predicate_id))
+
+    return rows, edges, unresolved
 
 
-def _parse_labels(labels_path, geometry, max_num_objects):
-    """Parse the JSONL label file into padded ``(boxes, labels)`` arrays."""
+def _element_id(param):
+    """The element id a discrete param names, or ``None`` if it names no element."""
+    try:
+        return int(param)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_labels(labels_path, geometry, id_types, relations, num_predicates, max_num_objects):
+    """Parse the JSONL label file into padded ``(boxes, labels, relations)`` arrays."""
     rows = []
+    edges = []
     counts = []
+    unresolved = 0
     with open(labels_path, encoding="utf-8") as handle:
         for sample_index, line in enumerate(handle):
             line = line.strip()
@@ -111,9 +180,11 @@ def _parse_labels(labels_path, geometry, max_num_objects):
             actions = json.loads(line)["actions"]
             if isinstance(actions, str):  # the actions column is a JSON string
                 actions = json.loads(actions)
-            sample_rows = _objects_of(actions, geometry)
+            sample_rows, sample_edges, sample_unresolved = _graph_of(actions, geometry, id_types, relations)
             rows.extend((sample_index,) + row for row in sample_rows)
+            edges.extend((sample_index,) + edge for edge in sample_edges)
             counts.append(len(sample_rows))
+            unresolved += sample_unresolved
 
     num_samples = len(counts)
     counts = np.asarray(counts, dtype=np.int64)
@@ -122,6 +193,7 @@ def _parse_labels(labels_path, geometry, max_num_objects):
 
     boxes = np.zeros((num_samples, slots, 4), dtype=np.float32)
     labels = np.full((num_samples, slots), NO_OBJECT, dtype=np.int32)
+    adjacency = np.zeros((num_samples, slots, slots, num_predicates), dtype=np.int8)
     truncated = 0
 
     if rows:
@@ -136,23 +208,42 @@ def _parse_labels(labels_path, geometry, max_num_objects):
         labels[sample_of_row[keep], row_slots[keep]] = table[keep, 5].astype(np.int32)
         truncated = int((~keep).sum())
 
-    return boxes, labels, observed_max, truncated
+    if edges:
+        table = np.asarray(edges, dtype=np.int64)
+        # An edge to a truncated object has no slot to sit in and is dropped with it.
+        keep = (table[:, 1] < slots) & (table[:, 2] < slots)
+        adjacency[table[keep, 0], table[keep, 1], table[keep, 2], table[keep, 3]] = 1
+
+    return boxes, labels, adjacency, observed_max, truncated, unresolved
 
 
-def load_targets(labels_path, geometry, max_num_objects=0, use_cache=True):
-    """Parsed detection targets for a split, memoized on disk.
+def load_targets(
+    labels_path,
+    geometry,
+    id_types=(),
+    relations=None,
+    num_predicates=0,
+    max_num_objects=0,
+    use_cache=True,
+):
+    """Parsed detection and relation targets for a split, memoized on disk.
 
-    Returns ``(boxes, labels, observed_max_objects, truncated)`` where ``boxes``
-    has shape ``(N, slots, 4)`` in ``(cx, cy, w, h)`` order and ``labels`` shape
-    ``(N, slots)``.
+    Returns ``(boxes, labels, relations, observed_max_objects, truncated,
+    unresolved)`` where ``boxes`` has shape ``(N, slots, 4)`` in ``(cx, cy, w,
+    h)`` order, ``labels`` shape ``(N, slots)`` and ``relations`` shape
+    ``(N, slots, slots, predicates)``.
     """
+    relations = relations or {}
     identity = json.dumps(
         {
             "path": os.path.realpath(labels_path),
             "size": os.path.getsize(labels_path),
             "geometry": sorted(geometry.items()),
+            "id_types": sorted(id_types),
+            "relations": sorted(relations.items()),
+            "predicates": int(num_predicates),
             "slots": int(max_num_objects),
-            "version": 2,
+            "version": 3,
         },
         sort_keys=True,
     )
@@ -164,13 +255,16 @@ def load_targets(labels_path, geometry, max_num_objects=0, use_cache=True):
                 return (
                     cached["boxes"],
                     cached["labels"],
+                    cached["relations"],
                     int(cached["observed_max"]),
                     int(cached["truncated"]),
+                    int(cached["unresolved"]),
                 )
         except (OSError, ValueError, KeyError):
             pass  # corrupt or outdated cache: fall through and re-parse
 
-    boxes, labels, observed_max, truncated = _parse_labels(labels_path, geometry, max_num_objects)
+    parsed = _parse_labels(labels_path, geometry, id_types, relations, num_predicates, max_num_objects)
+    boxes, labels, adjacency, observed_max, truncated, unresolved = parsed
 
     if use_cache:
         staging = "%s.%d.tmp.npz" % (cache, os.getpid())  # savez keeps an .npz suffix as is
@@ -178,31 +272,35 @@ def load_targets(labels_path, geometry, max_num_objects=0, use_cache=True):
             staging,
             boxes=boxes,
             labels=labels,
+            relations=adjacency,
             observed_max=np.int64(observed_max),
             truncated=np.int64(truncated),
+            unresolved=np.int64(unresolved),
         )
         os.replace(staging, cache)
 
-    return boxes, labels, observed_max, truncated
+    return boxes, labels, adjacency, observed_max, truncated, unresolved
 
 
 class Objects:
-    """Images plus their detection targets, as JAX arrays.
+    """Images plus their detection and relation targets, as JAX arrays.
 
     ``images`` is ``(width, height, channel)`` for a single sample and
     ``(sample, width, height, channel)`` for a batch; the target arrays gain the
-    same leading axis.
+    same leading axis. ``relations`` is the ``(slots, slots, predicates)``
+    adjacency matrix over the slots the other targets are laid out in.
     """
 
-    __slots__ = ("images", "center_x", "center_y", "width", "height", "label")
+    __slots__ = ("images", "center_x", "center_y", "width", "height", "label", "relations")
 
-    def __init__(self, images, center_x, center_y, width, height, label):
+    def __init__(self, images, center_x, center_y, width, height, label, relations):
         self.images = images
         self.center_x = center_x
         self.center_y = center_y
         self.width = width
         self.height = height
         self.label = label
+        self.relations = relations
 
 
 class Split:
@@ -215,6 +313,12 @@ class Split:
         revision="",
         class_names=(),
         class_ids=(),
+        id_types=(),
+        relation_names=(),
+        relation_ids=(),
+        relation_kinds=(),
+        relation_symmetric=(),
+        num_predicates=0,
         max_num_objects=0,
         min_size_pixels=4.0,
         text_size_pixels=12.0,
@@ -240,9 +344,28 @@ class Split:
             name: (int(class_id), min_width, min_height, fixed_width, fixed_height)
             for name, class_id in zip(class_names, class_ids)
         }
+        relations = {
+            name: (int(predicate_id), str(kind), bool(symmetric))
+            for name, predicate_id, kind, symmetric in zip(
+                relation_names, relation_ids, relation_kinds, relation_symmetric
+            )
+        }
 
-        self.boxes, self.labels, self.observed_max_objects, self.truncated_objects = load_targets(
-            labels_path, geometry, max_num_objects, use_cache
+        (
+            self.boxes,
+            self.labels,
+            self.relations,
+            self.observed_max_objects,
+            self.truncated_objects,
+            self.unresolved_relations,
+        ) = load_targets(
+            labels_path,
+            geometry,
+            tuple(id_types),
+            relations,
+            int(num_predicates),
+            max_num_objects,
+            use_cache,
         )
 
         if len(self.labels) != self.num_samples:
@@ -288,6 +411,7 @@ class Split:
             jnp.asarray(boxes[:, 2]),
             jnp.asarray(boxes[:, 3]),
             jnp.asarray(self.labels[index]),
+            jnp.asarray(self.relations[index].astype(np.float32)),
         )
 
     def batch(self, indices):
@@ -306,6 +430,7 @@ class Split:
             jnp.asarray(boxes[:, :, 2]),
             jnp.asarray(boxes[:, :, 3]),
             jnp.asarray(self.labels[selection]),
+            jnp.asarray(self.relations[selection].astype(np.float32)),
         )
 
 
@@ -315,6 +440,12 @@ def open_split(
     revision="",
     class_names=(),
     class_ids=(),
+    id_types=(),
+    relation_names=(),
+    relation_ids=(),
+    relation_kinds=(),
+    relation_symmetric=(),
+    num_predicates=0,
     max_num_objects=0,
     min_size_pixels=4.0,
     text_size_pixels=12.0,
@@ -328,6 +459,12 @@ def open_split(
         revision=revision,
         class_names=class_names,
         class_ids=class_ids,
+        id_types=id_types,
+        relation_names=relation_names,
+        relation_ids=relation_ids,
+        relation_kinds=relation_kinds,
+        relation_symmetric=relation_symmetric,
+        num_predicates=num_predicates,
         max_num_objects=max_num_objects,
         min_size_pixels=min_size_pixels,
         text_size_pixels=text_size_pixels,

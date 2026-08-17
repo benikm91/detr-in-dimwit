@@ -41,6 +41,14 @@ class DETRDecoder[CrossContext: Λ, CrossEmbedding: Λ, Context: Λ, Embedding: 
     val res = hiddenStates.last
     (hiddenStates, res.vmap(Axis[Context])(finalNorm))
 
+  def applyWithSelfAttentionIntermediates(crossContext: Tensor2[CrossContext, CrossEmbedding, V], context: Tensor2[Context, Embedding, V]): (List[MultiHeadAttention.Intermediates[Context, Context, V]], Tensor2[Context, Embedding, V]) =
+    val (blocksRes, intermediates) = blocks.foldLeft((context, List.empty[MultiHeadAttention.Intermediates[Context, Context, V]])):
+      case ((context_i, sofar), block) =>
+        val (mixed, intermediates) = block.applyWithSelfAttentionIntermediates(crossContext, context_i)
+        (mixed, intermediates :: sofar)
+    val res = blocksRes.vmap(Axis[Context])(finalNorm)
+    (intermediates.reverse, res)
+
 object DETRDecoder:
 
   case class Params[CrossEmbedding, Embedding, V](
@@ -94,10 +102,27 @@ class DETRDecoderBlock[CrossContext: Λ, CrossEmbedding: Λ, Context: Λ, Embedd
     mlp(mlpPreNorm(embedding))
 
   override protected def contextMixer(context: Tensor2[Context, Embedding, V]): Tensor2[Context, Embedding, V] =
-    selfAttention(context.vmap(Axis[Context])(selfAttentionPreNorm))
+    selfAttend(context).head
 
   override protected def crossContextMixer(crossContext: Tensor2[CrossContext, CrossEmbedding, V], context: Tensor2[Context, Embedding, V]): Tensor2[Context, Embedding, V] =
     crossAttention(crossContext, context.vmap(Axis[Context])(crossAttentionPreNorm))
+
+  def applyWithSelfAttentionIntermediates(crossContext: Tensor2[CrossContext, CrossEmbedding, V], context: Tensor2[Context, Embedding, V]): (
+      Tensor2[Context, Embedding, V],
+      MultiHeadAttention.Intermediates[Context, Context, V]
+  ) =
+    val (selfAttended, intermediates) = selfAttend(context)
+    val contextMixed = context + selfAttended
+    val crossContextMixed = contextMixed + crossContextMixer(crossContext, contextMixed)
+    val res = crossContextMixed + crossContextMixed.vmap(Axis[Context])(embeddingMixer)
+    (res, intermediates)
+
+  /** The self-attention branch, together with the queries, keys and values it attended by. */
+  private def selfAttend(context: Tensor2[Context, Embedding, V]): (
+      Tensor2[Context, Embedding, V],
+      MultiHeadAttention.Intermediates[Context, Context, V]
+  ) =
+    selfAttention.applyWithIntermediates(context.vmap(Axis[Context])(selfAttentionPreNorm))
 
 object DETRDecoderBlock:
 

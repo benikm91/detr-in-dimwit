@@ -16,7 +16,7 @@ lazy val munit = "org.scalameta" %% "munit" % "1.0.0" % Test
 
 lazy val root = project
   .in(file("."))
-  .aggregate(dataset, detr)
+  .aggregate(dataset, detr, egtr)
   .settings(
     name := "detr-root",
     publish / skip := true
@@ -34,21 +34,30 @@ lazy val dataset = project
     )
   )
 
+lazy val modelSettings = Seq(
+  libraryDependencies ++= Seq(
+    dimwit,
+    scalapy,
+    munit,
+    "ch.contrafactus" %% "plotwit-core" % "0.1.0-SNAPSHOT" changing (),
+    "ch.contrafactus" %% "deepwit-core" % "0.1.0-SNAPSHOT" changing ()
+  ),
+  javaOptions ++= Seq(
+    // "-XX:G1PeriodicGCInterval=1000"
+    "-XX:+UseZGC",
+    "-XX:ZCollectionInterval=1" // Forces a GC cycle every 1 second, regardless of heap usage
+  )
+)
+
 lazy val detr = project
   .in(file("detr"))
   .dependsOn(dataset)
-  .settings(
-    name := "detr",
-    libraryDependencies ++= Seq(
-      dimwit,
-      scalapy,
-      munit,
-      "ch.contrafactus" %% "plotwit-core" % "0.1.0-SNAPSHOT" changing (),
-      "ch.contrafactus" %% "deepwit-core" % "0.1.0-SNAPSHOT" changing ()
-    ),
-    javaOptions ++= Seq(
-      // "-XX:G1PeriodicGCInterval=1000"
-      "-XX:+UseZGC",
-      "-XX:ZCollectionInterval=1" // Forces a GC cycle every 1 second, regardless of heap usage
-    )
-  )
+  .settings(name := "detr")
+  .settings(modelSettings)
+
+// EGTR builds its scene graph on the detector, so it depends on detr — never the other way round.
+lazy val egtr = project
+  .in(file("egtr"))
+  .dependsOn(detr)
+  .settings(name := "egtr")
+  .settings(modelSettings)
