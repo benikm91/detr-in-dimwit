@@ -6,15 +6,10 @@ import deepwit.activation.sigmoid
 import deepwit.base.AffineLayer
 import deepwit.embedder.ImageToPatchEmbedder
 import deepwit.normalization.LayerNorm
-import deepwit.transformer.CrossTransformer
-import deepwit.transformer.CrossTransformerLayer
-import deepwit.transformer.EmbeddingMixed
-import deepwit.transformer.Transformer
-import deepwit.transformer.attention.Head
-import deepwit.transformer.attention.HeadKey
-import deepwit.transformer.attention.HeadQuery
-import deepwit.transformer.attention.HeadValue
-import deepwit.transformer.fullMask
+import deepwit.attention.Head
+import deepwit.attention.HeadKey
+import deepwit.attention.HeadQuery
+import deepwit.attention.HeadValue
 import dimwit.*
 import dimwit.tensor.Tensor4
 
@@ -34,8 +29,8 @@ class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height
   import DETR.Prediction
 
   private val patches = ImageToPatchEmbedder(params.patchEmbedder)
-  private val encoder = Transformer.bidirectional(Axis[Patch], params.encoder)
-  private val decoder = CrossTransformer.bidirectional(Axis[Patch], Axis[BoundingBox], params.decoder)
+  private val encoder = DETREncoder(Axis[Patch], params.encoder)
+  private val decoder = DETRDecoder(Axis[Patch], Axis[BoundingBox], params.decoder)
   private val classify = AffineLayer(params.classification)
   private val boxHidden1 = AffineLayer(params.boxHidden1)
   private val boxHidden2 = AffineLayer(params.boxHidden2)
@@ -80,8 +75,8 @@ object DETR:
 
   case class Params[V](
       patchEmbedder: ImageToPatchEmbedder.Params[Width, Height, Channel, Embedding, V],
-      encoder: Transformer.Params[Embedding, V],
-      decoder: CrossTransformer.Params[Embedding, Embedding, V],
+      encoder: DETREncoder.Params[Embedding, V],
+      decoder: DETRDecoder.Params[Embedding, Embedding, V],
       objectQueries: Tensor2[BoundingBox, Embedding, V],
       classification: AffineLayer.Params[Embedding, ObjectClasses, V],
       boxHidden1: AffineLayer.Params[Embedding, BoxHidden, V],
@@ -118,7 +113,7 @@ object DETR:
           VType[Float32],
           patchKey
         ),
-        encoder = Transformer.Params.xavierUniformDepthScaled(
+        encoder = DETREncoder.Params.xavierUniformDepthScaled(
           numLayers,
           numHeads,
           embeddingExtent,
@@ -126,7 +121,7 @@ object DETR:
           VType[Float32],
           encoderKey
         ),
-        decoder = CrossTransformer.Params.xavierUniformDepthScaled(
+        decoder = DETRDecoder.Params.xavierUniformDepthScaled(
           numLayers,
           numHeads,
           embeddingExtent,

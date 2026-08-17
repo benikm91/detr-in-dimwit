@@ -8,11 +8,10 @@ import dataset.LShapeDetectionDataset.Split
 import deepwit.checkpointing.TensorTreeCheckpointer
 import deepwit.training.Monitor
 import deepwit.training.tapEvery
-import deepwit.transformer.MLPEmbeddingMixer
-import deepwit.transformer.attention.Head
-import deepwit.transformer.attention.HeadKey
-import deepwit.transformer.attention.HeadQuery
-import deepwit.transformer.attention.HeadValue
+import deepwit.attention.Head
+import deepwit.attention.HeadKey
+import deepwit.attention.HeadQuery
+import deepwit.attention.HeadValue
 import deepwit.optimizer.clipGlobalNorm
 import dimwit.*
 import dimwit.optimizer.Adam
