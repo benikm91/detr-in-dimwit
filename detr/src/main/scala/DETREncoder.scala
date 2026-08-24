@@ -38,11 +38,11 @@ object DETREncoder:
 
   object Params:
 
-    def xavierUniformDepthScaled[Embedding: Λ, V: IsFloating](numEncoderBlocks: Int, numHeads: Int, embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], vtype: VType[V], key: Key): Params[Embedding, V] =
+    def xavierUniformDepthScaled[Embedding: Λ, V: IsFloating](numEncoderBlocks: Int, numHeads: Int, embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], key: Key, vtype: VType[V] = VType[Float32]): Params[Embedding, V] =
       new Params[Embedding, V](
         encoderBlocks =
           key.split(numEncoderBlocks).map: key =>
-            DETREncoderBlock.Params.xavierUniformDepthScaled(numEncoderBlocks, numHeads, embeddingExtent, embeddingMixedExtent, vtype, key)
+            DETREncoderBlock.Params.xavierUniformDepthScaled(numEncoderBlocks, numHeads, embeddingExtent, embeddingMixedExtent, key, vtype)
           .toList,
         finalNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
       )
@@ -87,11 +87,11 @@ object DETREncoderBlock:
 
   object Params:
 
-    def xavierUniformDepthScaled[Embedding: Λ, V: IsFloating](numEncoderBlocks: Int, numHeads: Int, embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], vtype: VType[V], key: Key): Params[Embedding, V] =
+    def xavierUniformDepthScaled[Embedding: Λ, V: IsFloating](numEncoderBlocks: Int, numHeads: Int, embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], key: Key, vtype: VType[V] = VType[Float32]): Params[Embedding, V] =
       val (attnKey, mixKey) = key.splitToTuple(2)
       new Params[Embedding, V](
-        attentionParams = MultiHeadSelfAttention.Params.xavierUniformDepthScaled(numEncoderBlocks, numHeads, embeddingExtent, vtype, attnKey),
+        attentionParams = MultiHeadSelfAttention.Params.xavierUniformDepthScaled(numEncoderBlocks, numHeads, embeddingExtent, attnKey, vtype),
         attentionNormParams = LayerNorm.Params.identity(embeddingExtent, vtype),
-        mlpParams = MLPEmbeddingMixer.Params.xavierUniform(embeddingExtent, embeddingMixedExtent, vtype, mixKey),
+        mlpParams = MLPEmbeddingMixer.Params.xavierUniform(embeddingExtent, embeddingMixedExtent, mixKey, vtype),
         mlpNormParams = LayerNorm.Params.identity(embeddingExtent, vtype)
       )

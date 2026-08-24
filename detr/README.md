@@ -17,18 +17,12 @@ scripts read the parameters back out of it. `DETR.logits` gives the raw scores t
 on, while `DETR.apply` decides a class per query and returns the same `Detection` type the
 dataset yields, so targets and predictions render — and are scored — through the same code.
 
-`detrEval` matches predictions to targets exactly as training does, then counts an **object** as
-detected when its class is right and its defining points land within the tolerance in pixels —
-both end points for a part line, the anchor for a text (the target's box size around a text is an
-artifact of the dataset wrapper, so it is not scored). Off that it reports recall
-(`objects detected`), precision (`detections correct`), how many queries beyond the objects
-present stay empty, and a **drawing** as detected when every query slot is right at once: every
-object detected, none missing and none spurious.
-
-That last one is all or nothing over the full query set, so it falls off as the empty-query rate
-is raised to the power of however many queries a drawing leaves empty — at 32 queries and some 7
-objects it saturates at zero long before the objects do. Only compare it between models of the
-same query count; the other three are comparable across all of them.
+`detrEval` reads what is detected back into the [record](../dataset) it stands for and compares it
+with the record the drawing was rendered from — a detector predicts no relationships, so the
+record it is held against holds none either. It reports recall (`nodes detected`), precision
+(`detections right`) and `drawings fully detected`, which is every node of a drawing found at once
+with nothing spurious. Those are the node lines [`d2gEval`](../d2g/README.md) reports, on the same
+records, so the two can be read against each other.
 
 Note that `detrPlot` reads the training split, which downloads 8.6 GB on first use.
 

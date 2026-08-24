@@ -1,15 +1,5 @@
 import dataset.ObjectClass
-import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
-
-import java.io.File
-
-/** How far an object's defining points may be off, in pixels.
-  *
-  * A split is scored at every one of them, since a single threshold only says which side of
-  * it the boxes fall on, not how far they still have to travel.
-  */
-val Tolerances = Seq(2f, 4f, 8f)
 
 /** Scoring a detection against a target, in pixels rather than in the loss's terms.
   *
@@ -56,34 +46,3 @@ object DetectionScoring:
       case ObjectClass.PartLine =>
         near(target.top, predicted.top) && near(target.bottom, predicted.bottom) && near(target.centerX, predicted.centerX)
     )
-
-  /** One line of a score report: `<prefix>  <what>  <correct> / <total>  <percentage>`. */
-  def report(prefix: String, what: String, correct: Int, total: Int): Unit =
-    println(f"$prefix%5s  $what%-24s $correct%6d / $total%-6d ${100f * correct / total}%5.1f%%")
-
-  /** `tolerance px`, the [[report]] prefix of a score that depends on the tolerance. */
-  def at(tolerance: Float): String = f"$tolerance%2.0f px"
-
-/** Reading the parameters back out of a training run's checkpoints. */
-object Checkpoints:
-
-  /** The newest checkpoint of the given run, or of the newest run under `root`.
-    *
-    * A checkpoint holds the whole training state, so this is also what a resumed run reads.
-    */
-  def loadLatest[S: TensorTree](root: String, run: Seq[String]): S =
-    val directory = run.headOption.orElse(latestRun(root)).getOrElse(sys.error(s"no training run in $root"))
-    val checkpointer = TensorTreeCheckpointer(directory)
-    val step = checkpointer.iterations.lastOption.getOrElse(sys.error(s"no checkpoint in $directory"))
-    println(s"loaded checkpoint $step of $directory")
-    checkpointer.load[S](step).get
-
-  /** The newest run directory under `root`, if it holds any. Runs are named after the time they
-    * started, so the newest is the last by name.
-    */
-  def latestRun(root: String): Option[String] =
-    Option(File(root).listFiles)
-      .getOrElse(Array.empty[File])
-      .filter(_.isDirectory)
-      .map(_.getPath)
-      .maxOption

@@ -132,7 +132,6 @@ object DETR:
           Axis[Height] -> patchSize,
           Axis[Channel] -> 1,
           embeddingExtent,
-          VType[Float32],
           patchKey
         ),
         encoder = DETREncoder.Params.xavierUniformDepthScaled(
@@ -140,7 +139,6 @@ object DETR:
           numHeads,
           embeddingExtent,
           embeddingMixedExtent,
-          VType[Float32],
           encoderKey
         ),
         decoder = DETRDecoder.Params.xavierUniformDepthScaled(
@@ -149,12 +147,11 @@ object DETR:
           embeddingExtent,
           embeddingExtent,
           embeddingMixedExtent,
-          VType[Float32],
           decoderKey
         ),
-        objectQueries = deepwit.init.xavierUniform(boundingBoxExtent, embeddingExtent, VType[Float32], queryKey),
-        classification = AffineLayer.Params.xavierUniform(embeddingExtent, Axis[ObjectClasses] -> ObjectClass.values.length, VType[Float32], classKey),
-        boxHidden1 = AffineLayer.Params.xavierUniform(embeddingExtent, boxHiddenExtent, VType[Float32], box1Key),
-        boxHidden2 = AffineLayer.Params.xavierUniform(boxHiddenExtent, boxHiddenExtent2, VType[Float32], box2Key),
-        boxOutput = AffineLayer.Params.xavierUniform(boxHiddenExtent2, Axis[BoxCoordinate] -> 4, VType[Float32], box3Key)
+        objectQueries = deepwit.init.Init.xavierUniform(boundingBoxExtent, embeddingExtent, queryKey),
+        classification = AffineLayer.Params.xavierUniform(embeddingExtent, Axis[ObjectClasses] -> ObjectClass.values.length, classKey),
+        boxHidden1 = AffineLayer.Params.xavierUniform(embeddingExtent, boxHiddenExtent, box1Key),
+        boxHidden2 = AffineLayer.Params.xavierUniform(boxHiddenExtent, boxHiddenExtent2, box2Key),
+        boxOutput = AffineLayer.Params.xavierUniform(boxHiddenExtent2, Axis[BoxCoordinate] -> 4, box3Key)
       )

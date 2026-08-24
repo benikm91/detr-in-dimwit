@@ -58,11 +58,11 @@ object DETRDecoder:
 
   object Params:
 
-    def xavierUniformDepthScaled[CrossEmbedding: Λ, Embedding: Λ, V: IsFloating](numDecoderBlocks: Int, numHeads: Int, crossEmbeddingExtent: AxisExtent[CrossEmbedding], embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], vtype: VType[V], key: Key): Params[CrossEmbedding, Embedding, V] =
+    def xavierUniformDepthScaled[CrossEmbedding: Λ, Embedding: Λ, V: IsFloating](numDecoderBlocks: Int, numHeads: Int, crossEmbeddingExtent: AxisExtent[CrossEmbedding], embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], key: Key, vtype: VType[V] = VType[Float32]): Params[CrossEmbedding, Embedding, V] =
       new Params(
         decoderBlocks =
           key.split(numDecoderBlocks).map: key =>
-            DETRDecoderBlock.Params.xavierUniformDepthScaled(numDecoderBlocks, numHeads, crossEmbeddingExtent, embeddingExtent, embeddingMixedExtent, vtype, key)
+            DETRDecoderBlock.Params.xavierUniformDepthScaled(numDecoderBlocks, numHeads, crossEmbeddingExtent, embeddingExtent, embeddingMixedExtent, key, vtype)
           .toList,
         finalNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
       )
@@ -137,13 +137,13 @@ object DETRDecoderBlock:
 
   object Params:
 
-    def xavierUniformDepthScaled[CrossEmbedding: Λ, Embedding: Λ, V: IsFloating](numDecoderBlocks: Int, numHeads: Int, crossEmbeddingExtent: AxisExtent[CrossEmbedding], embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], vtype: VType[V], key: Key): Params[CrossEmbedding, Embedding, V] =
+    def xavierUniformDepthScaled[CrossEmbedding: Λ, Embedding: Λ, V: IsFloating](numDecoderBlocks: Int, numHeads: Int, crossEmbeddingExtent: AxisExtent[CrossEmbedding], embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], key: Key, vtype: VType[V] = VType[Float32]): Params[CrossEmbedding, Embedding, V] =
       val (selfAttnKey, crossAttnKey, mixKey) = key.splitToTuple(3)
       new Params[CrossEmbedding, Embedding, V](
-        crossAttentionParams = MultiHeadAttention.Params.xavierUniformDepthScaled(numDecoderBlocks, numHeads, crossEmbeddingExtent, embeddingExtent, vtype, crossAttnKey),
+        crossAttentionParams = MultiHeadAttention.Params.xavierUniformDepthScaled(numDecoderBlocks, numHeads, crossEmbeddingExtent, embeddingExtent, crossAttnKey, vtype),
         crossAttentionNormParams = LayerNorm.Params.identity(embeddingExtent, vtype),
-        selfAttentionParams = MultiHeadSelfAttention.Params.xavierUniformDepthScaled(numDecoderBlocks, numHeads, embeddingExtent, vtype, selfAttnKey),
+        selfAttentionParams = MultiHeadSelfAttention.Params.xavierUniformDepthScaled(numDecoderBlocks, numHeads, embeddingExtent, selfAttnKey, vtype),
         selfAttentionNormParams = LayerNorm.Params.identity(embeddingExtent, vtype),
-        mlpParams = MLPEmbeddingMixer.Params.xavierUniform(embeddingExtent, embeddingMixedExtent, vtype, mixKey),
+        mlpParams = MLPEmbeddingMixer.Params.xavierUniform(embeddingExtent, embeddingMixedExtent, mixKey, vtype),
         mlpNormParams = LayerNorm.Params.identity(embeddingExtent, vtype)
       )

@@ -1,8 +1,8 @@
 """Python side of the DimWit ``LShapeDataset`` wrapper.
 
 Loads the `benikm91/l-shape <https://huggingface.co/datasets/benikm91/l-shape>`_
-dataset through ``huggingface_hub`` and exposes it in a shape that is directly
-liftable into DimWit tensors.
+dataset through ``huggingface_hub`` and hands out the *record* of every drawing:
+the graph it was rendered from, which is what the drawing program spells out.
 
 The dataset is stored in the ``npy-memmap-v1`` format, i.e. as plain files in
 the repository rather than as a ``datasets`` config:
@@ -13,33 +13,23 @@ the repository rather than as a ``datasets`` config:
   where ``actions`` is a *string* holding the drawing program for that image.
 * ``{split}_seeds.npy``   -- generator seeds (unused here).
 
-A drawing program is a graph: nodes carry coordinates, and relationship actions
-(``ConnectTwoElementsWithId``) tie them together. Every action of a requested
-type becomes one axis aligned box in normalized ``(cx, cy, w, h)`` coordinates
--- the convention DETR predicts in -- and everything else is dropped. All drawn
-lines are straight and axis aligned, so no rotated boxes are needed:
+A record is a list of nodes. The drawn ones come first, in the order the drawing
+program draws them, followed by the relationships between them in a canonical
+order, so that a record read back out of an adjacency matrix is the record it
+came from:
 
-* an action with two points spans a box between them, grown to at least
-  ``min_width``/``min_height`` so that a horizontal or vertical line keeps a
-  non-degenerate box;
-* an action with a single point (the text anchor) becomes a box of the fixed
-  size ``fixed_width``/``fixed_height`` centred on it.
+* ``PartLineWithId``           -- a line node, by its two end points, in ascending order along
+  the axis the line runs, since a line is undirected;
+* ``AnnotationTextRefId``      -- an annotation node, by its centre, plus an
+  ``annotates`` relationship to the line it measures;
+* ``ConnectTwoElementsWithId`` -- a ``connected`` relationship between two
+  lines, held once with the two it links in ascending order.
 
-The edges are kept as well, as a dense ``(slots, slots, predicates)`` adjacency
-matrix over the same slots the boxes sit in. A drawing program names its nodes
-by an element id, counted over the actions of the ``id_types``, which the
-requested relations refer to in their ``discrete_params``:
-
-* ``between`` -- the action's two trailing discrete params are the ids of the
-  two elements it relates (``ConnectTwoElementsWithId``);
-* ``from_self`` -- the action is itself a node and its trailing discrete param
-  is the id of the element it refers to (``AnnotationTextRefId``).
-
-A ``symmetric`` relation is stored in both directions, since which way round a
-relationship action names its two elements carries no meaning.
+Everything else (``HelpLine``, ``BothSidedArrow``, ``FinishDrawing``) is
+rendering, not record.
 
 Since the training split is ~8.6 GB the images are memory mapped and only the
-requested samples are ever read; parsed targets are small and are cached on disk
+requested samples are ever read; parsed records are small and are cached on disk
 as an ``.npz`` so that the ~131k line JSONL is parsed only once.
 """
 
@@ -53,8 +43,11 @@ import numpy as np
 
 DEFAULT_REPO_ID = "benikm91/l-shape"
 
-#: Class id reserved for padded query slots.
-NO_OBJECT = 0
+#: Points a node can be placed by: the two end points of a line.
+POINTS = 2
+
+#: Nodes a relationship can link: its subject and its object.
+LINKS = 2
 
 
 def _download(repo_id, filename, revision):
@@ -89,173 +82,119 @@ def _cache_file(key):
     return os.path.join(root, key + ".npz")
 
 
-def _graph_of(actions, geometry, id_types, relations):
-    """Turn one drawing program into its nodes and edges.
+def _record_of(actions, classes):
+    """The record of one drawing program.
 
-    Returns ``(rows, edges, unresolved)``: ``(cx, cy, w, h, class_id)`` per
-    detected node, ``(subject_slot, object_slot, predicate_id)`` per edge, and
-    the number of references that named an element without a detection slot.
+    Returns ``(nodes, relationships, unresolved)`` where a node is
+    ``(class_id, xs, ys)`` and a relationship is ``(class_id, subject, object)``,
+    both naming nodes by the position they end up in.
     """
-    rows = []
-    edges = []
-    slot_of_element = {}  # element id in the drawing program -> detection slot
+    nodes = []
+    relationships = []
+    slot_of_element = {}
     next_element_id = 0
     unresolved = 0
 
+    def slot_of(param):
+        try:
+            return slot_of_element.get(int(param))
+        except (TypeError, ValueError):
+            return None
+
     for action in actions:
         action_type = action["type"]
-        slot = None
-
-        box = geometry.get(action_type)
-        points = action.get("coordinates_params")
-        if box is not None and points:
-            class_id, min_width, min_height, fixed_width, fixed_height = box
-            xs = [point[0] for point in points]
-            ys = [point[1] for point in points]
-            x_min, x_max = min(xs), max(xs)
-            y_min, y_max = min(ys), max(ys)
-            if len(points) == 1:
-                width, height = fixed_width, fixed_height
-            else:
-                width = max(x_max - x_min, min_width)
-                height = max(y_max - y_min, min_height)
-            slot = len(rows)
-            rows.append((0.5 * (x_min + x_max), 0.5 * (y_min + y_max), width, height, class_id))
-
-        # An id is spent whether or not the element it names is detected, so that
-        # the ids the relations refer to keep lining up with the drawing program.
-        if action_type in id_types:
-            if slot is not None:
-                slot_of_element[next_element_id] = slot
+        if action_type == "PartLineWithId":
+            # A line is undirected, so its end points are held in ascending order along the
+            # axis it runs, which is the order its box hands them back in.
+            (ax, ay), (bx, by) = action["coordinates_params"]
+            along = 0 if abs(bx - ax) >= abs(by - ay) else 1
+            (x1, y1), (x2, y2) = sorted(action["coordinates_params"], key=lambda point: point[along])
+            slot_of_element[next_element_id] = len(nodes)
             next_element_id += 1
-
-        relation = relations.get(action_type)
-        if relation is None:
-            continue
-        predicate_id, kind, symmetric = relation
-        params = action.get("discrete_params") or []
-        if kind == "between":
-            ends = params[-2:]
-            if len(ends) < 2:
+            nodes.append((classes["line"], (x1, x2), (y1, y2)))
+        elif action_type == "AnnotationTextRefId":
+            (x, y), = action["coordinates_params"]
+            annotation = len(nodes)
+            nodes.append((classes["annotation"], (x,), (y,)))
+            line = slot_of(action.get("discrete_params", [None])[-1])
+            if line is None:
                 unresolved += 1
-                continue
-            pair = (slot_of_element.get(_element_id(ends[0])), slot_of_element.get(_element_id(ends[1])))
-        elif kind == "from_self":
-            if not params:
+            else:
+                relationships.append((classes["annotates"], annotation, line))
+        elif action_type == "ConnectTwoElementsWithId":
+            ends = [slot_of(param) for param in action.get("discrete_params", [])[-2:]]
+            if len(ends) < 2 or None in ends:
                 unresolved += 1
-                continue
-            pair = (slot, slot_of_element.get(_element_id(params[-1])))
-        else:
-            raise ValueError("unknown relation kind '%s'" % kind)
-        subject, obj = pair
-        if subject is None or obj is None:
-            unresolved += 1
-            continue
-        edges.append((subject, obj, predicate_id))
-        if symmetric:
-            edges.append((obj, subject, predicate_id))
+            else:
+                relationships.append((classes["connected"], min(ends), max(ends)))
 
-    return rows, edges, unresolved
+    return nodes, sorted(relationships), unresolved
 
 
-def _element_id(param):
-    """The element id a discrete param names, or ``None`` if it names no element."""
-    try:
-        return int(param)
-    except (TypeError, ValueError):
-        return None
-
-
-def _parse_labels(labels_path, geometry, id_types, relations, num_predicates, max_num_objects):
-    """Parse the JSONL label file into padded ``(boxes, labels, relations)`` arrays."""
-    rows = []
-    edges = []
-    counts = []
+def _parse_records(labels_path, classes, max_num_nodes):
+    """Parse the JSONL label file into padded ``(node_class, xs, ys, links)``."""
+    records = []
     unresolved = 0
     with open(labels_path, encoding="utf-8") as handle:
-        for sample_index, line in enumerate(handle):
+        for line in handle:
             line = line.strip()
             if not line:
                 continue
             actions = json.loads(line)["actions"]
             if isinstance(actions, str):  # the actions column is a JSON string
                 actions = json.loads(actions)
-            sample_rows, sample_edges, sample_unresolved = _graph_of(actions, geometry, id_types, relations)
-            rows.extend((sample_index,) + row for row in sample_rows)
-            edges.extend((sample_index,) + edge for edge in sample_edges)
-            counts.append(len(sample_rows))
+            nodes, relationships, sample_unresolved = _record_of(actions, classes)
+            records.append((nodes, relationships))
             unresolved += sample_unresolved
 
-    num_samples = len(counts)
-    counts = np.asarray(counts, dtype=np.int64)
-    observed_max = int(counts.max()) if num_samples else 0
-    slots = max_num_objects if max_num_objects > 0 else max(observed_max, 1)
+    observed_max = max((len(nodes) + len(edges) for nodes, edges in records), default=0)
+    width = max_num_nodes if max_num_nodes > 0 else max(observed_max, 1)
 
-    boxes = np.zeros((num_samples, slots, 4), dtype=np.float32)
-    labels = np.full((num_samples, slots), NO_OBJECT, dtype=np.int32)
-    adjacency = np.zeros((num_samples, slots, slots, num_predicates), dtype=np.int8)
+    node_class = np.full((len(records), width), classes["no_node"], dtype=np.int32)
+    xs = np.zeros((len(records), width, POINTS), dtype=np.float32)
+    ys = np.zeros((len(records), width, POINTS), dtype=np.float32)
+    links = np.zeros((len(records), width, LINKS), dtype=np.int32)
     truncated = 0
 
-    if rows:
-        table = np.asarray(rows, dtype=np.float64)
-        sample_of_row = table[:, 0].astype(np.int64)
-        # Rows are emitted in sample order, so the slot of a row is its offset
-        # from the first row belonging to the same sample.
-        starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
-        row_slots = np.arange(len(table), dtype=np.int64) - starts[sample_of_row]
-        keep = row_slots < slots
-        boxes[sample_of_row[keep], row_slots[keep]] = table[keep, 1:5]
-        labels[sample_of_row[keep], row_slots[keep]] = table[keep, 5].astype(np.int32)
-        truncated = int((~keep).sum())
+    for sample, (nodes, relationships) in enumerate(records):
+        for at, (node_class_id, node_xs, node_ys) in enumerate(nodes[:width]):
+            node_class[sample, at] = node_class_id
+            xs[sample, at, : len(node_xs)] = node_xs
+            ys[sample, at, : len(node_ys)] = node_ys
+        for offset, relationship in enumerate(relationships):
+            at = len(nodes) + offset
+            if at >= width or max(relationship[1:]) >= len(nodes[:width]):
+                truncated += 1
+                continue
+            node_class[sample, at] = relationship[0]
+            links[sample, at] = relationship[1:]
+        truncated += max(0, len(nodes) - width)
 
-    if edges:
-        table = np.asarray(edges, dtype=np.int64)
-        # An edge to a truncated object has no slot to sit in and is dropped with it.
-        keep = (table[:, 1] < slots) & (table[:, 2] < slots)
-        adjacency[table[keep, 0], table[keep, 1], table[keep, 2], table[keep, 3]] = 1
-
-    return boxes, labels, adjacency, observed_max, truncated, unresolved
+    return node_class, xs, ys, links, observed_max, truncated, unresolved
 
 
-def load_targets(
-    labels_path,
-    geometry,
-    id_types=(),
-    relations=None,
-    num_predicates=0,
-    max_num_objects=0,
-    use_cache=True,
-):
-    """Parsed detection and relation targets for a split, memoized on disk.
-
-    Returns ``(boxes, labels, relations, observed_max_objects, truncated,
-    unresolved)`` where ``boxes`` has shape ``(N, slots, 4)`` in ``(cx, cy, w,
-    h)`` order, ``labels`` shape ``(N, slots)`` and ``relations`` shape
-    ``(N, slots, slots, predicates)``.
-    """
-    relations = relations or {}
+def load_records(labels_path, classes, max_num_nodes=0, use_cache=True):
+    """Parsed records for a split, memoized on disk."""
     identity = json.dumps(
         {
             "path": os.path.realpath(labels_path),
             "size": os.path.getsize(labels_path),
-            "geometry": sorted(geometry.items()),
-            "id_types": sorted(id_types),
-            "relations": sorted(relations.items()),
-            "predicates": int(num_predicates),
-            "slots": int(max_num_objects),
-            "version": 3,
+            "classes": sorted(classes.items()),
+            "nodes": int(max_num_nodes),
+            "version": 6,
         },
         sort_keys=True,
     )
-    cache = _cache_file("targets-" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:16])
+    cache = _cache_file("records-" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:16])
 
     if use_cache and os.path.exists(cache):
         try:
             with np.load(cache) as cached:
                 return (
-                    cached["boxes"],
-                    cached["labels"],
-                    cached["relations"],
+                    cached["node_class"],
+                    cached["xs"],
+                    cached["ys"],
+                    cached["links"],
                     int(cached["observed_max"]),
                     int(cached["truncated"]),
                     int(cached["unresolved"]),
@@ -263,44 +202,42 @@ def load_targets(
         except (OSError, ValueError, KeyError):
             pass  # corrupt or outdated cache: fall through and re-parse
 
-    parsed = _parse_labels(labels_path, geometry, id_types, relations, num_predicates, max_num_objects)
-    boxes, labels, adjacency, observed_max, truncated, unresolved = parsed
+    parsed = _parse_records(labels_path, classes, max_num_nodes)
+    node_class, xs, ys, links, observed_max, truncated, unresolved = parsed
 
     if use_cache:
         staging = "%s.%d.tmp.npz" % (cache, os.getpid())  # savez keeps an .npz suffix as is
         np.savez(
             staging,
-            boxes=boxes,
-            labels=labels,
-            relations=adjacency,
+            node_class=node_class,
+            xs=xs,
+            ys=ys,
+            links=links,
             observed_max=np.int64(observed_max),
             truncated=np.int64(truncated),
             unresolved=np.int64(unresolved),
         )
         os.replace(staging, cache)
 
-    return boxes, labels, adjacency, observed_max, truncated, unresolved
+    return node_class, xs, ys, links, observed_max, truncated, unresolved
 
 
-class Objects:
-    """Images plus their detection and relation targets, as JAX arrays.
+class Records:
+    """Images plus the records they were rendered from, as JAX arrays.
 
     ``images`` is ``(width, height, channel)`` for a single sample and
-    ``(sample, width, height, channel)`` for a batch; the target arrays gain the
-    same leading axis. ``relations`` is the ``(slots, slots, predicates)``
-    adjacency matrix over the slots the other targets are laid out in.
+    ``(sample, width, height, channel)`` for a batch; the record arrays gain the
+    same leading axis.
     """
 
-    __slots__ = ("images", "center_x", "center_y", "width", "height", "label", "relations")
+    __slots__ = ("images", "node_class", "xs", "ys", "links")
 
-    def __init__(self, images, center_x, center_y, width, height, label, relations):
+    def __init__(self, images, node_class, xs, ys, links):
         self.images = images
-        self.center_x = center_x
-        self.center_y = center_y
-        self.width = width
-        self.height = height
-        self.label = label
-        self.relations = relations
+        self.node_class = node_class
+        self.xs = xs
+        self.ys = ys
+        self.links = links
 
 
 class Split:
@@ -311,17 +248,12 @@ class Split:
         repo_id,
         split,
         revision="",
-        class_names=(),
-        class_ids=(),
-        id_types=(),
-        relation_names=(),
-        relation_ids=(),
-        relation_kinds=(),
-        relation_symmetric=(),
-        num_predicates=0,
-        max_num_objects=0,
-        min_size_pixels=4.0,
-        text_size_pixels=12.0,
+        no_node_class=0,
+        line_class=1,
+        annotation_class=2,
+        connected_class=3,
+        annotates_class=4,
+        max_num_nodes=0,
         normalize=True,
         use_cache=True,
     ):
@@ -335,54 +267,37 @@ class Split:
         self.image_height = int(self.images.shape[1])
         self.image_width = int(self.images.shape[2])
 
-        # Box sizes are given in pixels but stored normalized, like the coordinates.
-        min_width = min_size_pixels / self.image_width
-        min_height = min_size_pixels / self.image_height
-        fixed_width = text_size_pixels / self.image_width
-        fixed_height = text_size_pixels / self.image_height
-        geometry = {
-            name: (int(class_id), min_width, min_height, fixed_width, fixed_height)
-            for name, class_id in zip(class_names, class_ids)
+        classes = {
+            "no_node": int(no_node_class),
+            "line": int(line_class),
+            "annotation": int(annotation_class),
+            "connected": int(connected_class),
+            "annotates": int(annotates_class),
         }
-        relations = {
-            name: (int(predicate_id), str(kind), bool(symmetric))
-            for name, predicate_id, kind, symmetric in zip(
-                relation_names, relation_ids, relation_kinds, relation_symmetric
-            )
-        }
-
         (
-            self.boxes,
-            self.labels,
-            self.relations,
-            self.observed_max_objects,
-            self.truncated_objects,
-            self.unresolved_relations,
-        ) = load_targets(
-            labels_path,
-            geometry,
-            tuple(id_types),
-            relations,
-            int(num_predicates),
-            max_num_objects,
-            use_cache,
-        )
+            self.node_class,
+            self.xs,
+            self.ys,
+            self.links,
+            self.observed_max_nodes,
+            self.truncated_nodes,
+            self.unresolved_links,
+        ) = load_records(labels_path, classes, int(max_num_nodes), use_cache)
 
-        if len(self.labels) != self.num_samples:
+        if len(self.node_class) != self.num_samples:
             raise ValueError(
                 "split '%s' has %d images but %d label rows"
-                % (split, self.num_samples, len(self.labels))
+                % (split, self.num_samples, len(self.node_class))
             )
 
         self.normalize = bool(normalize)
-        self.max_num_objects = int(self.labels.shape[1])
+        self.max_num_nodes = int(self.node_class.shape[1])
 
     def _images(self, selection):
         """Read the selected images as ``(..., width, height, channel)`` float arrays.
 
         The stored layout is row major (row = y), so it is transposed to put the
-        x axis first -- matching DETR's ``Tensor3[Width, Height, Channel]`` and
-        the ``cx``/``cy`` targets.
+        x axis first, matching the ``x``/``y`` order of a record's coordinates.
         """
         images = np.asarray(self.images[selection])  # only these rows are read
         images = np.swapaxes(images, -2, -1)[..., None].astype(np.float32)
@@ -397,58 +312,42 @@ class Split:
                 % (index, self.split, self.num_samples)
             )
 
-    def sample(self, index):
-        """A single sample, without a leading batch axis."""
+    def _records(self, selection):
         import jax.numpy as jnp
 
+        return Records(
+            jnp.asarray(self._images(selection)),
+            jnp.asarray(self.node_class[selection]),
+            jnp.asarray(self.xs[selection]),
+            jnp.asarray(self.ys[selection]),
+            jnp.asarray(self.links[selection]),
+        )
+
+    def sample(self, index):
+        """A single sample, without a leading batch axis."""
         index = int(index)
         self._check(index)
-        boxes = self.boxes[index]
-        return Objects(
-            jnp.asarray(self._images(index)),
-            jnp.asarray(boxes[:, 0]),
-            jnp.asarray(boxes[:, 1]),
-            jnp.asarray(boxes[:, 2]),
-            jnp.asarray(boxes[:, 3]),
-            jnp.asarray(self.labels[index]),
-            jnp.asarray(self.relations[index].astype(np.float32)),
-        )
+        return self._records(index)
 
     def batch(self, indices):
         """Gather ``indices`` into one batch."""
-        import jax.numpy as jnp
-
         selection = np.asarray(indices, dtype=np.int64)
         if selection.size:
             self._check(int(selection.min()))
             self._check(int(selection.max()))
-        boxes = self.boxes[selection]
-        return Objects(
-            jnp.asarray(self._images(selection)),
-            jnp.asarray(boxes[:, :, 0]),
-            jnp.asarray(boxes[:, :, 1]),
-            jnp.asarray(boxes[:, :, 2]),
-            jnp.asarray(boxes[:, :, 3]),
-            jnp.asarray(self.labels[selection]),
-            jnp.asarray(self.relations[selection].astype(np.float32)),
-        )
+        return self._records(selection)
 
 
 def open_split(
     repo_id=DEFAULT_REPO_ID,
     split="val",
     revision="",
-    class_names=(),
-    class_ids=(),
-    id_types=(),
-    relation_names=(),
-    relation_ids=(),
-    relation_kinds=(),
-    relation_symmetric=(),
-    num_predicates=0,
-    max_num_objects=0,
-    min_size_pixels=4.0,
-    text_size_pixels=12.0,
+    no_node_class=0,
+    line_class=1,
+    annotation_class=2,
+    connected_class=3,
+    annotates_class=4,
+    max_num_nodes=0,
     normalize=True,
     use_cache=True,
 ):
@@ -457,17 +356,12 @@ def open_split(
         repo_id=repo_id,
         split=split,
         revision=revision,
-        class_names=class_names,
-        class_ids=class_ids,
-        id_types=id_types,
-        relation_names=relation_names,
-        relation_ids=relation_ids,
-        relation_kinds=relation_kinds,
-        relation_symmetric=relation_symmetric,
-        num_predicates=num_predicates,
-        max_num_objects=max_num_objects,
-        min_size_pixels=min_size_pixels,
-        text_size_pixels=text_size_pixels,
+        no_node_class=no_node_class,
+        line_class=line_class,
+        annotation_class=annotation_class,
+        connected_class=connected_class,
+        annotates_class=annotates_class,
+        max_num_nodes=max_num_nodes,
         normalize=normalize,
         use_cache=use_cache,
     )

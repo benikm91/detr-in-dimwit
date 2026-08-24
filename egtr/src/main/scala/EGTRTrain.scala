@@ -1,8 +1,8 @@
 import dataset.Box
 import dataset.Detection
 import dataset.DetectionBatch
-import dataset.LShapeDetectionDataset
-import dataset.LShapeDetectionDataset.Split
+import dataset.LShapeDataset
+import dataset.LShapeDataset.Split
 import dataset.RelationClasses
 import deepwit.checkpointing.TensorTreeCheckpointer
 import deepwit.training.Monitor
@@ -55,19 +55,21 @@ def egtrTrain(detectorRun: String*): Unit =
   val weightDecay = 1e-4f
   val maxGradientNorm = 0.1f
 
-  val data = LShapeDetectionDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Train)
+  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Train)
   val shuffle = scala.util.Random(42)
-  val batches = Iterator.continually(data.batches(Axis[Drawing] -> batchSize, shuffle = Some(shuffle))).flatten
+  val batches = Iterator.continually(data.objectBatches(Axis[Drawing] -> batchSize, shuffle = Some(shuffle))).flatten
 
   val optimizer = AdamW(
     Adam(learningRate = Tensor0(learningRate)),
     weightDecayFactor = Tensor0(weightDecay)
   )
 
-  val detector = detectorRun.headOption.orElse(Checkpoints.latestRun(DetectorCheckpointRoot)) match
-    case Some(run) =>
-      println(s"starting from the detector of $run")
-      Checkpoints.loadLatest[TrainState](DetectorCheckpointRoot, Seq(run)).params
+  val detector = detectorRun.headOption
+    .map(TensorTreeCheckpointer(_))
+    .orElse(TensorTreeCheckpointer.latestIn(DetectorCheckpointRoot)) match
+    case Some(checkpoints) =>
+      println(s"starting from the detector of ${checkpoints.rootPath}")
+      checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params
     case None =>
       println(s"no detector in $DetectorCheckpointRoot, starting from scratch")
       DETR.Params.init(
@@ -132,19 +134,18 @@ def egtrTrain(detectorRun: String*): Unit =
     newState
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
-  val startedAt = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-  val checkpointer = TensorTreeCheckpointer(s"$EGTRCheckpointRoot/$startedAt")
+  val checkpointer = TensorTreeCheckpointer.newIn(EGTRCheckpointRoot)
   val monitor = Monitor.default[EGTRTrainState](batchSize = batchSize, lossLens = _.lastCost.item)
   batches
     .scanLeft(EGTRTrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):
       case (state, batch) =>
         dimwit.gc()
-        jitGradientStep(batch.images, batch.objects, batch.relations, state)
+        jitGradientStep(batch.images, batch.target.detection, batch.target.relations, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))
     .tapEvery(1_000):
       case (state, step) =>
         checkpointer.save(state, step)
-        println(s"Step $step | checkpoint saved to $EGTRCheckpointRoot/$startedAt")
+        println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
     .drop(numIterations)
     .next()

@@ -1,13 +1,14 @@
-import dataset.LShapeDetectionDataset
-import dataset.LShapeDetectionDataset.Split
+import dataset.LShapeDataset
+import dataset.LShapeDataset.Split
 import dataset.RelationClass
 import dataset.RelationClasses
+import dataset.Tolerances
+import dataset.at
+import dataset.report
 import dimwit.*
 
 import DetectionScoring.Slot
-import DetectionScoring.at
 import DetectionScoring.isDetected
-import DetectionScoring.report
 import DetectionScoring.slots
 
 /** How far down the ranking of a drawing's triplets recall is measured, the `R@k` of the scene
@@ -48,9 +49,11 @@ private val RelationThreshold = 0.5f
 def egtrEval(run: String*): Unit =
   dimwit.initialize()
 
-  val model = EGTR(Checkpoints.loadLatest[EGTRTrainState](EGTRCheckpointRoot, run).params)
+  val checkpoints = checkpointsIn(EGTRCheckpointRoot, run)
+  println(s"reading ${checkpoints.rootPath}")
+  val model = EGTR(checkpoints.loadLatest[EGTRTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
   val loss = EGTRLoss(VType[Float32], HungarianLoss(VType[Float32])())()
-  val data = LShapeDetectionDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Validation)
+  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Validation)
 
   /* Matching and scoring stay on the device: only the four arrays a drawing is scored from come
    * back, so the whole split is one compiled function called once per drawing. */
@@ -67,9 +70,9 @@ def egtrEval(run: String*): Unit =
 
   // The split is predicted once and every tolerance scored off the same matched slots.
   val drawings = data
-    .samples()
+    .objects()
     .map: sample =>
-      val scoring = evaluate(sample.image, SceneGraph(sample.objects, sample.relations))
+      val scoring = evaluate(sample.image, SceneGraph(sample.target.detection, sample.target.relations))
       GraphPrediction(
         nodes = slots(scoring.targets, data.imageWidth, data.imageHeight)
           .zip(slots(scoring.detected, data.imageWidth, data.imageHeight)),

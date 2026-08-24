@@ -2,9 +2,8 @@ import dataset.Box
 import dataset.Detection
 import dataset.Box
 import dataset.DetectionBatch
-import dataset.LShapeBatch
-import dataset.LShapeDetectionDataset
-import dataset.LShapeDetectionDataset.Split
+import dataset.LShapeDataset
+import dataset.LShapeDataset.Split
 import deepwit.checkpointing.TensorTreeCheckpointer
 import deepwit.training.Monitor
 import deepwit.training.tapEvery
@@ -46,9 +45,9 @@ def detrTrain(): Unit =
     */
   val maxGradientNorm = 0.1f
 
-  val data = LShapeDetectionDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Train)
+  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Train)
   val shuffle = scala.util.Random(42)
-  val batches = Iterator.continually(data.batches(Axis[Batch] -> batchSize, shuffle = Some(shuffle))).flatten
+  val batches = Iterator.continually(data.objectBatches(Axis[Batch] -> batchSize, shuffle = Some(shuffle))).flatten
 
   val optimizer = AdamW(
     Adam(learningRate = Tensor0(learningRate)),
@@ -106,19 +105,18 @@ def detrTrain(): Unit =
     newState
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
-  val startedAt = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-  val checkpointer = TensorTreeCheckpointer(s"$CheckpointRoot/$startedAt")
+  val checkpointer = TensorTreeCheckpointer.newIn(CheckpointRoot)
   val monitor = Monitor.default[TrainState](batchSize = batchSize, lossLens = _.lastCost.item)
   batches
     .scanLeft(TrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):
       case (state, batch) =>
         dimwit.gc()
-        jitGradientStep(batch.images, batch.objects, state)
+        jitGradientStep(batch.images, batch.target.detection, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))
     .tapEvery(1_000):
       case (state, step) =>
         checkpointer.save(state, step)
-        println(s"Step $step | checkpoint saved to $CheckpointRoot/$startedAt")
+        println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
     .drop(numIterations)
     .next()

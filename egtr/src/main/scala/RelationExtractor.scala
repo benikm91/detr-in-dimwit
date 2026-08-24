@@ -66,7 +66,7 @@ class RelationExtractor[V: IsFloating](params: RelationExtractor.Params[V])
     * Every head relates the object queries on a query and key space of its own, so what stands
     * for a pair is all of them at once — the whole `d` wide space the block splits into heads.
     */
-  private def overHeads[HeadSpace: Λ](perHead: Tensor3[Head, BoundingBox, HeadSpace, V]): Tensor2[BoundingBox, Head |*| HeadSpace, V] =
+  private def overHeads[HeadSpace: Λ](perHead: Tensor3[BoundingBox, Head, HeadSpace, V]): Tensor2[BoundingBox, Head |*| HeadSpace, V] =
     perHead.vmap(Axis[BoundingBox])(_.flatten)
 
   /** The subject and object halves of one source, concatenated over every ordered pair. */
@@ -158,12 +158,12 @@ object RelationExtractor:
         detector: DETR.Params[V],
         sourceExtent: AxisExtent[RelationSource],
         hiddenExtent: AxisExtent[RelationHidden],
-        vtype: VType[V],
-        key: Key
+        key: Key,
+        vtype: VType[V] = VType[Float32]
     ): Params[V] =
       val (attentionKey, embeddingKey, gateKey, relationKey, connectivityKey) = key.splitToTuple(5)
       val blocks = detector.decoder.decoderBlocks
-      val attention = blocks.head.selfAttentionParams
+      val attention = blocks.head.selfAttentionParams.multiHeadAttention
       val queryExtent = Axis[Head |*| HeadQuery] -> attention.queryWeights.shape(Axis[Head]) * attention.queryWeights.shape(Axis[HeadQuery])
       val keyExtent = Axis[Head |*| HeadKey] -> attention.keyWeights.shape(Axis[Head]) * attention.keyWeights.shape(Axis[HeadKey])
       val embeddingExtent = Axis[DETR.Embedding] -> detector.objectQueries.shape(Axis[DETR.Embedding])
@@ -175,34 +175,34 @@ object RelationExtractor:
           .map: key =>
             val (subjectKey, objectKey) = key.splitToTuple(2)
             AttentionProjection(
-              subject = LinearLayer.Params.xavierUniform(queryExtent, sourceExtent, vtype, subjectKey),
-              obj = LinearLayer.Params.xavierUniform(keyExtent, sourceExtent, vtype, objectKey)
+              subject = LinearLayer.Params.xavierUniform(queryExtent, sourceExtent, subjectKey, vtype),
+              obj = LinearLayer.Params.xavierUniform(keyExtent, sourceExtent, objectKey, vtype)
             )
           .toList,
         embedding = {
           val (subjectKey, objectKey) = embeddingKey.splitToTuple(2)
           EmbeddingProjection(
-            subject = LinearLayer.Params.xavierUniform(embeddingExtent, sourceExtent, vtype, subjectKey),
-            obj = LinearLayer.Params.xavierUniform(embeddingExtent, sourceExtent, vtype, objectKey)
+            subject = LinearLayer.Params.xavierUniform(embeddingExtent, sourceExtent, subjectKey, vtype),
+            obj = LinearLayer.Params.xavierUniform(embeddingExtent, sourceExtent, objectKey, vtype)
           )
         },
-        gate = deepwit.init.xavierUniform(pairExtent, Axis[Gate] -> 1, vtype, gateKey).slice(Axis[Gate].at(0)),
-        relation = perceptron(pairExtent, hiddenExtent, Axis[RelationClasses] -> dataset.RelationClass.values.length, vtype, relationKey),
-        connectivity = perceptron(pairExtent, hiddenExtent, Axis[Connectivity] -> 1, vtype, connectivityKey)
+        gate = deepwit.init.Init.xavierUniform(pairExtent, Axis[Gate] -> 1, gateKey, vtype).slice(Axis[Gate].at(0)),
+        relation = perceptron(pairExtent, hiddenExtent, Axis[RelationClasses] -> dataset.RelationClass.values.length, relationKey, vtype),
+        connectivity = perceptron(pairExtent, hiddenExtent, Axis[Connectivity] -> 1, connectivityKey, vtype)
       )
 
     private def perceptron[Out: Λ, V: IsFloating](
         pairExtent: AxisExtent[RelationSource],
         hiddenExtent: AxisExtent[RelationHidden],
         outExtent: AxisExtent[Out],
-        vtype: VType[V],
-        key: Key
+        key: Key,
+        vtype: VType[V] = VType[Float32]
     ): Perceptron[Out, V] =
       val (hidden1Key, hidden2Key, outputKey) = key.splitToTuple(3)
       Perceptron(
-        hidden1 = AffineLayer.Params.xavierUniform(pairExtent, hiddenExtent, vtype, hidden1Key),
-        hidden2 = AffineLayer.Params.xavierUniform(hiddenExtent, Axis[Prime[RelationHidden]] -> hiddenExtent.size, vtype, hidden2Key),
-        output = AffineLayer.Params.xavierUniform(Axis[Prime[RelationHidden]] -> hiddenExtent.size, outExtent, vtype, outputKey)
+        hidden1 = AffineLayer.Params.xavierUniform(pairExtent, hiddenExtent, hidden1Key, vtype),
+        hidden2 = AffineLayer.Params.xavierUniform(hiddenExtent, Axis[Prime[RelationHidden]] -> hiddenExtent.size, hidden2Key, vtype),
+        output = AffineLayer.Params.xavierUniform(Axis[Prime[RelationHidden]] -> hiddenExtent.size, outExtent, outputKey, vtype)
       )
 
     /** Axis the gate weight is initialized along, so that it is scaled as a layer into one

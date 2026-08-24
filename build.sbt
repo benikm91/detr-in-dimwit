@@ -16,7 +16,7 @@ lazy val munit = "org.scalameta" %% "munit" % "1.0.0" % Test
 
 lazy val root = project
   .in(file("."))
-  .aggregate(dataset, detr, egtr)
+  .aggregate(dataset, detr, egtr, d2g)
   .settings(
     name := "detr-root",
     publish / skip := true
@@ -60,4 +60,12 @@ lazy val egtr = project
   .in(file("egtr"))
   .dependsOn(detr)
   .settings(name := "egtr")
+  .settings(modelSettings)
+
+// Document-to-graph transcription is a different answer to the same task, not a layer on top of
+// the detector, so it shares only the dataset with detr and egtr.
+lazy val d2g = project
+  .in(file("d2g"))
+  .dependsOn(dataset)
+  .settings(name := "d2g")
   .settings(modelSettings)

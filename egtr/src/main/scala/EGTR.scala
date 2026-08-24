@@ -110,7 +110,6 @@ object EGTR:
           detector,
           Axis[RelationSource] -> sourceExtent,
           Axis[RelationHidden] -> hiddenExtent,
-          VType[Float32],
           key
         )
       )

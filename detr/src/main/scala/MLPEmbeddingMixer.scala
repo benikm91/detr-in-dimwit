@@ -36,9 +36,9 @@ object MLPEmbeddingMixer:
 
   object Params:
 
-    def xavierUniform[Embedding: Λ, V: IsFloating](embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], vtype: VType[V], key: Key): Params[Embedding, V] =
+    def xavierUniform[Embedding: Λ, V: IsFloating](embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], key: Key, vtype: VType[V] = VType[Float32]): Params[Embedding, V] =
       val (expandKey, projectKey) = key.splitToTuple(2)
       Params(
-        expand = AffineLayer.Params.xavierUniform(embeddingExtent, embeddingMixedExtent, vtype, expandKey),
-        project = AffineLayer.Params.xavierUniform(embeddingMixedExtent, embeddingExtent, vtype, projectKey)
+        expand = AffineLayer.Params.xavierUniform(embeddingExtent, embeddingMixedExtent, expandKey, vtype),
+        project = AffineLayer.Params.xavierUniform(embeddingMixedExtent, embeddingExtent, projectKey, vtype)
       )
