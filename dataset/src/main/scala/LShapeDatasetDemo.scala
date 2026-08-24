@@ -22,12 +22,10 @@ def lShapeDemo(): Unit =
 
   val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node])(Split.Validation)
   println(data)
-  println(s"most nodes a record holds: ${data.observedMaxNodes}")
-  println(s"links naming something the record does not hold: ${data.unresolvedLinks}")
 
-  val rows = data.samples().take(3).zipWithIndex.map: (sample, index) =>
+  val rows = data.samples.take(3).zipWithIndex.map: (sample, index) =>
     val drawing = Outlines.greyLevels(sample.image)
-    val objects = Objects.of(sample.target, data.geometry)
+    val objects = Objects.of(sample.target)
     println(s"sample $index: ${describe(RecordGraph.of(sample.target))}")
     Seq(
       plots.imagePlot(drawing, _.title := s"sample $index"),

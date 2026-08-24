@@ -1,3 +1,4 @@
+import dataset.Canvas
 import dataset.LShapeDataset
 import dataset.LShapeDataset.Split
 import dataset.Outlines
@@ -6,6 +7,7 @@ import dataset.RecordScoring
 import dataset.Tolerances
 import dataset.at
 import dataset.report
+import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
 import plotwit.*
 import viz.PlotTargets.websocket
@@ -17,14 +19,16 @@ import viz.PlotTargets.websocket
   * 8.6 GB on first use.
   */
 @main
-def detrPlot(run: String*): Unit =
+def detrPlot(): Unit =
   dimwit.initialize()
 
-  val model = load(run)
+  val checkpoints = TensorTreeCheckpointer.latestIn(CheckpointRoot).getOrElse(sys.error(s"no training run in $CheckpointRoot"))
+  println(s"reading ${checkpoints.rootPath}")
+  val model = DETR(checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
     val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(split)
     data
-      .objects()
+      .objects
       .take(3)
       .zipWithIndex
       .map: (sample, index) =>
@@ -50,26 +54,23 @@ def detrPlot(run: String*): Unit =
   *   - `drawings fully detected` — every node of the drawing found at once, and nothing spurious.
   */
 @main
-def detrEval(run: String*): Unit =
+def detrEval(): Unit =
   dimwit.initialize()
 
-  val model = load(run)
+  val checkpoints = TensorTreeCheckpointer.latestIn(CheckpointRoot).getOrElse(sys.error(s"no training run in $CheckpointRoot"))
+  println(s"reading ${checkpoints.rootPath}")
+  val model = DETR(checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
   val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Validation)
   val detect = jit(model.apply)
 
   val drawings = data
-    .samples()
+    .samples
     .map: sample =>
       (RecordGraph.of(sample.target).copy(edges = Seq.empty), RecordGraph.of(detect(sample.image)))
     .toSeq
 
   Tolerances.foreach: tolerance =>
-    val scored = drawings.map((target, detected) => RecordScoring.score(target, detected, tolerance / data.imageWidth))
+    val scored = drawings.map((target, detected) => RecordScoring.score(target, detected, tolerance / Canvas))
     report(at(tolerance), "nodes detected", scored.map(_.nodesFound).sum, scored.map(_.nodes).sum)
     report(at(tolerance), "detections right", scored.map(_.nodesFound).sum, scored.map(_.nodesPredicted).sum)
     report(at(tolerance), "drawings fully detected", scored.count(_.isExact), scored.length)
-
-private def load(run: Seq[String]): DETR[Float32] =
-  val checkpoints = checkpointsIn(CheckpointRoot, run)
-  println(s"reading ${checkpoints.rootPath}")
-  DETR(checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)

@@ -10,11 +10,19 @@ source truth, and it is what `LShapeDataset` hands out.
 
 ```scala
 val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node])(Split.Train)
-data.samples()                             // images and records
-data.batches(Axis[Drawings] -> 32)         // … a batch at a time
-data.objects()                             // the same drawings as something to detect
+data.samples                               // every drawing and its record, once
+data.batches(Axis[Drawings] -> 32)         // batches, for as long as they are asked for
+data.objects                               // the same drawings as something to detect
 data.objectBatches(Axis[Drawings] -> 32)
 ```
+
+`batches` never runs out: it cycles the split. `samples` is one finite pass, which is what
+evaluation wants. Neither shuffles — the drawings were generated independently of one another, so
+reading them in order already is one.
+
+The records are read into tensors when a split is opened. The drawings stay memory mapped, since
+the train split is 8.6 GB and only the batches asked for are ever read; Python hands over rows and
+Scala does the rest.
 
 `Line` and `Annotation` are drawn; `Connected` and `Annotates` are the relationships between them,
 held as nodes of their own that name the nodes they link by where those sit — which is what makes

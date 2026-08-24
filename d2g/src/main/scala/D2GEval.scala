@@ -1,3 +1,4 @@
+import dataset.Canvas
 import dataset.LShapeDataset
 import dataset.LShapeDataset.Split
 import dataset.NodeClass
@@ -9,6 +10,7 @@ import dataset.RecordScoring
 import dataset.Tolerances
 import dataset.at
 import dataset.report
+import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
 import plotwit.*
 import viz.PlotTargets.websocket
@@ -19,15 +21,18 @@ import viz.PlotTargets.websocket
   * relationships are printed. Note that touching the training split downloads 8.6 GB on first use.
   */
 @main
-def d2gPlot(run: String*): Unit =
+def d2gPlot(): Unit =
   dimwit.initialize()
 
+  val checkpoints = TensorTreeCheckpointer.latestIn(D2GCheckpointRoot).getOrElse(sys.error(s"no training run in $D2GCheckpointRoot"))
+  println(s"reading ${checkpoints.rootPath}")
+  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
   val nodes = Axis[Node] -> RecordNodes
-  val transcriber = Transcriber(load(run), nodes)
+  val transcriber = Transcriber(model, nodes)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
     val data = open(split)
     data
-      .samples()
+      .samples
       .take(3)
       .zipWithIndex
       .map: (sample, index) =>
@@ -36,7 +41,7 @@ def d2gPlot(run: String*): Unit =
         val transcribed = transcriber(sample.image)
         println(s"${split.fileName} $index target:      ${describe(target)}")
         println(s"${split.fileName} $index transcribed: ${describe(transcribed)}")
-        def drawn(record: RecordGraph) = Objects.of(record.record(nodes), data.geometry).detection
+        def drawn(record: RecordGraph) = Objects.of(record.record(nodes)).detection
         Seq(
           plots.imagePlot(document, _.title := s"${split.fileName} $index"),
           plots.imagePlot(Outlines(document, drawn(target)), _.title := s"${split.fileName} $index — record"),
@@ -53,20 +58,23 @@ def d2gPlot(run: String*): Unit =
   * [[detrEval]] reports, on the same records.
   */
 @main
-def d2gEval(run: String*): Unit =
+def d2gEval(): Unit =
   dimwit.initialize()
 
+  val checkpoints = TensorTreeCheckpointer.latestIn(D2GCheckpointRoot).getOrElse(sys.error(s"no training run in $D2GCheckpointRoot"))
+  println(s"reading ${checkpoints.rootPath}")
+  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
   val nodes = Axis[Node] -> RecordNodes
-  val transcriber = Transcriber(load(run), nodes)
+  val transcriber = Transcriber(model, nodes)
   val data = open(Split.Validation)
 
-  val drawings = data.samples().map(sample => (RecordGraph.of(sample.target), transcriber(sample.image))).toSeq
+  val drawings = data.samples.map(sample => (RecordGraph.of(sample.target), transcriber(sample.image))).toSeq
 
   val rightLength = drawings.count((target, transcribed) => transcribed.size == target.size)
   report("", "records the right length", rightLength, drawings.length)
 
   Tolerances.foreach: tolerance =>
-    val scored = drawings.map((target, transcribed) => RecordScoring.score(target, transcribed, tolerance / data.imageWidth))
+    val scored = drawings.map((target, transcribed) => RecordScoring.score(target, transcribed, tolerance / Canvas))
     report(at(tolerance), "nodes transcribed", scored.map(_.nodesFound).sum, scored.map(_.nodes).sum)
     report(at(tolerance), "relationships transcribed", scored.map(_.relationshipsFound).sum, scored.map(_.relationships).sum)
     report(at(tolerance), "records exactly right", scored.count(_.isExact), scored.length)
@@ -108,17 +116,9 @@ extension (record: Record[Node])
     )
 
 private def open(split: Split) =
-  LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node])(
-    split,
-    LShapeDataset.Config(maxNumNodes = Some(RecordNodes))
-  )
+  LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node])(split)
 
 private def describe(record: RecordGraph): String =
   val nodes = record.nodes.map(node => s"${node.nodeClass}(${node.points.map(point => f"${point.x}%.3f, ${point.y}%.3f").mkString("; ")})")
   val edges = record.edges.map(edge => s"${edge.edgeClass}(${edge.subject}, ${edge.obj})")
   (nodes ++ edges).mkString(", ")
-
-private def load(): D2G[Float32] =
-  val checkpointer = TensorTreeCheckpointer.latestIn("out/d2g").getOrElse(sys.error(s"Nothing to load: $runRoot holds no run yet. Train first."))
-  println(s"reading ${checkpointer.rootPath}")
-  D2G(checkpointer.loadLatest[D2GTrainState].get.params)

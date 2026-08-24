@@ -69,23 +69,22 @@ final case class ObjectBatch[S, Node](
     relations: Tensor4[S, Node, Prime[Node], RelationClasses, Float32]
 )
 
-/** How a record is drawn, which is all that separates the two views of a drawing.
-  *
-  * @param minimumSize    The extent a box is widened to in the direction a line is degenerate in.
-  * @param annotationSize The extent of the box around an annotation, which is a point.
-  */
-final case class Geometry(minimumSize: Float, annotationSize: Float)
-
 object Objects:
 
-  /** The objects a record is drawn as. Going the other way is [[record]]. */
-  def of[Node: Label](record: Record[Node], geometry: Geometry): Objects[Node] =
-    Objects(boxes(record, geometry), adjacency(record))
+  /** The extent a box is widened to where a line is degenerate, in fractions of the canvas. */
+  private val MinimumSize = 4f / Canvas
 
-  def of[S: Label, Node: Label](records: RecordBatch[S, Node], geometry: Geometry): ObjectBatch[S, Node] =
+  /** The extent of the box around an annotation, which is a point. */
+  private val AnnotationSize = 12f / Canvas
+
+  /** The objects a record is drawn as. Going the other way is [[record]]. */
+  def of[Node: Label](record: Record[Node]): Objects[Node] =
+    Objects(boxes(record), adjacency(record))
+
+  def of[S: Label, Node: Label](records: RecordBatch[S, Node]): ObjectBatch[S, Node] =
     val drawn = zipvmap(Axis[S])(records.nodeClass, records.xs, records.ys, records.links):
       case (nodeClass, xs, ys, links) =>
-        val objects = of(Record(nodeClass, xs, ys, links), geometry)
+        val objects = of(Record(nodeClass, xs, ys, links))
         (
           centerX = objects.detection.box.centerX,
           centerY = objects.detection.box.centerY,
@@ -109,16 +108,16 @@ object Objects:
   def record[Node: Label](objects: Objects[Node]): Record[Node] =
     RecordGraph.of(objects).record(objects.detection.label.shape.extent(Axis[Node]))
 
-  private def boxes[Node: Label](record: Record[Node], geometry: Geometry): Detection[Node, Float32] =
+  private def boxes[Node: Label](record: Record[Node]): Detection[Node, Float32] =
     val slots = record.nodeClass.shape.extent(Axis[Node])
     def point(index: Int) = (record.xs.slice(Axis[NodePoint].at(index)), record.ys.slice(Axis[NodePoint].at(index)))
     val ((startX, startY), (endX, endY)) = (point(0), point(1))
     val isLine = holds(record.nodeClass, NodeClass.Line)
     val isAnnotation = holds(record.nodeClass, NodeClass.Annotation)
     val drawn = isLine.asFloat(VType[Float32]) + isAnnotation.asFloat(VType[Float32])
-    val annotationSize = Tensor1(slots).fill(geometry.annotationSize)
+    val annotationSize = Tensor1(slots).fill(AnnotationSize)
     def span(from: Tensor1[Node, Float32], to: Tensor1[Node, Float32]) =
-      maximum((to - from).abs, Tensor1(slots).fill(geometry.minimumSize))
+      maximum((to - from).abs, Tensor1(slots).fill(MinimumSize))
     def labelled(objectClass: ObjectClass) = Tensor1(slots, VType[Int32]).fill(objectClass.id)
     Detection(
       box = Box(

@@ -1,3 +1,4 @@
+import dataset.Canvas
 import dataset.LShapeDataset
 import dataset.LShapeDataset.Split
 import dataset.RelationClass
@@ -5,6 +6,7 @@ import dataset.RelationClasses
 import dataset.Tolerances
 import dataset.at
 import dataset.report
+import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
 
 import DetectionScoring.Slot
@@ -46,10 +48,10 @@ private val RelationThreshold = 0.5f
   *     and not merely ordered.
   */
 @main
-def egtrEval(run: String*): Unit =
+def egtrEval(): Unit =
   dimwit.initialize()
 
-  val checkpoints = checkpointsIn(EGTRCheckpointRoot, run)
+  val checkpoints = TensorTreeCheckpointer.latestIn(EGTRCheckpointRoot).getOrElse(sys.error(s"no training run in $EGTRCheckpointRoot"))
   println(s"reading ${checkpoints.rootPath}")
   val model = EGTR(checkpoints.loadLatest[EGTRTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
   val loss = EGTRLoss(VType[Float32], HungarianLoss(VType[Float32])())()
@@ -70,12 +72,12 @@ def egtrEval(run: String*): Unit =
 
   // The split is predicted once and every tolerance scored off the same matched slots.
   val drawings = data
-    .objects()
+    .objects
     .map: sample =>
       val scoring = evaluate(sample.image, SceneGraph(sample.target.detection, sample.target.relations))
       GraphPrediction(
-        nodes = slots(scoring.targets, data.imageWidth, data.imageHeight)
-          .zip(slots(scoring.detected, data.imageWidth, data.imageHeight)),
+        nodes = slots(scoring.targets, Canvas, Canvas)
+          .zip(slots(scoring.detected, Canvas, Canvas)),
         targetEdges = triplets(scoring.targetEdges).filter(_.score > 0.5f).map(_.triplet).toSet,
         scores = triplets(scoring.predictedEdges)
       )

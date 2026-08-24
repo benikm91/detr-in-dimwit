@@ -56,8 +56,7 @@ def egtrTrain(detectorRun: String*): Unit =
   val maxGradientNorm = 0.1f
 
   val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Train)
-  val shuffle = scala.util.Random(42)
-  val batches = Iterator.continually(data.objectBatches(Axis[Drawing] -> batchSize, shuffle = Some(shuffle))).flatten
+  val batches = data.objectBatches(Axis[Drawing] -> batchSize)
 
   val optimizer = AdamW(
     Adam(learningRate = Tensor0(learningRate)),

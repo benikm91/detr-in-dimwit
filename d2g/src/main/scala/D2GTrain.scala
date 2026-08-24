@@ -1,3 +1,4 @@
+import dataset.Canvas
 import dataset.LShapeDataset
 import dataset.LShapeDataset.Split
 import dataset.Record
@@ -21,6 +22,9 @@ import dimwit.tensor.Tensor4
   * embedding to say the record has ended.
   */
 val RecordNodes = 25
+
+/** Where a training run of this model writes its checkpoints. */
+val D2GCheckpointRoot = "out/d2g"
 
 /** Axis of a batch of drawings. */
 private trait Batch derives Label
@@ -46,16 +50,12 @@ def d2gTrain(): Unit =
   val learningRate = 3e-4f
   val weightDecay = 1e-4f
   val maxGradientNorm = 0.1f
-  vak key = Random.Key(0)
+  val key = Random.Key(0)
 
   val nodes = Axis[Node] -> RecordNodes
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node])(
-    Split.Train,
-    LShapeDataset.Config(maxNumNodes = Some(RecordNodes))
-  )
-  val shuffle = scala.util.Random(42)
-  val linearize = scala.util.Random(43)
-  val batches = Iterator.continually(data.batches(Axis[Batch] -> batchSize, shuffle = Some(shuffle))).flatten
+  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node])(Split.Train)
+  val linearize = scala.util.Random(42)
+  val batches = data.batches(Axis[Batch] -> batchSize)
 
   val optimizer = AdamW(Adam(learningRate), weightDecay)
 
@@ -65,11 +65,11 @@ def d2gTrain(): Unit =
     embedding = 128,
     nodes = RecordNodes,
     patchSize = 10,
-    canvas = data.imageWidth,
+    canvas = Canvas,
     key = key
   )
 
-  val loss = RemainingNodeLoss(VType[Float32], data.imageWidth)
+  val loss = RemainingNodeLoss(VType[Float32], Canvas)
 
   def cost(
       images: Tensor4[Batch, Width, Height, Channel, Float32],
@@ -92,7 +92,7 @@ def d2gTrain(): Unit =
     D2GTrainState(params, optimizerState, lastCost)
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
-  val checkpointer = TensorTreeCheckpointer.newIn("out/d2g")
+  val checkpointer = TensorTreeCheckpointer.newIn(D2GCheckpointRoot)
   val monitor = Monitor.default[D2GTrainState](batchSize = batchSize, lossLens = _.lastCost.item)
   batches
     .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):

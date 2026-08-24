@@ -18,7 +18,6 @@ class ObjectsSuite extends FunSuite:
   private trait Node derives Label
 
   private val nodes = Axis[Node] -> 8
-  private val geometry = Geometry(minimumSize = 4f / 256, annotationSize = 12f / 256)
 
   private val record = RecordGraph(
     nodes = Seq(
@@ -33,17 +32,17 @@ class ObjectsSuite extends FunSuite:
   )
 
   test("a line is drawn as the box between its end points, an annotation as a box around it"):
-    val objects = Objects.of(record.record(nodes), geometry)
+    val objects = Objects.of(record.record(nodes))
     val box = objects.detection.box
     assertEquals(objects.detection.label.toArray.toSeq, Seq(1, 1, 2, 0, 0, 0, 0, 0))
     assertEqualsFloat(box.centerX.toArray(0), 0.5f, 1e-6f)
     assertEqualsFloat(box.width.toArray(0), 0.6f, 1e-6f)
-    assertEqualsFloat(box.height.toArray(0), geometry.minimumSize, 1e-6f)
-    assertEqualsFloat(box.width.toArray(2), geometry.annotationSize, 1e-6f)
+    assertEqualsFloat(box.height.toArray(0), 4f / Canvas, 1e-6f)
+    assertEqualsFloat(box.width.toArray(2), 12f / Canvas, 1e-6f)
     assert(box.width.toArray.drop(3).forall(_ == 0f), "a relationship is not drawn")
 
   test("a symmetric relationship is drawn both ways round, a directed one is not"):
-    val relations = Objects.of(record.record(nodes), geometry).relations.toArray
+    val relations = Objects.of(record.record(nodes)).relations.toArray
     assertEquals(relations(0)(1)(RelationClass.Connected.id), 1f)
     assertEquals(relations(1)(0)(RelationClass.Connected.id), 1f)
     assertEquals(relations(2)(0)(RelationClass.Annotates.id), 1f)
@@ -58,13 +57,13 @@ class ObjectsSuite extends FunSuite:
       assertEquals(related(permuted), related(record))
 
   test("the objects of a record hold the record"):
-    assertSameRecord(Objects.record(Objects.of(record.record(nodes), geometry)), record.record(nodes))
+    assertSameRecord(Objects.record(Objects.of(record.record(nodes))), record.record(nodes))
 
   Split.values.foreach: split =>
     test(s"the objects of every record of the ${split.fileName} split hold that record"):
       val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node])(split)
-      data.samples().take(200).zipWithIndex.foreach: (sample, index) =>
-        assertSameRecord(Objects.record(Objects.of(sample.target, data.geometry)), sample.target, s"sample $index")
+      data.samples.take(200).zipWithIndex.foreach: (sample, index) =>
+        assertSameRecord(Objects.record(Objects.of(sample.target)), sample.target, s"sample $index")
 
   /** What a record's relationships say in terms of its nodes rather than of their slots. A
     * symmetric relationship says nothing by which of its two nodes comes first.
