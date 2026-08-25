@@ -59,6 +59,8 @@ def d2gTrain(): Unit =
   val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
   val batches = data.batches(Axis[Batch] -> batchSize)
 
+  val (dataKey, initKey) = Random.Key(42).splitToTuple(2)
+
   val optimizer = AdamW(Adam(learningRate), weightDecay)
 
   val initialParams = D2G.Params.init(
@@ -69,7 +71,7 @@ def d2gTrain(): Unit =
     edges = EdgeSlots,
     patchSize = 10,
     canvas = Canvas,
-    key = key
+    key = initKey
   )
 
   val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas)
@@ -101,7 +103,7 @@ def d2gTrain(): Unit =
   val checkpointer = TensorTreeCheckpointer.newIn(D2GCheckpointRoot)
   val monitor = Monitor.default[D2GTrainState](batchSize = batchSize, lossLens = _.lastCost.item)
   batches
-    .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), Random.Key(42), Tensor0(-1f))):
+    .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, Tensor0(-1f))):
       case (state, batch) => jitGradientStep(batch.images, batch.target, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))
