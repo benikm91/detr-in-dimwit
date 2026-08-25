@@ -47,7 +47,7 @@ case class D2GTrainState(
 def d2gTrain(): Unit =
   dimwit.initialize()
 
-  val numIterations = 100_000
+  val numIterations = 50_000
   val batchSize = 128
   val learningRate = 3e-4f
   val weightDecay = 1e-4f
