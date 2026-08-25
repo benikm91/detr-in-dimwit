@@ -110,8 +110,15 @@ relationships of the split were transcribed, and how many drawings stop at the r
 node lines are what [`detrEval`](../detr/README.md) reports, on the same records, so the two can
 be read against each other.
 
-Inference runs without a KV cache: every step re-reads the whole sequence, which makes the
-evaluation slow and the model no different.
+Drawings are transcribed in batches and in lockstep — every drawing of a batch takes its first
+node, then its second, and one that has already stopped takes nothing more — so where a
+transcription ends is a value rather than a branch, and the whole of it is a single compiled
+computation per batch. What a drawing ends up with is the record it would have been given on its
+own.
+
+Inference still runs without a KV cache: every step re-reads the whole sequence, which makes the
+model no different and the graph larger than it needs to be. That graph is now what the evaluation
+mostly costs — it is compiled once, and the split itself takes seconds.
 
 ## Divergences from the paper
 

@@ -12,6 +12,7 @@ import dataset.at
 import dataset.report
 import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
+import dimwit.tensor.Tensor4
 import plotwit.*
 import viz.PlotTargets.websocket
 
@@ -51,6 +52,11 @@ def d2gPlot(): Unit =
 
   display(grid(rows))
 
+/** How many drawings are transcribed together. A batch is one traced computation, so this is what
+  * the split costs in calls rather than in work.
+  */
+private val TranscribedTogether = 32
+
 /** Scores a trained model on the whole validation split: `sbt "d2g/runMain d2gEval"`.
   *
   * Every drawing is transcribed autoregressively and the record that comes out is compared with
@@ -64,10 +70,13 @@ def d2gEval(): Unit =
   val checkpoints = TensorTreeCheckpointer.latestIn(D2GCheckpointRoot).getOrElse(sys.error(s"no training run in $D2GCheckpointRoot"))
   println(s"reading ${checkpoints.rootPath}")
   val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
-  val transcriber = Transcriber(model, Axis[Node] -> NodeSlots, Axis[Edge] -> EdgeSlots)
+  val transcriber = Transcriber(model, Axis[Node] -> NodeSlots, Axis[Edge] -> EdgeSlots, TranscribedTogether)
   val data = open(Split.Validation)
 
-  val drawings = data.samples.map(sample => (RecordGraph.of(sample.target), transcriber(sample.image))).toSeq
+  val drawings = data.samples
+    .grouped(TranscribedTogether)
+    .flatMap(batch => batch.map(sample => RecordGraph.of(sample.target)).zip(transcriber(batch.map(_.image))))
+    .toSeq
 
   val rightLength = drawings.count((target, transcribed) => transcribed.size == target.size)
   report("", "records the right length", rightLength, drawings.length)
@@ -78,20 +87,36 @@ def d2gEval(): Unit =
     report(at(tolerance), "relationships transcribed", scored.map(_.relationshipsFound).sum, scored.map(_.relationships).sum)
     report(at(tolerance), "records exactly right", scored.count(_.isExact), scored.length)
 
-/** Transcribes a document: its nodes one at a time, then the relationships between them.
+/** Axis of the drawings transcribed together. */
+private trait Drawing derives Label
+
+/** Transcribes documents: the nodes of each one at a time, then the relationships between them.
   *
-  * The document is encoded once and read at every step; each stage re-reads what it has taken so
-  * far every time, since there is no KV cache. That makes every step cost more than it needs to,
-  * which is of no consequence here: what matters is that the only thing handed to the model is
-  * the document, so no target can leak into what is scored.
+  * A batch of drawings is transcribed in lockstep and as a single traced computation — the
+  * encoder, every decoding step and both scorers together — so a batch costs one compiled call
+  * rather than one dispatch per operation per step per drawing. `drawings` is how wide that batch
+  * is; a call handing over fewer is filled up with a drawing it already holds and read back short
+  * again, so that every batch is the same shape and the computation is compiled once for the
+  * whole split.
+  *
+  * Each step still re-reads what it has taken so far, since there is no KV cache. That makes
+  * every step cost more than it needs to, which is of no consequence here: what matters is that
+  * the only thing handed to the model is the document, so no target can leak into what is scored.
   */
-class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExtent[Edge])
+class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: Int = 1)
     extends (Tensor3[Width, Height, Channel, Float32] => RecordGraph):
 
-  private val encode = jit(model.encode)
+  private val transcribe = jit: (documents: Tensor4[Drawing, Width, Height, Channel, Float32]) =>
+    model.predictRecords(documents.vmap(Axis[Drawing])(model.encode), nodes, edges)
 
   override def apply(document: Tensor3[Width, Height, Channel, Float32]): RecordGraph =
-    RecordGraph.of(model.predictRecord(encode(document), nodes, edges))
+    apply(Seq(document)).head
+
+  def apply(documents: Seq[Tensor3[Width, Height, Channel, Float32]]): Seq[RecordGraph] =
+    require(documents.nonEmpty, "there is nothing to transcribe")
+    require(documents.size <= drawings, s"${documents.size} drawings do not fit in a batch of $drawings")
+    val filled = documents.padTo(drawings, documents.last)
+    RecordGraph.of(transcribe(stack(filled, Axis[Drawing]))).take(documents.size)
 
 private def open(split: Split) =
   LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
