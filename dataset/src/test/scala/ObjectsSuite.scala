@@ -79,11 +79,11 @@ class ObjectsSuite extends FunSuite:
       permuted.edgeClass.toArray.zipWithIndex.foreach: (drawing, at) =>
         val classes = drawing.map(EdgeClass.fromId).toSeq
         assertEquals(classes.sortBy(held => if held.relates then 0 else 1), classes, s"seed $seed, drawing $at: relationships before empty positions")
-      permuted.edgeClass.toArray.zip(permuted.links.toArray).foreach: (drawing, links) =>
-        drawing.zip(links).foreach: (held, ends) =>
+      permuted.edgeClass.toArray.lazyZip(permuted.subject.toArray).lazyZip(permuted.obj.toArray).foreach: (classes, subjects, objs) =>
+        classes.lazyZip(subjects).lazyZip(objs).foreach: (held, subject, obj) =>
           val edgeClass = EdgeClass.fromId(held)
-          if edgeClass.isSymmetric then assert(ends(0) < ends(1), s"$edgeClass holds ${ends.toSeq} rather than its ends in ascending order")
-          if !edgeClass.relates then assertEquals(ends.toSeq, Seq(0, 0), s"an empty position links nothing")
+          if edgeClass.isSymmetric then assert(subject < obj, s"$edgeClass relates $subject to $obj rather than its ends in ascending order")
+          if !edgeClass.relates then assertEquals((subject, obj), (0, 0), "an empty position relates nothing")
 
   test("a record is drawn as the picture it stands for"):
     val canvas = 32
@@ -132,15 +132,21 @@ class ObjectsSuite extends FunSuite:
   private def assertSameRecord(actual: Record[Node, Edge], expected: Record[Node, Edge], clue: String = ""): Unit =
     assertEquals(actual.nodeClass.toArray.toSeq, expected.nodeClass.toArray.toSeq, clue)
     assertEquals(actual.edgeClass.toArray.toSeq, expected.edgeClass.toArray.toSeq, clue)
-    assertEquals(actual.links.toArray.map(_.toSeq).toSeq, expected.links.toArray.map(_.toSeq).toSeq, clue)
-    Seq((actual.xs, expected.xs), (actual.ys, expected.ys)).foreach: (found, wanted) =>
-      found.toArray.zip(wanted.toArray).zipWithIndex.foreach: (pair, node) =>
-        pair._1.zip(pair._2).foreach((at, expected) => assertEqualsFloat(at, expected, 1e-5f, s"$clue node $node"))
+    assertEquals(actual.subject.toArray.toSeq, expected.subject.toArray.toSeq, clue)
+    assertEquals(actual.obj.toArray.toSeq, expected.obj.toArray.toSeq, clue)
+    Seq(
+      (actual.startX, expected.startX),
+      (actual.startY, expected.startY),
+      (actual.endX, expected.endX),
+      (actual.endY, expected.endY)
+    ).foreach: (found, wanted) =>
+      found.toArray.zip(wanted.toArray).zipWithIndex.foreach((placed, node) => assertEqualsFloat(placed._1, placed._2, 1e-5f, s"$clue node $node"))
 
   /** Everything a permuted batch holds, as the host sees it. */
   private def read(records: RecordBatch[Drawing, Node, Edge]) =
     (
       records.nodeClass.toArray.map(_.toSeq).toSeq,
       records.edgeClass.toArray.map(_.toSeq).toSeq,
-      records.links.toArray.map(_.map(_.toSeq).toSeq).toSeq
+      records.subject.toArray.map(_.toSeq).toSeq,
+      records.obj.toArray.map(_.toSeq).toSeq
     )

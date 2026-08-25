@@ -82,9 +82,9 @@ object Objects:
     Objects(boxes(record), adjacency(record))
 
   def of[S: Label, Node: Label, Edge: Label](records: RecordBatch[S, Node, Edge]): ObjectBatch[S, Node] =
-    val drawn = zipvmap(Axis[S])(records.nodeClass, records.xs, records.ys, records.edgeClass, records.links):
-      case (nodeClass, xs, ys, edgeClass, links) =>
-        val objects = of(Record(nodeClass, xs, ys, edgeClass, links))
+    val drawn = zipvmap(Axis[S])(records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.edgeClass, records.subject, records.obj):
+      case (nodeClass, startX, startY, endX, endY, edgeClass, subject, obj) =>
+        val objects = of(Record(nodeClass, startX, startY, endX, endY, edgeClass, subject, obj))
         (
           centerX = objects.detection.box.centerX,
           centerY = objects.detection.box.centerY,
@@ -110,8 +110,7 @@ object Objects:
 
   private def boxes[Node: Label, Edge: Label](record: Record[Node, Edge]): Detection[Node, Float32] =
     val slots = record.nodeClass.shape.extent(Axis[Node])
-    def point(index: Int) = (record.xs.slice(Axis[NodePoint].at(index)), record.ys.slice(Axis[NodePoint].at(index)))
-    val ((startX, startY), (endX, endY)) = (point(0), point(1))
+    import record.{startX, startY, endX, endY}
     val isLine = holds(record.nodeClass, NodeClass.Line.id)
     val isAnnotation = holds(record.nodeClass, NodeClass.Annotation.id)
     val drawn = isLine.asFloat(VType[Float32]) + isAnnotation.asFloat(VType[Float32])
@@ -132,9 +131,6 @@ object Objects:
   private def adjacency[Node: Label, Edge: Label](record: Record[Node, Edge]): Tensor3[Node, Prime[Node], RelationClasses, Float32] =
     val nodes = record.nodeClass.shape.extent(Axis[Node])
     val linkedNodes = Axis[Prime[Node]] -> nodes.size
-    def linked(index: Int) = record.links.slice(Axis[NodeLink].at(index))
-    val (subject, obj) = (linked(0), linked(1))
-
     def linking(relation: RelationClass, from: Tensor1[Edge, Int32], to: Tensor1[Edge, Int32]) =
       val edges = record.edgeClass.shape.extent(Axis[Edge])
       val present = holds(record.edgeClass, relation.edgeClass.id).asFloat(VType[Float32]).broadcastTo(Shape2(edges, nodes))
@@ -142,8 +138,8 @@ object Objects:
 
     stack(
       RelationClass.values.map: relation =>
-        val forward = linking(relation, subject, obj)
-        if relation.edgeClass.isSymmetric then forward + linking(relation, obj, subject) else forward
+        val forward = linking(relation, record.subject, record.obj)
+        if relation.edgeClass.isSymmetric then forward + linking(relation, record.obj, record.subject) else forward
       .toSeq,
       Axis[RelationClasses]
     ).transpose((Axis[Node], Axis[Prime[Node]], Axis[RelationClasses]))

@@ -17,32 +17,33 @@ CONNECTED = (20, 160, 110)
 ANNOTATES = (170, 70, 200)
 
 
-def render(drawing, node_class, xs, ys, edge_class, links, line, annotation, connected, annotates):
+def render(drawing, node_class, start_x, start_y, end_x, end_y, edge_class, subject, obj, line, annotation, connected, annotates):
     """``(width, height, 3)`` uint8 pixels of the record drawn over ``drawing``, which is a
     ``(width, height)`` grey level image of what it was read from."""
     drawing = np.asarray(drawing, dtype=np.uint8)
     image = np.repeat(drawing[:, :, None], 3, axis=2)
     node_class, edge_class = np.asarray(node_class, dtype=int), np.asarray(edge_class, dtype=int)
-    xs, ys = np.asarray(xs, dtype=float).reshape(len(node_class), -1), np.asarray(ys, dtype=float).reshape(len(node_class), -1)
-    links = np.asarray(links, dtype=int).reshape(len(edge_class), -1)
+    start_x, start_y = np.asarray(start_x, dtype=float), np.asarray(start_y, dtype=float)
+    end_x, end_y = np.asarray(end_x, dtype=float), np.asarray(end_y, dtype=float)
+    subject, obj = np.asarray(subject, dtype=int), np.asarray(obj, dtype=int)
 
     def anchor(node):
         """Where a relationship reaches a node: the middle of a line, the point of an annotation."""
         if node_class[node] == line:
-            return (xs[node][:2].mean(), ys[node][:2].mean())
-        return (xs[node][0], ys[node][0])
+            return ((start_x[node] + end_x[node]) / 2, (start_y[node] + end_y[node]) / 2)
+        return (start_x[node], start_y[node])
 
     # The relationships go on first, so that the nodes they relate stay crisp on top of them.
     for at, held in enumerate(edge_class):
         if held in (connected, annotates):
             colour = CONNECTED if held == connected else ANNOTATES
-            _segment(image, anchor(links[at][0]), anchor(links[at][1]), colour, dashed=True)
+            _segment(image, anchor(subject[at]), anchor(obj[at]), colour, dashed=True)
 
     for at, held in enumerate(node_class):
         if held == line:
-            _segment(image, (xs[at][0], ys[at][0]), (xs[at][1], ys[at][1]), LINE)
+            _segment(image, (start_x[at], start_y[at]), (end_x[at], end_y[at]), LINE)
         elif held == annotation:
-            _dot(image, xs[at][0], ys[at][0], ANNOTATION, radius=2)
+            _dot(image, start_x[at], start_y[at], ANNOTATION, radius=2)
 
     return image
 

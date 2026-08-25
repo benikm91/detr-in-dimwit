@@ -2,8 +2,6 @@ import dataset.EdgeClass
 import dataset.EdgeClasses
 import dataset.NodeClass
 import dataset.NodeClasses
-import dataset.NodeLink
-import dataset.NodePoint
 import dataset.RecordEdges
 import dataset.RecordNodes
 import EdgeScorer.EdgeLogits
@@ -42,17 +40,19 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((D
       passedThrough.sum / maximum(taken, Tensor0(vtype)(1f))
 
   /** What every position's scores would cost against every node of the record: its class, and
-    * where the *target* node is placed — so that nothing depends on what the model predicts.
+    * where the *target* node is placed — so that nothing depends on what the model predicts. A
+    * class that runs nowhere is not measured on where it ends.
     */
   private def dissimilarity(logits: NodeLogits[V], target: RecordNodes[Node]): Tensor2[Node, Candidate, V] =
     val candidateClass = target.nodeClass.relabelTo(Axis[Candidate])
-    val points = NodeClass.usedPoints(vtype).take(Axis[NodeClasses])(candidateClass)
+    def placed(scores: Tensor2[Node, Pixel, V], coordinate: Tensor1[Node, Float32]) =
+      costOfValue(scores, Pixels.of(coordinate, canvas).relabelTo(Axis[Candidate]))
+    val runsOn = NodeClass.indicator(vtype)(_.numPoints > 1).take(Axis[NodeClasses])(candidateClass)
+    val ends = placed(logits.endX, target.endX) + placed(logits.endY, target.endY)
     costOfValue(logits.nodeClass, candidateClass) +
-      carries(logits.xs, asCandidate(Pixels.of(target.xs, canvas)), points) +
-      carries(logits.ys, asCandidate(Pixels.of(target.ys, canvas)), points)
-
-  private def asCandidate(values: Tensor2[Node, NodePoint, Int32]): Tensor2[Candidate, NodePoint, Int32] =
-    values.relabel(Axis[Node] -> Axis[Candidate])
+      placed(logits.startX, target.startX) +
+      placed(logits.startY, target.startY) +
+      ends * runsOn.broadcastTo(ends.shape)
 
 /** The same over the relationships of a record, which are predicted the same way and cost the
   * same three terms — a relationship carries the nodes it links where a node carries its points.
@@ -78,25 +78,15 @@ class RemainingEdgeLoss[V: IsFloating](vtype: VType[V]) extends ((D2G.EdgeScores
     (remaining.sum + stops.sum) / (taken + Tensor0(vtype)(1f)) +
       passedThrough.sum / maximum(taken, Tensor0(vtype)(1f))
 
+  /** The same for a relationship, which carries the two nodes it relates where a node carries the
+    * points it is placed by. Only relationships are ever candidates, so both ends always count.
+    */
   private def dissimilarity(logits: EdgeLogits[V], target: RecordEdges[Edge]): Tensor2[Edge, Candidate, V] =
-    val candidateClass = target.edgeClass.relabelTo(Axis[Candidate])
-    val links = EdgeClass.usedLinks(vtype).take(Axis[EdgeClasses])(candidateClass)
-    costOfValue(logits.edgeClass, candidateClass) + carries(logits.links, asCandidate(target.links), links)
-
-  private def asCandidate(values: Tensor2[Edge, NodeLink, Int32]): Tensor2[Candidate, NodeLink, Int32] =
-    values.relabel(Axis[Edge] -> Axis[Candidate])
-
-/** What every position's scores cost against every candidate, summed over what a candidate
-  * carries and over nothing else.
-  */
-private def carries[Slot: Label, Candidate: Label, Carries: Label, Values: Label, V: IsFloating](
-    logits: Tensor3[Slot, Carries, Values, V],
-    values: Tensor2[Candidate, Carries, Int32],
-    used: Tensor2[Candidate, Carries, V]
-): Tensor2[Slot, Candidate, V] =
-  val each = zipvmap(Axis[Carries])(logits, values):
-    case (scores, wanted) => costOfValue(scores, wanted)
-  (each * used.broadcastTo(each.shape)).sum(Axis[Carries])
+    def named(scores: Tensor2[Edge, LinkedNode, V], end: Tensor1[Edge, Int32]) =
+      costOfValue(scores, end.relabelTo(Axis[Candidate]))
+    costOfValue(logits.edgeClass, target.edgeClass.relabelTo(Axis[Candidate])) +
+      named(logits.subject, target.subject) +
+      named(logits.obj, target.obj)
 
 /** The smallest cost among the candidates of a position. The others are lifted above the whole
   * matrix rather than dropped, so that the minimum stays a plain reduction.

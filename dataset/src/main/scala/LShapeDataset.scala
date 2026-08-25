@@ -83,10 +83,13 @@ object LShapeDataset:
       module.drawings(split.fileName),
       RecordBatch(
         nodeClass = liftPyTensor[(Drawings, Node), Int32](read(0)),
-        xs = liftPyTensor[(Drawings, Node, NodePoint), Float32](read(1)),
-        ys = liftPyTensor[(Drawings, Node, NodePoint), Float32](read(2)),
-        edgeClass = liftPyTensor[(Drawings, Edge), Int32](read(3)),
-        links = liftPyTensor[(Drawings, Edge, NodeLink), Int32](read(4))
+        startX = liftPyTensor[(Drawings, Node), Float32](read(1)),
+        startY = liftPyTensor[(Drawings, Node), Float32](read(2)),
+        endX = liftPyTensor[(Drawings, Node), Float32](read(3)),
+        endY = liftPyTensor[(Drawings, Node), Float32](read(4)),
+        edgeClass = liftPyTensor[(Drawings, Edge), Int32](read(5)),
+        subject = liftPyTensor[(Drawings, Edge), Int32](read(6)),
+        obj = liftPyTensor[(Drawings, Edge), Int32](read(7))
       )
     )
 
@@ -135,18 +138,24 @@ final class LShapeDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Label
     val drawing = Axis[Drawings].at(at)
     Record(
       records.nodeClass.slice(drawing),
-      records.xs.slice(drawing),
-      records.ys.slice(drawing),
+      records.startX.slice(drawing),
+      records.startY.slice(drawing),
+      records.endX.slice(drawing),
+      records.endY.slice(drawing),
       records.edgeClass.slice(drawing),
-      records.links.slice(drawing)
+      records.subject.slice(drawing),
+      records.obj.slice(drawing)
     )
 
   private def recordsIn[S: Label](rows: AxisExtent[S], from: Int): RecordBatch[S, Node, Edge] =
     val taken = Axis[Drawings].at(from until from + rows.size)
     RecordBatch(
       records.nodeClass.slice(taken).relabel(Axis[Drawings] -> rows.axis),
-      records.xs.slice(taken).relabel(Axis[Drawings] -> rows.axis),
-      records.ys.slice(taken).relabel(Axis[Drawings] -> rows.axis),
+      records.startX.slice(taken).relabel(Axis[Drawings] -> rows.axis),
+      records.startY.slice(taken).relabel(Axis[Drawings] -> rows.axis),
+      records.endX.slice(taken).relabel(Axis[Drawings] -> rows.axis),
+      records.endY.slice(taken).relabel(Axis[Drawings] -> rows.axis),
       records.edgeClass.slice(taken).relabel(Axis[Drawings] -> rows.axis),
-      records.links.slice(taken).relabel(Axis[Drawings] -> rows.axis)
+      records.subject.slice(taken).relabel(Axis[Drawings] -> rows.axis),
+      records.obj.slice(taken).relabel(Axis[Drawings] -> rows.axis)
     )

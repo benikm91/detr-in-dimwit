@@ -2,8 +2,6 @@ import dataset.EdgeClass
 import dataset.EdgeClasses
 import dataset.NodeClass
 import dataset.NodeClasses
-import dataset.NodeLink
-import dataset.NodePoint
 import dataset.Point
 import dataset.Record
 import dataset.RecordEdge
@@ -108,41 +106,49 @@ class RecordSuite extends FunSuite:
   /** A layout that need not be a record: any node may sit at any position. */
   private def slotted(perNode: RecordNode*): RecordNodes[Node] =
     val padded = perNode ++ Seq.fill(nodes.size - perNode.length)(noNode)
-    def coordinate(of: Point => Float) = Tensor2(nodes.axis, Axis[NodePoint], VType[Float32]).fromArray(
-      padded.map(node => Array.tabulate(NodeClass.maxPoints)(node.points.lift(_).fold(0f)(of))).toArray
+    def placed(of: Point => Float, at: Int) = Tensor1(nodes.axis, VType[Float32]).fromArray(
+      padded.map(_.points.lift(at).fold(0f)(of)).toArray
     )
     RecordNodes(
       nodeClass = Tensor1(nodes.axis, VType[Int32]).fromArray(padded.map(_.nodeClass.id).toArray),
-      xs = coordinate(_.x),
-      ys = coordinate(_.y)
+      startX = placed(_.x, 0),
+      startY = placed(_.y, 0),
+      endX = placed(_.x, 1),
+      endY = placed(_.y, 1)
     )
 
   /** The same for relationships: any relationship may sit at any position. */
   private def related(perEdge: RecordEdge*): RecordEdges[Edge] =
     val padded = perEdge ++ Seq.fill(edges.size - perEdge.length)(noEdge)
+    def named(end: RecordEdge => Int) = Tensor1(edges.axis, VType[Int32]).fromArray(padded.map(end).toArray)
     RecordEdges(
       edgeClass = Tensor1(edges.axis, VType[Int32]).fromArray(padded.map(_.edgeClass.id).toArray),
-      links = Tensor2(edges.axis, Axis[NodeLink], VType[Int32]).fromArray(padded.map(edge => Array(edge.subject, edge.obj)).toArray)
+      subject = named(_.subject),
+      obj = named(_.obj)
     )
 
   /** Scores that say each position holds exactly what the given layout has in it. */
   private def scored(taken: RecordNodes[Node]): NodeLogits[Float32] =
-    def pixels(coordinates: Tensor2[Node, NodePoint, Float32]) =
-      Tensor3(nodes.axis, Axis[NodePoint], Axis[Pixel], VType[Float32])
-        .fromArray(Pixels.of(coordinates, canvas).toArray.map(_.map(oneHot(_, canvas))))
+    def pixels(coordinate: Tensor1[Node, Float32]) =
+      Tensor2(nodes.axis, Axis[Pixel], VType[Float32])
+        .fromArray(Pixels.of(coordinate, canvas).toArray.map(oneHot(_, canvas)))
     NodeLogits(
       nodeClass = Tensor2(nodes.axis, Axis[NodeClasses], VType[Float32])
         .fromArray(taken.nodeClass.toArray.map(oneHot(_, NodeClass.values.length))),
-      xs = pixels(taken.xs),
-      ys = pixels(taken.ys)
+      startX = pixels(taken.startX),
+      startY = pixels(taken.startY),
+      endX = pixels(taken.endX),
+      endY = pixels(taken.endY)
     )
 
   private def scored(taken: RecordEdges[Edge]): EdgeLogits[Float32] =
+    def named(end: Tensor1[Edge, Int32]) =
+      Tensor2(edges.axis, Axis[LinkedNode], VType[Float32]).fromArray(end.toArray.map(oneHot(_, nodes.size)))
     EdgeLogits(
       edgeClass = Tensor2(edges.axis, Axis[EdgeClasses], VType[Float32])
         .fromArray(taken.edgeClass.toArray.map(oneHot(_, EdgeClass.values.length))),
-      links = Tensor3(edges.axis, Axis[NodeLink], Axis[LinkedNode], VType[Float32])
-        .fromArray(taken.links.toArray.map(_.map(oneHot(_, nodes.size))))
+      subject = named(taken.subject),
+      obj = named(taken.obj)
     )
 
   private def oneHot(value: Int, over: Int) =
@@ -181,10 +187,10 @@ class D2GSuite extends FunSuite:
   test("every position is scored for what its half of a record carries"):
     val scored = model(document, record.record(nodes, edges))
     assertEquals(scored.nodes.remaining.nodeClass.shape.dimensions.toSeq, Seq(nodes.size, NodeClass.values.length))
-    assertEquals(scored.nodes.remaining.xs.shape.dimensions.toSeq, Seq(nodes.size, NodeClass.maxPoints, canvas))
+    assertEquals(scored.nodes.remaining.startX.shape.dimensions.toSeq, Seq(nodes.size, canvas))
     assertEquals(scored.nodes.taken.nodeClass.shape.dimensions.toSeq, scored.nodes.remaining.nodeClass.shape.dimensions.toSeq)
     assertEquals(scored.edges.remaining.edgeClass.shape.dimensions.toSeq, Seq(edges.size, EdgeClass.values.length))
-    assertEquals(scored.edges.remaining.links.shape.dimensions.toSeq, Seq(edges.size, EdgeClass.maxLinks, nodes.size))
+    assertEquals(scored.edges.remaining.subject.shape.dimensions.toSeq, Seq(edges.size, nodes.size))
     assertEquals(scored.edges.taken.edgeClass.shape.dimensions.toSeq, scored.edges.remaining.edgeClass.shape.dimensions.toSeq)
 
   test("the training state carries a new linearization on to every step"):

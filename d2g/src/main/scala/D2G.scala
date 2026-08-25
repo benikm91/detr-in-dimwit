@@ -1,8 +1,6 @@
 import dataset.EdgeClass
 import dataset.NodeClass
 import dataset.NodeClasses
-import dataset.NodeLink
-import dataset.NodePoint
 import dataset.Record
 import dataset.RecordEdges
 import dataset.RecordNodes
@@ -86,18 +84,17 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
 
     def predictRemainingNodes: RecordNodes[Node] =
       def noNodes(slots: AxisExtent[Node]) =
-        val points = Axis[NodePoint] -> NodeClass.maxPoints
-        RecordNodes(
-          nodeClass = Tensor1(slots, VType[Int32]).fill(NodeClass.NoNode.id),
-          xs = Tensor2(slots, points, VType[Float32]).fill(0f),
-          ys = Tensor2(slots, points, VType[Float32]).fill(0f)
-        )
+        def nowhere = Tensor1(slots, VType[Float32]).fill(0f)
+        RecordNodes(Tensor1(slots, VType[Int32]).fill(NodeClass.NoNode.id), nowhere, nowhere, nowhere, nowhere)
 
       def joined(taken: RecordNodes[Node], next: RecordNodes[Node]) =
+        def after(all: Tensor1[Node, Float32], one: Tensor1[Node, Float32]) = concatenate(all, one, Axis[Node])
         RecordNodes(
           nodeClass = concatenate(taken.nodeClass, next.nodeClass, Axis[Node]),
-          xs = concatenate(taken.xs, next.xs, Axis[Node]),
-          ys = concatenate(taken.ys, next.ys, Axis[Node])
+          startX = after(taken.startX, next.startX),
+          startY = after(taken.startY, next.startY),
+          endX = after(taken.endX, next.endX),
+          endY = after(taken.endY, next.endY)
         )
 
       /** The node the model answers slot `at` with, having taken the nodes before it. */
@@ -126,15 +123,15 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
       val holds = holdsNode(nodes)
 
       def noEdges(slots: AxisExtent[Edge]) =
-        RecordEdges(
-          edgeClass = Tensor1(slots, VType[Int32]).fill(EdgeClass.NoEdge.id),
-          links = Tensor2(slots, Axis[NodeLink] -> EdgeClass.maxLinks, VType[Int32]).fill(0)
-        )
+        def nothing = Tensor1(slots, VType[Int32]).fill(0)
+        RecordEdges(Tensor1(slots, VType[Int32]).fill(EdgeClass.NoEdge.id), nothing, nothing)
 
       def joined(taken: RecordEdges[Edge], next: RecordEdges[Edge]) =
+        def after(all: Tensor1[Edge, Int32], one: Tensor1[Edge, Int32]) = concatenate(all, one, Axis[Edge])
         RecordEdges(
           edgeClass = concatenate(taken.edgeClass, next.edgeClass, Axis[Edge]),
-          links = concatenate(taken.links, next.links, Axis[Edge])
+          subject = after(taken.subject, next.subject),
+          obj = after(taken.obj, next.obj)
         )
 
       /** The relationship the model answers slot `at` with, having taken the ones before it. */
@@ -260,31 +257,20 @@ object D2G:
       val nodeExtent = Axis[Node] -> nodes
       val edgeExtent = Axis[Edge] -> edges
       val linkedExtent = Axis[LinkedNode] -> nodes
-      val pointExtent = Axis[NodePoint] -> NodeClass.maxPoints
-      val linkExtent = Axis[NodeLink] -> EdgeClass.maxLinks
-      val nodePartExtent = Axis[NodePart |*| PartEmbedding] -> (1 + 2 * NodeClass.maxPoints) * partExtent.size
-      val edgePartExtent = Axis[EdgePart |*| PartEmbedding] -> (1 + EdgeClass.maxLinks) * partExtent.size
+      // A node embedding is put together from its class and the four coordinates a class can
+      // place; a relationship embedding from its class and the two nodes it relates.
+      val nodePartExtent = Axis[NodePart |*| PartEmbedding] -> 5 * partExtent.size
+      val edgePartExtent = Axis[EdgePart |*| PartEmbedding] -> 3 * partExtent.size
 
       val (nodeDecoderKey, edgeDecoderKey) = decoderKey.splitToTuple(2)
       val (nodeEmbedderKey, edgeEmbedderKey) = embedderKey.splitToTuple(2)
-      val (xKey, yKey, nodeClassKey, nodeProjectionKey) = nodeEmbedderKey.splitToTuple(4)
-      val (linkKey, edgeClassKey, edgeProjectionKey) = edgeEmbedderKey.splitToTuple(3)
+      val (startXKey, startYKey, endXKey, endYKey, nodeClassKey, nodeProjectionKey) = nodeEmbedderKey.splitToTuple(6)
+      val (subjectKey, objKey, edgeClassKey, edgeProjectionKey) = edgeEmbedderKey.splitToTuple(4)
       val (nodeHeadKey, edgeHeadKey) = scorerKey.splitToTuple(2)
-      val (classHeadKey, xHeadKey, yHeadKey) = nodeHeadKey.splitToTuple(3)
-      val (edgeClassHeadKey, linkHeadKey) = edgeHeadKey.splitToTuple(2)
+      val (classHeadKey, startXHeadKey, startYHeadKey, endXHeadKey, endYHeadKey) = nodeHeadKey.splitToTuple(5)
+      val (edgeClassHeadKey, subjectHeadKey, objHeadKey) = edgeHeadKey.splitToTuple(3)
       val (nodeTokenKey, edgeTokenKey) = tokenKey.splitToTuple(2)
       val (nodePositionKey, edgePositionKey) = positionKey.splitToTuple(2)
-
-      def perCarried[Carries: Label, In, Out](carries: AxisExtent[Carries], key: Key)(
-          weights: Key => Tensor2[In, Out, Float32]
-      )(using Label[In], Label[Out]): Tensor3[Carries, In, Out, Float32] =
-        stack(key.split(carries.size).map(weights).toSeq, carries.axis)
-
-      def head[Carries: Label, Values: Label](carries: AxisExtent[Carries], values: AxisExtent[Values], key: Key) =
-        ScorerHead(
-          projection = perCarried(carries, key)(Init.xavierUniform(embeddingExtent, values, _)),
-          bias = Tensor2(carries, values, VType[Float32]).fill(0f)
-        )
 
       Params(
         patchEmbedder = ImageToPatchEmbedder.Params.init(
@@ -299,14 +285,18 @@ object D2G:
           decoder = NodeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, nodeDecoderKey),
           embedder = NodeEmbedder.Params(
             nodeClass = Init.xavierUniform(nodeClassExtent, partExtent, nodeClassKey),
-            xs = perCarried(pointExtent, xKey)(Init.xavierUniform(pixelExtent, partExtent, _)),
-            ys = perCarried(pointExtent, yKey)(Init.xavierUniform(pixelExtent, partExtent, _)),
+            startX = Init.xavierUniform(pixelExtent, partExtent, startXKey),
+            startY = Init.xavierUniform(pixelExtent, partExtent, startYKey),
+            endX = Init.xavierUniform(pixelExtent, partExtent, endXKey),
+            endY = Init.xavierUniform(pixelExtent, partExtent, endYKey),
             projection = AffineLayer.Params.init(nodePartExtent, embeddingExtent, nodeProjectionKey)
           ),
           scorer = NodeScorer.Params(
             nodeClass = AffineLayer.Params.init(embeddingExtent, nodeClassExtent, classHeadKey),
-            xs = head(pointExtent, pixelExtent, xHeadKey),
-            ys = head(pointExtent, pixelExtent, yHeadKey)
+            startX = AffineLayer.Params.init(embeddingExtent, pixelExtent, startXHeadKey),
+            startY = AffineLayer.Params.init(embeddingExtent, pixelExtent, startYHeadKey),
+            endX = AffineLayer.Params.init(embeddingExtent, pixelExtent, endXHeadKey),
+            endY = AffineLayer.Params.init(embeddingExtent, pixelExtent, endYHeadKey)
           ),
           token = Init.xavierUniformVector(embeddingExtent, nodeTokenKey),
           positions = LearnedAbsolutePositionalInjector.Params.lecunNormal(nodeExtent, embeddingExtent, nodePositionKey)
@@ -315,12 +305,14 @@ object D2G:
           decoder = EdgeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, edgeDecoderKey),
           embedder = EdgeEmbedder.Params(
             edgeClass = Init.xavierUniform(edgeClassExtent, partExtent, edgeClassKey),
-            links = perCarried(linkExtent, linkKey)(Init.xavierUniform(linkedExtent, partExtent, _)),
+            subject = Init.xavierUniform(linkedExtent, partExtent, subjectKey),
+            obj = Init.xavierUniform(linkedExtent, partExtent, objKey),
             projection = AffineLayer.Params.init(edgePartExtent, embeddingExtent, edgeProjectionKey)
           ),
           scorer = EdgeScorer.Params(
             edgeClass = AffineLayer.Params.init(embeddingExtent, edgeClassExtent, edgeClassHeadKey),
-            links = head(linkExtent, linkedExtent, linkHeadKey)
+            subject = AffineLayer.Params.init(embeddingExtent, linkedExtent, subjectHeadKey),
+            obj = AffineLayer.Params.init(embeddingExtent, linkedExtent, objHeadKey)
           ),
           token = Init.xavierUniformVector(embeddingExtent, edgeTokenKey),
           positions = LearnedAbsolutePositionalInjector.Params.lecunNormal(edgeExtent, embeddingExtent, edgePositionKey)

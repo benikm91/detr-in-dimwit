@@ -48,7 +48,7 @@ def d2gTrain(): Unit =
   dimwit.initialize()
 
   val numIterations = 100_000
-  val batchSize = 32
+  val batchSize = 128
   val learningRate = 3e-4f
   val weightDecay = 1e-4f
   val maxGradientNorm = 1.0f
@@ -81,9 +81,9 @@ def d2gTrain(): Unit =
       records: RecordBatch[Batch, Node, Edge]
   )(params: D2G.Params[Float32]): Tensor0[Float32] =
     val model = D2G(params)
-    zipvmap(Axis[Batch])(images, records.nodeClass, records.xs, records.ys, records.edgeClass, records.links):
-      case (image, nodeClass, xs, ys, edgeClass, links) =>
-        val target = Record(nodeClass, xs, ys, edgeClass, links)
+    zipvmap(Axis[Batch])(images, records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.edgeClass, records.subject, records.obj):
+      case (image, nodeClass, startX, startY, endX, endY, edgeClass, subject, obj) =>
+        val target = Record(nodeClass, startX, startY, endX, endY, edgeClass, subject, obj)
         val scored = model(image, target)
         nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target.edges)
     .mean

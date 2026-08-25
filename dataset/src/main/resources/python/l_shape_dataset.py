@@ -27,16 +27,20 @@ def drawings(split):
 
 
 def records(split, nodes, edges, no_node, line, annotation, no_edge, connected, annotates):
-    """``(node_class, xs, ys, edge_class, links)`` of every drawing, padded to ``nodes`` drawn
-    nodes and ``edges`` relationships."""
+    """``(node_class, start_x, start_y, end_x, end_y, edge_class, subject, obj)`` of every drawing,
+    padded to ``nodes`` drawn nodes and ``edges`` relationships.
+
+    A node is placed by where it starts and, if it runs somewhere, by where it ends; an annotation
+    ends nowhere and leaves that at zero.
+    """
     with open(_file(split, "labels.jsonl"), encoding="utf-8") as programs:
         parsed = [_record_of(_actions(program), line, annotation, connected, annotates) for program in programs]
 
     node_class = np.full((len(parsed), nodes), no_node, dtype=np.int32)
-    xs = np.zeros((len(parsed), nodes, 2), dtype=np.float32)
-    ys = np.zeros((len(parsed), nodes, 2), dtype=np.float32)
+    start_x, start_y = (np.zeros((len(parsed), nodes), dtype=np.float32) for _ in range(2))
+    end_x, end_y = (np.zeros((len(parsed), nodes), dtype=np.float32) for _ in range(2))
     edge_class = np.full((len(parsed), edges), no_edge, dtype=np.int32)
-    links = np.zeros((len(parsed), edges, 2), dtype=np.int32)
+    subject, obj = (np.zeros((len(parsed), edges), dtype=np.int32) for _ in range(2))
 
     for drawing, (drawn, related) in enumerate(parsed):
         if len(drawn) > nodes:
@@ -44,11 +48,14 @@ def records(split, nodes, edges, no_node, line, annotation, no_edge, connected, 
         if len(related) > edges:
             raise ValueError("a record of %d relationships does not fit in %d" % (len(related), edges))
         for at, (node, node_xs, node_ys) in enumerate(drawn):
-            node_class[drawing, at], xs[drawing, at, : len(node_xs)], ys[drawing, at, : len(node_ys)] = node, node_xs, node_ys
-        for at, (relationship, subject, obj) in enumerate(related):
-            edge_class[drawing, at], links[drawing, at] = relationship, (subject, obj)
+            node_class[drawing, at] = node
+            start_x[drawing, at], start_y[drawing, at] = node_xs[0], node_ys[0]
+            if len(node_xs) > 1:
+                end_x[drawing, at], end_y[drawing, at] = node_xs[1], node_ys[1]
+        for at, (relationship, relates, to) in enumerate(related):
+            edge_class[drawing, at], subject[drawing, at], obj[drawing, at] = relationship, relates, to
 
-    return node_class, xs, ys, edge_class, links
+    return node_class, start_x, start_y, end_x, end_y, edge_class, subject, obj
 
 
 def _record_of(actions, line, annotation, connected, annotates):
