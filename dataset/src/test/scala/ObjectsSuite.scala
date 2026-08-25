@@ -85,6 +85,31 @@ class ObjectsSuite extends FunSuite:
           if edgeClass.isSymmetric then assert(ends(0) < ends(1), s"$edgeClass holds ${ends.toSeq} rather than its ends in ascending order")
           if !edgeClass.relates then assertEquals(ends.toSeq, Seq(0, 0), s"an empty position links nothing")
 
+  test("a record is drawn as the picture it stands for"):
+    val canvas = 32
+    val blank = Outlines.greyLevels(Tensor3(Axis[Width] -> canvas, Axis[Height] -> canvas, Axis[Channel] -> 1, VType[Float32]).fill(1f))
+    val drawn = RecordDrawing(record, blank, Axis[Channel]).asInt(VType[Int32]).toArray
+    assertEquals(drawn.length, canvas)
+    assertEquals(drawn.head.head.toSeq, Seq(255, 255, 255), "a corner the record does not reach stays blank")
+    // The record's first line runs from (0.2, 0.4) to (0.8, 0.4), so the middle of the canvas is on it.
+    assertEquals(drawn(canvas / 2)(math.round(0.4f * canvas)).toSeq, Seq(20, 60, 190), "the middle of a line is drawn in the line's colour")
+
+  test("a record is drawn where the drawing it was read from has its ink"):
+    val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation)
+    data.samples.take(3).zipWithIndex.foreach: (sample, index) =>
+      val drawing = Outlines.greyLevels(sample.image)
+      val drawn = RecordDrawing(RecordGraph.of(sample.target), drawing, Axis[Channel]).asInt(VType[Int32]).toArray
+      val ink = drawing.asInt(VType[Int32]).toArray
+      def inked(x: Int, y: Int) = ink.isDefinedAt(x) && ink(x).isDefinedAt(y) && ink(x)(y) < 128
+      val onLine =
+        for
+          x <- drawn.indices
+          y <- drawn(x).indices
+          if drawn(x)(y).toSeq == Seq(20, 60, 190)
+        yield Seq(-1, 0, 1).exists(dx => Seq(-1, 0, 1).exists(dy => inked(x + dx, y + dy)))
+      assert(onLine.nonEmpty, s"sample $index: a record of lines drew none")
+      assertEquals(onLine.count(identity), onLine.size, s"sample $index: a line is drawn where the drawing has no ink near it")
+
   test("the objects of a record hold the record"):
     assertSameRecord(Objects.record(Objects.of(record.record(nodes, edges)), edges), record.record(nodes, edges))
 

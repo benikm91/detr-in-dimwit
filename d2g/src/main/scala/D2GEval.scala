@@ -2,9 +2,9 @@ import dataset.Canvas
 import dataset.LShapeDataset
 import dataset.LShapeDataset.Split
 import dataset.NodeClass
-import dataset.Objects
 import dataset.Outlines
 import dataset.Record
+import dataset.RecordDrawing
 import dataset.RecordGraph
 import dataset.RecordScoring
 import dataset.Tolerances
@@ -41,11 +41,11 @@ def d2gPlot(): Unit =
         val transcribed = transcriber(sample.image)
         println(s"${split.fileName} $index target:      ${describe(target)}")
         println(s"${split.fileName} $index transcribed: ${describe(transcribed)}")
-        def drawn(record: RecordGraph) = Objects.of(record.record(nodes, edges)).detection
+        def drawn(record: RecordGraph) = RecordDrawing(record, document, Axis[Channel])
         Seq(
           plots.imagePlot(document, _.title := s"${split.fileName} $index"),
-          plots.imagePlot(Outlines(document, drawn(target)), _.title := s"${split.fileName} $index — record"),
-          plots.imagePlot(Outlines(document, drawn(transcribed)), _.title := s"${split.fileName} $index — transcribed")
+          plots.imagePlot(drawn(target), _.title := s"${split.fileName} $index — record: ${counted(target)}"),
+          plots.imagePlot(drawn(transcribed), _.title := s"${split.fileName} $index — transcribed: ${counted(transcribed)}")
         )
       .toSeq
 
@@ -95,6 +95,13 @@ class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExten
 
 private def open(split: Split) =
   LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
+
+/** How much of a record there is to see, for the header of a drawing of it. */
+private def counted(record: RecordGraph): String =
+  def held(nodeClass: NodeClass, name: String) =
+    val count = record.nodes.count(_.nodeClass == nodeClass)
+    s"$count $name${if count == 1 then "" else "s"}"
+  s"${held(NodeClass.Line, "line")}, ${held(NodeClass.Annotation, "text")}"
 
 private def describe(record: RecordGraph): String =
   val nodes = record.nodes.map(node => s"${node.nodeClass}(${node.points.map(point => f"${point.x}%.3f, ${point.y}%.3f").mkString("; ")})")

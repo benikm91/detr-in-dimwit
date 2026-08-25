@@ -7,8 +7,6 @@ import dimwit.python.PyBridge.liftPyTensor
 import dimwit.tensor.Tensor4
 import me.shadaj.scalapy.py
 
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import scala.language.implicitConversions
 
 /** The side of a drawing, in pixels. */
@@ -92,26 +90,7 @@ object LShapeDataset:
       )
     )
 
-  /** Touching `Jax.np` first makes sure DimWit has configured the interpreter and `sys.path`
-    * before any Python object of ours is created.
-    */
-  private lazy val module: py.Dynamic =
-    Jax.np
-    val sys = py.module("sys")
-    Option(getClass.getResourceAsStream("/python/l_shape_dataset.py")) match
-      case Some(stream) =>
-        try
-          val directory = Files.createTempDirectory("l-shape-python")
-          Files.copy(stream, directory.resolve("l_shape_dataset.py"), StandardCopyOption.REPLACE_EXISTING)
-          sys.path.append(directory.toAbsolutePath.toString)
-          Runtime.getRuntime.addShutdownHook(new Thread(() =>
-            try Files.walk(directory).sorted(java.util.Comparator.reverseOrder()).forEach(Files.delete)
-            catch case _: Exception => () // best effort cleanup
-          ))
-        finally stream.close()
-      case None =>
-        sys.path.append("./dataset/src/main/resources/python")
-    py.module("l_shape_dataset")
+  private lazy val module: py.Dynamic = PythonModules("l_shape_dataset")
 
 /** A single split of the l-shape dataset. Use [[LShapeDataset.open]] to create one. */
 final class LShapeDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Label] private[dataset] (
