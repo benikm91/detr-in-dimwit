@@ -14,9 +14,9 @@ trait RelationClasses derives Label
   * There is no "no relation" class: a pair of objects carries each class or it does not,
   * independently of the others, so an unrelated pair is simply zero everywhere.
   */
-enum RelationClass(val id: Int, val nodeClass: NodeClass):
-  case Connected extends RelationClass(0, NodeClass.Connected)
-  case Annotates extends RelationClass(1, NodeClass.Annotates)
+enum RelationClass(val id: Int, val edgeClass: EdgeClass):
+  case Connected extends RelationClass(0, EdgeClass.Connected)
+  case Annotates extends RelationClass(1, EdgeClass.Annotates)
 
 object RelationClass:
 
@@ -78,13 +78,13 @@ object Objects:
   private val AnnotationSize = 12f / Canvas
 
   /** The objects a record is drawn as. Going the other way is [[record]]. */
-  def of[Node: Label](record: Record[Node]): Objects[Node] =
+  def of[Node: Label, Edge: Label](record: Record[Node, Edge]): Objects[Node] =
     Objects(boxes(record), adjacency(record))
 
-  def of[S: Label, Node: Label](records: RecordBatch[S, Node]): ObjectBatch[S, Node] =
-    val drawn = zipvmap(Axis[S])(records.nodeClass, records.xs, records.ys, records.links):
-      case (nodeClass, xs, ys, links) =>
-        val objects = of(Record(nodeClass, xs, ys, links))
+  def of[S: Label, Node: Label, Edge: Label](records: RecordBatch[S, Node, Edge]): ObjectBatch[S, Node] =
+    val drawn = zipvmap(Axis[S])(records.nodeClass, records.xs, records.ys, records.edgeClass, records.links):
+      case (nodeClass, xs, ys, edgeClass, links) =>
+        val objects = of(Record(nodeClass, xs, ys, edgeClass, links))
         (
           centerX = objects.detection.box.centerX,
           centerY = objects.detection.box.centerY,
@@ -105,15 +105,15 @@ object Objects:
     * back into slots is a compaction rather than an elementwise map, so this reads the objects to
     * the host, which is where it is wanted — nothing scores on the device.
     */
-  def record[Node: Label](objects: Objects[Node]): Record[Node] =
-    RecordGraph.of(objects).record(objects.detection.label.shape.extent(Axis[Node]))
+  def record[Node: Label, Edge: Label](objects: Objects[Node], edges: AxisExtent[Edge]): Record[Node, Edge] =
+    RecordGraph.of(objects).record(objects.detection.label.shape.extent(Axis[Node]), edges)
 
-  private def boxes[Node: Label](record: Record[Node]): Detection[Node, Float32] =
+  private def boxes[Node: Label, Edge: Label](record: Record[Node, Edge]): Detection[Node, Float32] =
     val slots = record.nodeClass.shape.extent(Axis[Node])
     def point(index: Int) = (record.xs.slice(Axis[NodePoint].at(index)), record.ys.slice(Axis[NodePoint].at(index)))
     val ((startX, startY), (endX, endY)) = (point(0), point(1))
-    val isLine = holds(record.nodeClass, NodeClass.Line)
-    val isAnnotation = holds(record.nodeClass, NodeClass.Annotation)
+    val isLine = holds(record.nodeClass, NodeClass.Line.id)
+    val isAnnotation = holds(record.nodeClass, NodeClass.Annotation.id)
     val drawn = isLine.asFloat(VType[Float32]) + isAnnotation.asFloat(VType[Float32])
     val annotationSize = Tensor1(slots).fill(AnnotationSize)
     def span(from: Tensor1[Node, Float32], to: Tensor1[Node, Float32]) =
@@ -129,37 +129,33 @@ object Objects:
       label = where(isLine, labelled(ObjectClass.PartLine), where(isAnnotation, labelled(ObjectClass.Text), labelled(ObjectClass.NoObject)))
     )
 
-  /** Axis of the nodes read as relationships, kept apart from the nodes they link. */
-  private trait Relationship derives Label
-
-  private def adjacency[Node: Label](record: Record[Node]): Tensor3[Node, Prime[Node], RelationClasses, Float32] =
+  private def adjacency[Node: Label, Edge: Label](record: Record[Node, Edge]): Tensor3[Node, Prime[Node], RelationClasses, Float32] =
     val nodes = record.nodeClass.shape.extent(Axis[Node])
     val linkedNodes = Axis[Prime[Node]] -> nodes.size
-    val relationships = Axis[Relationship] -> nodes.size
-    val edgeClass = record.nodeClass.relabelTo(Axis[Relationship])
-    def linked(index: Int) = record.links.slice(Axis[NodeLink].at(index)).relabelTo(Axis[Relationship])
+    def linked(index: Int) = record.links.slice(Axis[NodeLink].at(index))
     val (subject, obj) = (linked(0), linked(1))
 
-    def linking(relation: RelationClass, from: Tensor1[Relationship, Int32], to: Tensor1[Relationship, Int32]) =
-      val present = holds(edgeClass, relation.nodeClass).asFloat(VType[Float32]).broadcastTo(Shape2(relationships, nodes))
-      (at(from, nodes) * present).dot(Axis[Relationship])(at(to, linkedNodes))
+    def linking(relation: RelationClass, from: Tensor1[Edge, Int32], to: Tensor1[Edge, Int32]) =
+      val edges = record.edgeClass.shape.extent(Axis[Edge])
+      val present = holds(record.edgeClass, relation.edgeClass.id).asFloat(VType[Float32]).broadcastTo(Shape2(edges, nodes))
+      (at(from, nodes) * present).dot(Axis[Edge])(at(to, linkedNodes))
 
     stack(
       RelationClass.values.map: relation =>
         val forward = linking(relation, subject, obj)
-        if relation.nodeClass.isSymmetric then forward + linking(relation, obj, subject) else forward
+        if relation.edgeClass.isSymmetric then forward + linking(relation, obj, subject) else forward
       .toSeq,
       Axis[RelationClasses]
     ).transpose((Axis[Node], Axis[Prime[Node]], Axis[RelationClasses]))
 
   /** A one wherever a node is the one linked, over the axis it is linked in. */
-  private def at[Over: Label](named: Tensor1[Relationship, Int32], over: AxisExtent[Over]): Tensor2[Relationship, Over, Float32] =
-    val pairs = Shape2(named.shape.extent(Axis[Relationship]), over)
+  private def at[Named: Label, Over: Label](named: Tensor1[Named, Int32], over: AxisExtent[Over]): Tensor2[Named, Over, Float32] =
+    val pairs = Shape2(named.shape.extent(Axis[Named]), over)
     Tensor1(over.axis, VType[Int32])
       .fromArray(Array.range(0, over.size))
       .broadcastTo(pairs)
       .elementEquals(named.broadcastTo(pairs))
       .asFloat(VType[Float32])
 
-  private def holds[L: Label](nodeClass: Tensor1[L, Int32], is: NodeClass): Tensor1[L, Bool] =
-    nodeClass.elementEquals(Tensor.like(nodeClass).fill(is.id))
+  private def holds[L: Label](classes: Tensor1[L, Int32], id: Int): Tensor1[L, Bool] =
+    classes.elementEquals(Tensor.like(classes).fill(id))

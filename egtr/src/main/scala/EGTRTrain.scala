@@ -55,7 +55,7 @@ def egtrTrain(detectorRun: String*): Unit =
   val weightDecay = 1e-4f
   val maxGradientNorm = 0.1f
 
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Train)
+  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
   val batches = data.objectBatches(Axis[Drawing] -> batchSize)
 
   val optimizer = AdamW(

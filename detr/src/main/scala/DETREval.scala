@@ -26,7 +26,7 @@ def detrPlot(): Unit =
   println(s"reading ${checkpoints.rootPath}")
   val model = DETR(checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
-    val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(split)
+    val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(split)
     data
       .objects
       .take(3)
@@ -60,7 +60,7 @@ def detrEval(): Unit =
   val checkpoints = TensorTreeCheckpointer.latestIn(CheckpointRoot).getOrElse(sys.error(s"no training run in $CheckpointRoot"))
   println(s"reading ${checkpoints.rootPath}")
   val model = DETR(checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Validation)
+  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Validation)
   val detect = jit(model.apply)
 
   val drawings = data

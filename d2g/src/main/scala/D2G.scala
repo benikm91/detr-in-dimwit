@@ -1,122 +1,242 @@
+import dataset.EdgeClass
 import dataset.NodeClass
+import dataset.NodeClasses
 import dataset.NodeLink
 import dataset.NodePoint
 import dataset.Record
+import dataset.RecordEdges
+import dataset.RecordNodes
 import deepwit.base.AffineLayer
 import deepwit.embedder.ImageToPatchEmbedder
 import deepwit.embedder.LearnedAbsolutePositionalInjector
+import deepwit.init.Init
 import dimwit.*
 
 import scala.annotation.tailrec
-
-import deepwit.init.Init
 
 /** Document-to-graph transcription,
   * [[https://arxiv.org/abs/2507.08458 A document is worth a structured record]] §3.7, on the
   * l-shape drawings — see `README.md` for the divergences from the paper.
   *
-  * The document is embedded patch by patch and attended over by the encoder. The decoder is fed
-  * the record's nodes in a random order and answers, at every position, with one of the nodes it
-  * has not taken yet. Nothing is detected and nothing is assembled afterwards: the drawing's
-  * record, relationships and all, is what the model writes down.
+  * The document is embedded patch by patch and attended over by the encoder. Its record is written
+  * down in two stages: the nodes it draws, and then the relationships between them. Each stage is
+  * fed what it has taken so far and answers, at every position, with one it has not taken yet;
+  * the relationships read the nodes as well as the document, since a relationship is a pair of
+  * nodes. Nothing is detected and nothing is assembled afterwards: the drawing's record,
+  * relationships and all, is what the model writes down.
   */
 class D2G[V: IsFloating](params: D2G.Params[V]):
 
+  import D2G.EdgeScores
+  import D2G.NodeScores
   import D2G.Scores
 
   private val patches = ImageToPatchEmbedder(params.patchEmbedder)
   private val encoder = DocumentEncoder(params.encoder)
-  private val decoder = RecordDecoder(params.decoder)
-  private val position = LearnedAbsolutePositionalInjector(params.positions)
-  private val scorer = NodeScorer(params.scorer)
-  private val embed = NodeEmbedder(params.embedder, scorer.canvas)
+  private val nodeDecoder = NodeDecoder(params.nodes.decoder)
+  private val edgeDecoder = EdgeDecoder(params.edges.decoder)
+  private val nodePosition = LearnedAbsolutePositionalInjector(params.nodes.positions)
+  private val edgePosition = LearnedAbsolutePositionalInjector(params.edges.positions)
+  private val nodeScorer = NodeScorer(params.nodes.scorer)
+  private val edgeScorer = EdgeScorer(params.edges.scorer)
+  private val embedNodes = NodeEmbedder(params.nodes.embedder, nodeScorer.canvas)
+  private val embedEdges = EdgeEmbedder(params.edges.embedder)
 
-  /** What the model scores, given the document and the nodes taken from its record so far.
+  /** What the model scores, given the document and the record taken from it so far.
     *
-    * The nodes are the ones the record actually holds, so this is the teacher-forced door and
-    * belongs to training. Transcription reads [[transcribe]], which is given no record at all.
+    * The record is the one the drawing actually holds, so this is the teacher-forced door and
+    * belongs to training. Transcription reads [[predictRecord]], which is given no record at all.
     */
-  def apply(document: Tensor3[Width, Height, Channel, V], taken: Record[Node]): Scores[V] =
+  def apply(document: Tensor3[Width, Height, Channel, V], taken: Record[Node, Edge]): Scores[V] =
     predict(encode(document), taken)
 
   /** The document, once. Transcription reads it at every step, so it is worth keeping. */
   def encode(document: Tensor3[Width, Height, Channel, V]): Tensor2[Patch, Embedding, V] =
     encoder(patches(document))
 
-  def predict(document: Tensor2[Patch, Embedding, V], taken: Record[Node]): Scores[V] =
+  def predict(document: Tensor2[Patch, Embedding, V], taken: Record[Node, Edge]): Scores[V] =
     val nodes = taken.nodeClass.shape.extent(Axis[Node])
-    val (carried, answered) = decoder.forTraining(document, position(embed(taken)), predictionEmbeddings(nodes))
-    // What a prediction slot answers with is a node, so what it became is read back as one.
+    val edges = taken.edgeClass.shape.extent(Axis[Edge])
+    val (carriedNodes, answeredNodes) =
+      nodeDecoder.forTraining(document, nodePosition(embedNodes(taken.nodes)), nodePredictions(nodes))
+    val (carriedEdges, answeredEdges) =
+      edgeDecoder.forTraining(document, carriedNodes, holdsNode(taken.nodes), edgePosition(embedEdges(taken.edges)), edgePredictions(edges))
     Scores(
-      remainingPredictions = scorer(answered.relabel(Axis[RecordDecoder.Prediction] -> Axis[Node])),
-      takenNodes = scorer(carried)
+      // What a prediction slot answers with is a node, or a relationship, so what it became is
+      // read back as one.
+      nodes = NodeScores(
+        remaining = nodeScorer(answeredNodes.relabel(Axis[NodeDecoder.Prediction] -> Axis[Node])),
+        taken = nodeScorer(carriedNodes)
+      ),
+      edges = EdgeScores(
+        remaining = edgeScorer(answeredEdges.relabel(Axis[EdgeDecoder.Prediction] -> Axis[Edge])),
+        taken = edgeScorer(carriedEdges)
+      )
     )
 
-  /** The record the document holds: every remaining node predicted after the ones taken before it,
-    * up to `slots` of them or to the node the model ends the record with.
+  /** The record the document holds: the nodes it draws, and then the relationships between them.
     *
     * Nothing but the encoded document goes in, and every step reads back only what the model
     * itself has taken, so no target record can reach it here.
     */
-  def predictRemainingNodes(document: Tensor2[Patch, Embedding, V], slots: AxisExtent[Node]): Record[Node] =
-    @tailrec def untilRecordEnds(taken: Record[Node]): Record[Node] =
+  def predictRecord(document: Tensor2[Patch, Embedding, V], nodeSlots: AxisExtent[Node], edgeSlots: AxisExtent[Edge]): Record[Node, Edge] =
+    val nodes = predictRemainingNodes(document, nodeSlots)
+    Record(nodes, predictRemainingEdges(document, carried(document, nodes), holdsNode(nodes), edgeSlots))
+
+  /** Every node the document draws, predicted after the ones taken before it, up to `slots` of
+    * them or to the node the model ends them with — which is not taken, so what comes back holds
+    * nothing but nodes.
+    */
+  def predictRemainingNodes(document: Tensor2[Patch, Embedding, V], slots: AxisExtent[Node]): RecordNodes[Node] =
+    @tailrec def untilNodesEnd(taken: RecordNodes[Node]): RecordNodes[Node] =
       val at = taken.nodeClass.shape(Axis[Node])
       if at == slots.size then taken
       else
         val next = nextRemainingNode(document, taken, at)
         if next.nodeClass.toArray.head == NodeClass.NoNode.id then taken
-        else untilRecordEnds(joined(taken, next))
-    untilRecordEnds(noNodes)
+        else untilNodesEnd(joined(taken, next))
+    untilNodesEnd(noNodes(Axis[Node] -> 0))
+
+  /** Every relationship between those nodes, predicted the same way. */
+  def predictRemainingEdges(
+      document: Tensor2[Patch, Embedding, V],
+      nodes: Tensor2[Node, Embedding, V],
+      holdsNode: Tensor1[Node, Bool],
+      slots: AxisExtent[Edge]
+  ): RecordEdges[Edge] =
+    @tailrec def untilEdgesEnd(taken: RecordEdges[Edge]): RecordEdges[Edge] =
+      val at = taken.edgeClass.shape(Axis[Edge])
+      if at == slots.size then taken
+      else
+        val next = nextRemainingEdge(document, nodes, holdsNode, taken, at)
+        if next.edgeClass.toArray.head == EdgeClass.NoEdge.id then taken
+        else untilEdgesEnd(joined(taken, next))
+    untilEdgesEnd(noEdges(Axis[Edge] -> 0))
 
   /** The node the model answers slot `at` with, having taken the nodes before it. */
-  private def nextRemainingNode(document: Tensor2[Patch, Embedding, V], taken: Record[Node], at: Int): Record[Node] =
-    val context = concatenate(embed(taken), params.predictionToken.prependAxis(Axis[Node]), Axis[Node])
-    val placed = position.injectToPrefix(context)
-    val answered = decoder.forTranscription(document, placed.slice(Axis[Node].at(0 until at)), placed.slice(Axis[Node].at(at)))
-    scorer.decide(scorer(answered.prependAxis(Axis[Node])))
+  private def nextRemainingNode(document: Tensor2[Patch, Embedding, V], taken: RecordNodes[Node], at: Int): RecordNodes[Node] =
+    val context = concatenate(embedNodes(taken), params.nodes.token.prependAxis(Axis[Node]), Axis[Node])
+    val placed = nodePosition.injectToPrefix(context)
+    val (_, answered) = nodeDecoder.forTranscription(document, placed.slice(Axis[Node].at(0 until at)), placed.slice(Axis[Node].at(at)))
+    nodeScorer.decide(nodeScorer(answered.prependAxis(Axis[Node])))
 
-  /** A record with nothing taken in it yet, which is where transcription starts. */
-  private def noNodes: Record[Node] =
-    val none = Axis[Node] -> 0
-    Record(
-      nodeClass = Tensor1(none, VType[Int32]).fill(0),
-      xs = Tensor2(none, Axis[NodePoint] -> NodeClass.maxPoints, VType[Float32]).fill(0f),
-      ys = Tensor2(none, Axis[NodePoint] -> NodeClass.maxPoints, VType[Float32]).fill(0f),
-      links = Tensor2(none, Axis[NodeLink] -> NodeClass.maxLinks, VType[Int32]).fill(0)
+  /** The relationship the model answers slot `at` with, having taken the ones before it. */
+  private def nextRemainingEdge(
+      document: Tensor2[Patch, Embedding, V],
+      nodes: Tensor2[Node, Embedding, V],
+      holdsNode: Tensor1[Node, Bool],
+      taken: RecordEdges[Edge],
+      at: Int
+  ): RecordEdges[Edge] =
+    val context = concatenate(embedEdges(taken), params.edges.token.prependAxis(Axis[Edge]), Axis[Edge])
+    val placed = edgePosition.injectToPrefix(context)
+    val answered = edgeDecoder.forTranscription(document, nodes, holdsNode, placed.slice(Axis[Edge].at(0 until at)), placed.slice(Axis[Edge].at(at)))
+    edgeScorer.decide(edgeScorer(answered.prependAxis(Axis[Edge])))
+
+  /** The nodes as the node decoder carries them, which is what the relationships relate. The
+    * prediction the door answers with is thrown away: nothing is being predicted here.
+    */
+  private def carried(document: Tensor2[Patch, Embedding, V], nodes: RecordNodes[Node]): Tensor2[Node, Embedding, V] =
+    nodeDecoder.forTranscription(document, nodePosition.injectToPrefix(embedNodes(nodes)), params.nodes.token)._1
+
+  /** Which node slots hold a node: the positions past the record are there to make every record
+    * the same shape, and relate nothing.
+    */
+  private def holdsNode(nodes: RecordNodes[Node]): Tensor1[Node, Bool] =
+    val drawn = NodeClass.indicator(VType[Float32])(_.isDrawn).take(Axis[NodeClasses])(nodes.nodeClass)
+    drawn > Tensor.like(drawn).fill(0f)
+
+  /** The same `<P>` token at every node slot, told apart only by the positional encoding of the
+    * node it answers for and by what it may attend to.
+    */
+  private def nodePredictions(nodes: AxisExtent[Node]): Tensor2[NodeDecoder.Prediction, Embedding, V] =
+    val tokens = params.nodes.token.broadcastTo(Shape2(nodes, params.nodes.token.shape.extent(Axis[Embedding])))
+    nodePosition(tokens).relabel(Axis[Node] -> Axis[NodeDecoder.Prediction])
+
+  /** The same, at every relationship slot. */
+  private def edgePredictions(edges: AxisExtent[Edge]): Tensor2[EdgeDecoder.Prediction, Embedding, V] =
+    val tokens = params.edges.token.broadcastTo(Shape2(edges, params.edges.token.shape.extent(Axis[Embedding])))
+    edgePosition(tokens).relabel(Axis[Edge] -> Axis[EdgeDecoder.Prediction])
+
+  /** As many positions holding no node as asked for, which is where transcription starts and how
+    * it pads out what it did not reach.
+    */
+  private def noNodes(slots: AxisExtent[Node]): RecordNodes[Node] =
+    val points = Axis[NodePoint] -> NodeClass.maxPoints
+    RecordNodes(
+      nodeClass = Tensor1(slots, VType[Int32]).fill(NodeClass.NoNode.id),
+      xs = Tensor2(slots, points, VType[Float32]).fill(0f),
+      ys = Tensor2(slots, points, VType[Float32]).fill(0f)
     )
 
-  /** The record with one more node taken into the slot after its last. */
-  private def joined(taken: Record[Node], next: Record[Node]): Record[Node] =
-    Record(
+  private def noEdges(slots: AxisExtent[Edge]): RecordEdges[Edge] =
+    RecordEdges(
+      edgeClass = Tensor1(slots, VType[Int32]).fill(EdgeClass.NoEdge.id),
+      links = Tensor2(slots, Axis[NodeLink] -> EdgeClass.maxLinks, VType[Int32]).fill(0)
+    )
+
+  private def joined(taken: RecordNodes[Node], next: RecordNodes[Node]): RecordNodes[Node] =
+    RecordNodes(
       nodeClass = concatenate(taken.nodeClass, next.nodeClass, Axis[Node]),
       xs = concatenate(taken.xs, next.xs, Axis[Node]),
-      ys = concatenate(taken.ys, next.ys, Axis[Node]),
-      links = concatenate(taken.links, next.links, Axis[Node])
+      ys = concatenate(taken.ys, next.ys, Axis[Node])
     )
 
-  /** The same `<P>` token everywhere, told apart only by the positional encoding of the node it
-    * answers for and by what it may attend to.
-    */
-  private def predictionEmbeddings(nodes: AxisExtent[Node]): Tensor2[RecordDecoder.Prediction, Embedding, V] =
-    val tokens = params.predictionToken.broadcastTo(Shape2(nodes, params.predictionToken.shape.extent(Axis[Embedding])))
-    position(tokens).relabel(Axis[Node] -> Axis[RecordDecoder.Prediction])
+  private def joined(taken: RecordEdges[Edge], next: RecordEdges[Edge]): RecordEdges[Edge] =
+    RecordEdges(
+      edgeClass = concatenate(taken.edgeClass, next.edgeClass, Axis[Edge]),
+      links = concatenate(taken.links, next.links, Axis[Edge])
+    )
 
 object D2G:
 
-  /** What the model scores per slot: the remaining node its prediction embedding answers with,
-    * and the taken node its node embedding passed through — the answer and, beside it, what the
-    * auxiliary term of [[RemainingNodeLoss]] holds the carrying half to.
+  /** What the model scores per node slot: the remaining node its prediction embedding answers
+    * with, and the taken node its node embedding passed through.
     */
-  case class Scores[V](remainingPredictions: NodeLogits[V], takenNodes: NodeLogits[V])
+  case class NodeScores[V](remaining: NodeLogits[V], taken: NodeLogits[V])
+
+  /** The same per relationship slot. */
+  case class EdgeScores[V](remaining: EdgeLogits[V], taken: EdgeLogits[V])
+
+  /** What the model scores for a document: both halves of the record it would write down. */
+  case class Scores[V](nodes: NodeScores[V], edges: EdgeScores[V])
+
+  /** Everything the nodes of a record are written down with: what reads them, what embeds them,
+    * what scores them, the `<P>` token every prediction embedding starts as, and where each slot
+    * sits.
+    */
+  case class NodeParams[V](
+      decoder: NodeDecoder.Params[Embedding, Embedding, V],
+      embedder: NodeEmbedder.Params[V],
+      scorer: NodeScorer.Params[V],
+      token: Tensor1[Embedding, V],
+      positions: LearnedAbsolutePositionalInjector.Params[Node, Embedding, V]
+  )
+
+  object NodeParams:
+
+    given tensorTree: TensorTree[NodeParams[Float32]] = TensorTree.derived
+    given tree: TreeOf[NodeParams[Float32], Float32] = TreeOf.derived
+
+  /** The same for the relationships between them. */
+  case class EdgeParams[V](
+      decoder: EdgeDecoder.Params[Embedding, Embedding, V],
+      embedder: EdgeEmbedder.Params[V],
+      scorer: EdgeScorer.Params[V],
+      token: Tensor1[Embedding, V],
+      positions: LearnedAbsolutePositionalInjector.Params[Edge, Embedding, V]
+  )
+
+  object EdgeParams:
+
+    given tensorTree: TensorTree[EdgeParams[Float32]] = TensorTree.derived
+    given tree: TreeOf[EdgeParams[Float32], Float32] = TreeOf.derived
 
   case class Params[V](
       patchEmbedder: ImageToPatchEmbedder.Params[Width, Height, Channel, Embedding, V],
       encoder: DocumentEncoder.Params[Embedding, V],
-      decoder: RecordDecoder.Params[Embedding, Embedding, V],
-      embedder: NodeEmbedder.Params[V],
-      scorer: NodeScorer.Params[V],
-      predictionToken: Tensor1[Embedding, V],
-      positions: LearnedAbsolutePositionalInjector.Params[Node, Embedding, V]
+      nodes: NodeParams[V],
+      edges: EdgeParams[V]
   )
 
   object Params:
@@ -124,9 +244,10 @@ object D2G:
     given tensorTree: TensorTree[Params[Float32]] = TensorTree.derived
     given tree: TreeOf[Params[Float32], Float32] = TreeOf.derived
 
-    /** @param nodes  How many nodes of a record the model can hold. One more than the longest
-      *               record of the data, so that the last prediction embedding has somewhere to
-      *               say the record has ended.
+    /** @param nodes  How many nodes of a record the model can hold. One more than the most any
+      *               record of the data draws, so that the last prediction embedding has somewhere
+      *               to say the nodes have ended.
+      * @param edges  The same for the relationships between them.
       * @param canvas The width of the drawing, which is how many pixels a coordinate chooses from.
       */
     def init(
@@ -134,6 +255,7 @@ object D2G:
         numHeads: Int,
         embedding: Int,
         nodes: Int,
+        edges: Int,
         patchSize: Int,
         canvas: Int,
         key: Key
@@ -143,17 +265,26 @@ object D2G:
       val embeddingExtent = Axis[Embedding] -> embedding
       val embeddingMixedExtent = Axis[EmbeddingMixed] -> embedding * 4
       val partExtent = Axis[PartEmbedding] -> embedding / 8
-      val classExtent = Axis[dataset.NodeClasses] -> NodeClass.values.length
+      val nodeClassExtent = Axis[dataset.NodeClasses] -> NodeClass.values.length
+      val edgeClassExtent = Axis[dataset.EdgeClasses] -> EdgeClass.values.length
       val pixelExtent = Axis[Pixel] -> canvas
       val nodeExtent = Axis[Node] -> nodes
+      val edgeExtent = Axis[Edge] -> edges
       val linkedExtent = Axis[LinkedNode] -> nodes
       val pointExtent = Axis[NodePoint] -> NodeClass.maxPoints
-      val linkExtent = Axis[NodeLink] -> NodeClass.maxLinks
-      val parts = 1 + 2 * NodeClass.maxPoints + NodeClass.maxLinks
-      val nodePartExtent = Axis[NodePart |*| PartEmbedding] -> parts * partExtent.size
+      val linkExtent = Axis[NodeLink] -> EdgeClass.maxLinks
+      val nodePartExtent = Axis[NodePart |*| PartEmbedding] -> (1 + 2 * NodeClass.maxPoints) * partExtent.size
+      val edgePartExtent = Axis[EdgePart |*| PartEmbedding] -> (1 + EdgeClass.maxLinks) * partExtent.size
 
-      val (classKey, xKey, yKey, linkKey, projectionKey) = embedderKey.splitToTuple(5)
-      val (classHeadKey, xHeadKey, yHeadKey, linkHeadKey) = scorerKey.splitToTuple(4)
+      val (nodeDecoderKey, edgeDecoderKey) = decoderKey.splitToTuple(2)
+      val (nodeEmbedderKey, edgeEmbedderKey) = embedderKey.splitToTuple(2)
+      val (xKey, yKey, nodeClassKey, nodeProjectionKey) = nodeEmbedderKey.splitToTuple(4)
+      val (linkKey, edgeClassKey, edgeProjectionKey) = edgeEmbedderKey.splitToTuple(3)
+      val (nodeHeadKey, edgeHeadKey) = scorerKey.splitToTuple(2)
+      val (classHeadKey, xHeadKey, yHeadKey) = nodeHeadKey.splitToTuple(3)
+      val (edgeClassHeadKey, linkHeadKey) = edgeHeadKey.splitToTuple(2)
+      val (nodeTokenKey, edgeTokenKey) = tokenKey.splitToTuple(2)
+      val (nodePositionKey, edgePositionKey) = positionKey.splitToTuple(2)
 
       def perCarried[Carries: Label, In, Out](carries: AxisExtent[Carries], key: Key)(
           weights: Key => Tensor2[In, Out, Float32]
@@ -161,13 +292,13 @@ object D2G:
         stack(key.split(carries.size).map(weights).toSeq, carries.axis)
 
       def head[Carries: Label, Values: Label](carries: AxisExtent[Carries], values: AxisExtent[Values], key: Key) =
-        NodeScorer.Head(
+        ScorerHead(
           projection = perCarried(carries, key)(Init.xavierUniform(embeddingExtent, values, _)),
           bias = Tensor2(carries, values, VType[Float32]).fill(0f)
         )
 
       Params(
-        patchEmbedder = ImageToPatchEmbedder.Params.xavierUniform(
+        patchEmbedder = ImageToPatchEmbedder.Params.init(
           Axis[Width] -> patchSize,
           Axis[Height] -> patchSize,
           Axis[Channel] -> 1,
@@ -175,20 +306,34 @@ object D2G:
           patchKey
         ),
         encoder = DocumentEncoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingMixedExtent, encoderKey),
-        decoder = RecordDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, decoderKey),
-        embedder = NodeEmbedder.Params(
-          nodeClass = Init.xavierUniform(classExtent, partExtent, classKey),
-          xs = perCarried(pointExtent, xKey)(Init.xavierUniform(pixelExtent, partExtent, _)),
-          ys = perCarried(pointExtent, yKey)(Init.xavierUniform(pixelExtent, partExtent, _)),
-          links = perCarried(linkExtent, linkKey)(Init.xavierUniform(linkedExtent, partExtent, _)),
-          projection = AffineLayer.Params.init(nodePartExtent, embeddingExtent, projectionKey)
+        nodes = NodeParams(
+          decoder = NodeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, nodeDecoderKey),
+          embedder = NodeEmbedder.Params(
+            nodeClass = Init.xavierUniform(nodeClassExtent, partExtent, nodeClassKey),
+            xs = perCarried(pointExtent, xKey)(Init.xavierUniform(pixelExtent, partExtent, _)),
+            ys = perCarried(pointExtent, yKey)(Init.xavierUniform(pixelExtent, partExtent, _)),
+            projection = AffineLayer.Params.init(nodePartExtent, embeddingExtent, nodeProjectionKey)
+          ),
+          scorer = NodeScorer.Params(
+            nodeClass = AffineLayer.Params.init(embeddingExtent, nodeClassExtent, classHeadKey),
+            xs = head(pointExtent, pixelExtent, xHeadKey),
+            ys = head(pointExtent, pixelExtent, yHeadKey)
+          ),
+          token = Init.xavierUniformVector(embeddingExtent, nodeTokenKey),
+          positions = LearnedAbsolutePositionalInjector.Params.lecunNormal(nodeExtent, embeddingExtent, nodePositionKey)
         ),
-        scorer = NodeScorer.Params(
-          nodeClass = AffineLayer.Params.init(embeddingExtent, classExtent, classHeadKey),
-          xs = head(pointExtent, pixelExtent, xHeadKey),
-          ys = head(pointExtent, pixelExtent, yHeadKey),
-          links = head(linkExtent, linkedExtent, linkHeadKey)
-        ),
-        predictionToken = Init.xavierUniformVector(embeddingExtent, tokenKey),
-        positions = LearnedAbsolutePositionalInjector.Params.lecunNormal(nodeExtent, embeddingExtent, positionKey)
+        edges = EdgeParams(
+          decoder = EdgeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, edgeDecoderKey),
+          embedder = EdgeEmbedder.Params(
+            edgeClass = Init.xavierUniform(edgeClassExtent, partExtent, edgeClassKey),
+            links = perCarried(linkExtent, linkKey)(Init.xavierUniform(linkedExtent, partExtent, _)),
+            projection = AffineLayer.Params.init(edgePartExtent, embeddingExtent, edgeProjectionKey)
+          ),
+          scorer = EdgeScorer.Params(
+            edgeClass = AffineLayer.Params.init(embeddingExtent, edgeClassExtent, edgeClassHeadKey),
+            links = head(linkExtent, linkedExtent, linkHeadKey)
+          ),
+          token = Init.xavierUniformVector(embeddingExtent, edgeTokenKey),
+          positions = LearnedAbsolutePositionalInjector.Params.lecunNormal(edgeExtent, embeddingExtent, edgePositionKey)
+        )
       )

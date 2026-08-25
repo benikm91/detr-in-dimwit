@@ -1,4 +1,6 @@
 import dataset.Canvas
+import dataset.MaxEdges
+import dataset.MaxNodes
 import dataset.LShapeDataset
 import dataset.LShapeDataset.Split
 import dataset.Record
@@ -14,13 +16,13 @@ import dimwit.optimizer.AdamState
 import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
 
-/** How many nodes a record is laid out in.
-  *
-  * A drawing of this dataset has six lines, up to six annotations, six corners and up to six
-  * annotated lines, so twenty-four nodes at the most — plus somewhere for the last prediction
-  * embedding to say the record has ended.
+/** How many positions the nodes of a record are laid out in: one more than any drawing of this
+  * dataset draws, so that the last prediction embedding has somewhere to say they have ended.
   */
-val RecordNodes = 25
+val NodeSlots = MaxNodes + 1
+
+/** The same for the relationships between them. */
+val EdgeSlots = MaxEdges + 1
 
 /** Where a training run of this model writes its checkpoints. */
 val D2GCheckpointRoot = "out/d2g"
@@ -31,6 +33,7 @@ private trait Batch derives Label
 case class D2GTrainState(
     params: D2G.Params[Float32],
     optimizerState: AdamState[D2G.Params[Float32]],
+    linearization: Key,
     lastCost: Tensor0[Float32]
 )
 
@@ -51,9 +54,9 @@ def d2gTrain(): Unit =
   val maxGradientNorm = 0.1f
   val key = Random.Key(0)
 
-  val nodes = Axis[Node] -> RecordNodes
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node])(Split.Train)
-  var linearizeKey = Random.Key(42)
+  val nodes = Axis[Node] -> NodeSlots
+  val edges = Axis[Edge] -> EdgeSlots
+  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
   val batches = data.batches(Axis[Batch] -> batchSize)
 
   val optimizer = AdamW(Adam(learningRate), weightDecay)
@@ -62,44 +65,44 @@ def d2gTrain(): Unit =
     numLayers = 3,
     numHeads = 4,
     embedding = 128,
-    nodes = RecordNodes,
+    nodes = NodeSlots,
+    edges = EdgeSlots,
     patchSize = 10,
     canvas = Canvas,
     key = key
   )
 
-  val loss = RemainingNodeLoss(VType[Float32], Canvas)
+  val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas)
+  val edgeLoss = RemainingEdgeLoss(VType[Float32])
 
   def cost(
       images: Tensor4[Batch, Width, Height, Channel, Float32],
-      records: RecordBatch[Batch, Node]
+      records: RecordBatch[Batch, Node, Edge]
   )(params: D2G.Params[Float32]): Tensor0[Float32] =
     val model = D2G(params)
-    zipvmap(Axis[Batch])(images, records.nodeClass, records.xs, records.ys, records.links):
-      case (image, nodeClass, xs, ys, links) =>
-        val target = Record(nodeClass, xs, ys, links)
-        loss(model(image, target), target)
+    zipvmap(Axis[Batch])(images, records.nodeClass, records.xs, records.ys, records.edgeClass, records.links):
+      case (image, nodeClass, xs, ys, edgeClass, links) =>
+        val target = Record(nodeClass, xs, ys, edgeClass, links)
+        val scored = model(image, target)
+        nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target.edges)
     .mean
 
   def gradientStep(
       images: Tensor4[Batch, Width, Height, Channel, Float32],
-      records: RecordBatch[Batch, Node],
-      linearization: Key,
+      records: RecordBatch[Batch, Node, Edge],
       state: D2GTrainState
   ) =
-    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, records.permuted(linearization, nodes)))(state.params)
+    val (nextLinearization, forThisStep) = state.linearization.split2()
+    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, records.permuted(forThisStep, nodes, edges)))(state.params)
     val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(maxGradientNorm), state.params, state.optimizerState)
-    D2GTrainState(params, optimizerState, lastCost)
+    D2GTrainState(params, optimizerState, nextLinearization, lastCost)
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
   val checkpointer = TensorTreeCheckpointer.newIn(D2GCheckpointRoot)
   val monitor = Monitor.default[D2GTrainState](batchSize = batchSize, lossLens = _.lastCost.item)
   batches
-    .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):
-      case (state, batch) =>
-        val (next, forThisStep) = linearizeKey.split2()
-        linearizeKey = next
-        jitGradientStep(batch.images, batch.target, forThisStep, state)
+    .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), Random.Key(42), Tensor0(-1f))):
+      case (state, batch) => jitGradientStep(batch.images, batch.target, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))
     .tapEvery(1_000):

@@ -45,7 +45,7 @@ def detrTrain(): Unit =
     */
   val maxGradientNorm = 0.1f
 
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Train)
+  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
   val batches = data.objectBatches(Axis[Batch] -> batchSize)
 
   val optimizer = AdamW(

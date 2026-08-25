@@ -27,8 +27,8 @@ def d2gPlot(): Unit =
   val checkpoints = TensorTreeCheckpointer.latestIn(D2GCheckpointRoot).getOrElse(sys.error(s"no training run in $D2GCheckpointRoot"))
   println(s"reading ${checkpoints.rootPath}")
   val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
-  val nodes = Axis[Node] -> RecordNodes
-  val transcriber = Transcriber(model, nodes)
+  val (nodes, edges) = (Axis[Node] -> NodeSlots, Axis[Edge] -> EdgeSlots)
+  val transcriber = Transcriber(model, nodes, edges)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
     val data = open(split)
     data
@@ -41,7 +41,7 @@ def d2gPlot(): Unit =
         val transcribed = transcriber(sample.image)
         println(s"${split.fileName} $index target:      ${describe(target)}")
         println(s"${split.fileName} $index transcribed: ${describe(transcribed)}")
-        def drawn(record: RecordGraph) = Objects.of(record.record(nodes)).detection
+        def drawn(record: RecordGraph) = Objects.of(record.record(nodes, edges)).detection
         Seq(
           plots.imagePlot(document, _.title := s"${split.fileName} $index"),
           plots.imagePlot(Outlines(document, drawn(target)), _.title := s"${split.fileName} $index — record"),
@@ -64,8 +64,7 @@ def d2gEval(): Unit =
   val checkpoints = TensorTreeCheckpointer.latestIn(D2GCheckpointRoot).getOrElse(sys.error(s"no training run in $D2GCheckpointRoot"))
   println(s"reading ${checkpoints.rootPath}")
   val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
-  val nodes = Axis[Node] -> RecordNodes
-  val transcriber = Transcriber(model, nodes)
+  val transcriber = Transcriber(model, Axis[Node] -> NodeSlots, Axis[Edge] -> EdgeSlots)
   val data = open(Split.Validation)
 
   val drawings = data.samples.map(sample => (RecordGraph.of(sample.target), transcriber(sample.image))).toSeq
@@ -79,23 +78,23 @@ def d2gEval(): Unit =
     report(at(tolerance), "relationships transcribed", scored.map(_.relationshipsFound).sum, scored.map(_.relationships).sum)
     report(at(tolerance), "records exactly right", scored.count(_.isExact), scored.length)
 
-/** Transcribes a document, one remaining node at a time.
+/** Transcribes a document: its nodes one at a time, then the relationships between them.
   *
-  * The document is encoded once and read at every step; the decoder re-reads the nodes taken so
+  * The document is encoded once and read at every step; each stage re-reads what it has taken so
   * far every time, since there is no KV cache. That makes every step cost more than it needs to,
   * which is of no consequence here: what matters is that the only thing handed to the model is
   * the document, so no target can leak into what is scored.
   */
-class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node])
+class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExtent[Edge])
     extends (Tensor3[Width, Height, Channel, Float32] => RecordGraph):
 
   private val encode = jit(model.encode)
 
   override def apply(document: Tensor3[Width, Height, Channel, Float32]): RecordGraph =
-    RecordGraph.of(model.predictRemainingNodes(encode(document), nodes))
+    RecordGraph.of(model.predictRecord(encode(document), nodes, edges))
 
 private def open(split: Split) =
-  LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node])(split)
+  LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
 
 private def describe(record: RecordGraph): String =
   val nodes = record.nodes.map(node => s"${node.nodeClass}(${node.points.map(point => f"${point.x}%.3f, ${point.y}%.3f").mkString("; ")})")

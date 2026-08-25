@@ -7,17 +7,19 @@ import scala.util.Random
 /** Axis over the [[NodeClass]] values a node of a record is classified into. */
 trait NodeClasses derives Label
 
+/** Axis over the [[EdgeClass]] values a relationship of a record is classified into. */
+trait EdgeClasses derives Label
+
 /** Axis of the points a node is placed by: a line has two, an annotation one. */
 trait NodePoint derives Label
 
 /** Axis of the nodes a relationship links: its subject, then its object. */
 trait NodeLink derives Label
 
-/** What a node of a record is.
+/** What a drawn node of a record is.
   *
-  * [[Line]] and [[Annotation]] are drawn; [[Connected]] and [[Annotates]] are the relationships
-  * between them, which a record holds as nodes of their own so that a graph is a set. [[NoNode]]
-  * marks a position the record does not reach, which is also where a transcription of it stops.
+  * [[NoNode]] marks a position the record does not reach, which is also where a transcription of
+  * its nodes stops.
   */
 enum NodeClass(val id: Int, val pointNames: Seq[String]):
 
@@ -25,19 +27,9 @@ enum NodeClass(val id: Int, val pointNames: Seq[String]):
   case Line extends NodeClass(1, Seq("start", "end"))
   case Annotation extends NodeClass(2, Seq("centre"))
 
-  /** Two lines meeting in a corner, held once with the two it links in ascending order. */
-  case Connected extends NodeClass(3, Seq.empty)
-  case Annotates extends NodeClass(4, Seq.empty)
-
   def numPoints: Int = pointNames.length
 
-  def numLinks: Int = if isRelationship then 2 else 0
-
-  def isDrawn: Boolean = this == Line || this == Annotation
-
-  def isRelationship: Boolean = this == Connected || this == Annotates
-
-  def isSymmetric: Boolean = this == Connected
+  def isDrawn: Boolean = this != NodeClass.NoNode
 
 object NodeClass:
 
@@ -46,132 +38,196 @@ object NodeClass:
 
   val maxPoints: Int = values.map(_.numPoints).max
 
-  val maxLinks: Int = values.map(_.numLinks).max
-
   def indicator[V: IsFloating](vtype: VType[V])(holds: NodeClass => Boolean): Tensor1[NodeClasses, V] =
     Tensor1(Axis[NodeClasses], vtype).fromArray(values.map(nodeClass => if holds(nodeClass) then 1f else 0f))
 
   /** Which points a class places itself by, so that a node is only measured on what it carries. */
   def usedPoints[V: IsFloating](vtype: VType[V]): Tensor2[NodeClasses, NodePoint, V] =
-    used(vtype, maxPoints, _.numPoints)
+    Tensor2(Axis[NodeClasses], Axis[NodePoint], vtype).fromArray(
+      values.map(nodeClass => Array.tabulate(maxPoints)(point => if point < nodeClass.numPoints then 1f else 0f))
+    )
+
+/** What a relationship of a record is, which a record holds as a node of its own so that a graph
+  * is a set.
+  *
+  * [[NoEdge]] marks a position the record does not reach, which is also where a transcription of
+  * its relationships stops.
+  */
+enum EdgeClass(val id: Int, val isSymmetric: Boolean):
+
+  case NoEdge extends EdgeClass(0, false)
+
+  /** Two lines meeting in a corner, held once with the two it links in ascending order. */
+  case Connected extends EdgeClass(1, true)
+
+  case Annotates extends EdgeClass(2, false)
+
+  def relates: Boolean = this != EdgeClass.NoEdge
+
+  def numLinks: Int = if relates then 2 else 0
+
+object EdgeClass:
+
+  def fromId(id: Int): EdgeClass =
+    values.find(_.id == id).getOrElse(throw IllegalArgumentException(s"unknown edge class id: $id"))
+
+  val maxLinks: Int = values.map(_.numLinks).max
+
+  def indicator[V: IsFloating](vtype: VType[V])(holds: EdgeClass => Boolean): Tensor1[EdgeClasses, V] =
+    Tensor1(Axis[EdgeClasses], vtype).fromArray(values.map(edgeClass => if holds(edgeClass) then 1f else 0f))
 
   /** Which nodes a class links, which is both of them for a relationship and neither otherwise. */
-  def usedLinks[V: IsFloating](vtype: VType[V]): Tensor2[NodeClasses, NodeLink, V] =
-    used(vtype, maxLinks, _.numLinks)
-
-  private def used[Carried: Label, V: IsFloating](vtype: VType[V], width: Int, carries: NodeClass => Int): Tensor2[NodeClasses, Carried, V] =
-    Tensor2(Axis[NodeClasses], Axis[Carried], vtype).fromArray(
-      values.map(nodeClass => Array.tabulate(width)(carried => if carried < carries(nodeClass) then 1f else 0f))
+  def usedLinks[V: IsFloating](vtype: VType[V]): Tensor2[EdgeClasses, NodeLink, V] =
+    Tensor2(Axis[EdgeClasses], Axis[NodeLink], vtype).fromArray(
+      values.map(edgeClass => Array.tabulate(maxLinks)(link => if link < edgeClass.numLinks then 1f else 0f))
     )
 
 /** A point of the canvas, normalized to it. */
 final case class Point(x: Float, y: Float)
 
-/** What a drawing encodes: its nodes, and the relationships between them as nodes of their own.
+/** The nodes a drawing draws, laid out along the `Node` axis.
   *
-  * `xs` and `ys` place a node on the canvas; `links` name the nodes a relationship relates, by
-  * their position along the `Node` axis. A node leaves at zero whatever its class does not carry —
-  * a relationship has no points, a drawn node no links.
+  * `xs` and `ys` place a node on the canvas, as many points as its class carries. The positions a
+  * record does not reach hold [[NodeClass.NoNode]].
   */
-final case class Record[Node](
+final case class RecordNodes[Node](
     nodeClass: Tensor1[Node, Int32],
     xs: Tensor2[Node, NodePoint, Float32],
-    ys: Tensor2[Node, NodePoint, Float32],
-    links: Tensor2[Node, NodeLink, Int32]
+    ys: Tensor2[Node, NodePoint, Float32]
 )
 
+/** The relationships between those nodes, laid out along the `Edge` axis.
+  *
+  * `links` name the nodes a relationship relates, by their position along the `Node` axis. The
+  * positions a record does not reach hold [[EdgeClass.NoEdge]] and link nothing.
+  */
+final case class RecordEdges[Edge](
+    edgeClass: Tensor1[Edge, Int32],
+    links: Tensor2[Edge, NodeLink, Int32]
+)
+
+/** What a drawing encodes: the nodes it draws, and the relationships between them. */
+final case class Record[Node, Edge](nodes: RecordNodes[Node], edges: RecordEdges[Edge]):
+
+  export nodes.{nodeClass, xs, ys}
+  export edges.{edgeClass, links}
+
+object Record:
+
+  def apply[Node, Edge](
+      nodeClass: Tensor1[Node, Int32],
+      xs: Tensor2[Node, NodePoint, Float32],
+      ys: Tensor2[Node, NodePoint, Float32],
+      edgeClass: Tensor1[Edge, Int32],
+      links: Tensor2[Edge, NodeLink, Int32]
+  ): Record[Node, Edge] = Record(RecordNodes(nodeClass, xs, ys), RecordEdges(edgeClass, links))
+
 /** [[Record]] for a batch of drawings along the axis `S`. */
-final case class RecordBatch[S, Node](
+final case class RecordBatch[S, Node, Edge](
     nodeClass: Tensor2[S, Node, Int32],
     xs: Tensor3[S, Node, NodePoint, Float32],
     ys: Tensor3[S, Node, NodePoint, Float32],
-    links: Tensor3[S, Node, NodeLink, Int32]
+    edgeClass: Tensor2[S, Edge, Int32],
+    links: Tensor3[S, Edge, NodeLink, Int32]
 ):
 
-  /** The same records, laid out again in `slots` positions with their nodes in a fresh random
-    * order: the drawn nodes first, the relationships between them after them, and the positions
-    * the record does not reach last.
+  /** The same records, laid out again in `nodeSlots` and `edgeSlots` positions with their nodes
+    * and their relationships each in a fresh random order, and the positions they do not reach
+    * last.
     *
     * A record is a set, so the order it is written down in is the model's to be indifferent to,
     * which is what drawing a new one every step is for. This one is drawn on the device — nothing
     * is read back to lay it out again.
     */
-  def permuted(key: Key, slots: AxisExtent[Node])(using Label[S], Label[Node]): RecordBatch[S, Node] =
+  def permuted(key: Key, nodeSlots: AxisExtent[Node], edgeSlots: AxisExtent[Edge])(using Label[S], Label[Node], Label[Edge]): RecordBatch[S, Node, Edge] =
     val drawings = nodeClass.shape.extent(Axis[S])
-    val padded = paddedTo(slots, drawings)
-    val keys = key.splitToTensor(drawings)
-    val (permutedClasses, permutedXs, permutedYs, permutedLinks) =
-      zipvmap(Axis[S])(padded.nodeClass, padded.xs, padded.ys, padded.links, keys):
-        case (nodeClass, xs, ys, links, key) =>
-          val permuted = RecordBatch.permutedRecord(Record(nodeClass, xs, ys, links), key.item)
-          (permuted.nodeClass, permuted.xs, permuted.ys, permuted.links)
-    RecordBatch(permutedClasses, permutedXs, permutedYs, permutedLinks)
+    val padded = paddedTo(nodeSlots, edgeSlots, drawings)
+    val (forNodes, forEdges) = key.split2()
+    val (nodeKeys, edgeKeys) = (forNodes.splitToTensor(drawings), forEdges.splitToTensor(drawings))
+    val (classes, permutedXs, permutedYs, nodeOrders) =
+      zipvmap(Axis[S])(padded.nodeClass, padded.xs, padded.ys, nodeKeys):
+        case (nodeClass, xs, ys, key) => RecordBatch.permutedNodes(nodeClass, xs, ys, key.item)
+    val (edgeClasses, permutedLinks) =
+      zipvmap(Axis[S])(padded.edgeClass, padded.links, nodeOrders, edgeKeys):
+        case (edgeClass, links, nodeOrder, key) => RecordBatch.permutedEdges(edgeClass, links, nodeOrder, key.item)
+    RecordBatch(classes, permutedXs, permutedYs, edgeClasses, permutedLinks)
 
-  /** The same records in as many positions, the ones they do not reach holding no node. */
-  private def paddedTo(slots: AxisExtent[Node], drawings: AxisExtent[S])(using Label[S], Label[Node]): RecordBatch[S, Node] =
-    val held = nodeClass.shape(Axis[Node])
-    require(held <= slots.size, s"records of $held positions do not fit in ${slots.size}")
-    val empty = Axis[Node] -> (slots.size - held)
+  /** The same records in as many positions, the ones they do not reach holding nothing. */
+  private def paddedTo(nodeSlots: AxisExtent[Node], edgeSlots: AxisExtent[Edge], drawings: AxisExtent[S])(using Label[S], Label[Node], Label[Edge]): RecordBatch[S, Node, Edge] =
+    val (heldNodes, heldEdges) = (nodeClass.shape(Axis[Node]), edgeClass.shape(Axis[Edge]))
+    require(heldNodes <= nodeSlots.size, s"records of $heldNodes nodes do not fit in ${nodeSlots.size}")
+    require(heldEdges <= edgeSlots.size, s"records of $heldEdges relationships do not fit in ${edgeSlots.size}")
+    val (emptyNodes, emptyEdges) = (Axis[Node] -> (nodeSlots.size - heldNodes), Axis[Edge] -> (edgeSlots.size - heldEdges))
+    val points = Axis[NodePoint] -> NodeClass.maxPoints
     RecordBatch(
-      nodeClass = concatenate(nodeClass, Tensor(Shape(drawings, empty), VType[Int32]).fill(NodeClass.NoNode.id), Axis[Node]),
-      xs = concatenate(xs, Tensor(Shape(drawings, empty, points), VType[Float32]).fill(0f), Axis[Node]),
-      ys = concatenate(ys, Tensor(Shape(drawings, empty, points), VType[Float32]).fill(0f), Axis[Node]),
-      links = concatenate(links, Tensor(Shape(drawings, empty, ends), VType[Int32]).fill(0), Axis[Node])
+      nodeClass = concatenate(nodeClass, Tensor(Shape(drawings, emptyNodes), VType[Int32]).fill(NodeClass.NoNode.id), Axis[Node]),
+      xs = concatenate(xs, Tensor(Shape(drawings, emptyNodes, points), VType[Float32]).fill(0f), Axis[Node]),
+      ys = concatenate(ys, Tensor(Shape(drawings, emptyNodes, points), VType[Float32]).fill(0f), Axis[Node]),
+      edgeClass = concatenate(edgeClass, Tensor(Shape(drawings, emptyEdges), VType[Int32]).fill(EdgeClass.NoEdge.id), Axis[Edge]),
+      links = concatenate(links, Tensor(Shape(drawings, emptyEdges, Axis[NodeLink] -> EdgeClass.maxLinks), VType[Int32]).fill(0), Axis[Edge])
     )
-
-  private def points = Axis[NodePoint] -> NodeClass.maxPoints
-
-  private def ends = Axis[NodeLink] -> NodeClass.maxLinks
 
 object RecordBatch:
 
-  /** One record in a fresh random order, with the drawn nodes kept ahead of the relationships and
-    * the positions it does not reach after both. A relationship names the nodes it links by their
-    * position, so the names are read in the new order too.
+  /** One record's nodes in a fresh random order, with the positions it does not reach last, and
+    * the order they were read in — which is what its relationships name them by.
     */
-  private def permutedRecord[Node: Label](record: Record[Node], key: Key): Record[Node] =
-    val slots = record.nodeClass.shape.extent(Axis[Node])
-    val shuffle = dimwit.Random.permutation(slots)(key)
-    def classIs(holds: NodeClass => Boolean)(of: Tensor1[Node, Int32]) =
-      NodeClass.indicator(VType[Float32])(holds).take(Axis[NodeClasses])(of)
+  private def permutedNodes[Node: Label](
+      nodeClass: Tensor1[Node, Int32],
+      xs: Tensor2[Node, NodePoint, Float32],
+      ys: Tensor2[Node, NodePoint, Float32],
+      key: Key
+  ): (Tensor1[Node, Int32], Tensor2[Node, NodePoint, Float32], Tensor2[Node, NodePoint, Float32], Tensor1[Node, Int32]) =
+    val order = heldFirst(NodeClass.indicator(VType[Float32])(_.isDrawn).take(Axis[NodeClasses])(nodeClass), key)
+    (nodeClass.take(Axis[Node])(order), xs.take(Axis[Node])(order), ys.take(Axis[Node])(order), order)
 
-    val isRelationship = classIs(_.isRelationship)(record.nodeClass)
-    val isEmpty = classIs(_ == NodeClass.NoNode)(record.nodeClass)
-    val block = isRelationship + isEmpty + isEmpty // drawn nodes 0, relationships 1, empty positions 2
-    val within = shuffle.asFloat(VType[Float32])
-    val order = (block * Tensor.like(block).fill(slots.size.toFloat) + within).argsort(Axis[Node])
-    val nodeClass = record.nodeClass.take(Axis[Node])(order)
+  /** One record's relationships in a fresh random order, naming the nodes by where `nodeOrder`
+    * has just put them.
+    */
+  private def permutedEdges[Node: Label, Edge: Label](
+      edgeClass: Tensor1[Edge, Int32],
+      links: Tensor2[Edge, NodeLink, Int32],
+      nodeOrder: Tensor1[Node, Int32],
+      key: Key
+  ): (Tensor1[Edge, Int32], Tensor2[Edge, NodeLink, Int32]) =
+    val order = heldFirst(EdgeClass.indicator(VType[Float32])(_.relates).take(Axis[EdgeClasses])(edgeClass), key)
+    val classes = edgeClass.take(Axis[Edge])(order)
+    // A relationship names the nodes it links by their position, and a node that sat at `at`
+    // before sits at `renamed(at)` now.
+    val renamed = nodeOrder.argsort(Axis[Node])
+    val moved = links.take(Axis[Edge])(order).vmap(Axis[NodeLink])(renamed.take(Axis[Node])(_))
+    val ascending = stack(Seq(moved.min(Axis[NodeLink]), moved.max(Axis[NodeLink])), newAxis = Axis[NodeLink], afterAxis = Axis[Edge])
+    def is(holds: EdgeClass => Boolean) =
+      val marked = EdgeClass.indicator(VType[Float32])(holds).take(Axis[EdgeClasses])(classes)
+      marked > Tensor.like(marked).fill(0f)
+    // A symmetric relationship names the two it links in ascending order, and a position holding
+    // no relationship names position zero.
+    (classes, where_!(is(_.relates), where_!(is(_.isSymmetric), ascending, moved), Tensor.like(moved).fill(0)))
 
-    // A relationship names the nodes it links by their position, and a position that held the node
-    // `at` before holds it at `inverseOrder(at)` now.
-    val inverseOrder = order.argsort(Axis[Node])
-    val moved = record.links.take(Axis[Node])(order).vmap(Axis[NodeLink])(inverseOrder.take(Axis[Node])(_))
-    val ascending = stack(Seq(moved.min(Axis[NodeLink]), moved.max(Axis[NodeLink])), newAxis = Axis[NodeLink], afterAxis = Axis[Node])
-    def is(holds: NodeClass => Boolean) = classIs(holds)(nodeClass) > Tensor.like(block).fill(0f)
-    Record(
-      nodeClass = nodeClass,
-      xs = record.xs.take(Axis[Node])(order),
-      ys = record.ys.take(Axis[Node])(order),
-      // Two things [[RecordGraph.placed]] holds that a new order undoes: a symmetric relationship
-      // names the two it links in ascending order, and a node that links nothing links position 0.
-      links = where_!(is(_.isRelationship), where_!(is(_.isSymmetric), ascending, moved), Tensor.like(moved).fill(0))
-    )
+  /** The order that reads the positions `holds` marks first, shuffled, and the empty ones after
+    * them.
+    */
+  private def heldFirst[L: Label](holds: Tensor1[L, Float32], key: Key): Tensor1[L, Int32] =
+    val slots = holds.shape.extent(Axis[L])
+    val shuffle = dimwit.Random.permutation(slots)(key).asFloat(VType[Float32])
+    ((Tensor.like(holds).fill(1f) - holds) * Tensor.like(holds).fill(slots.size.toFloat) + shuffle).argsort(Axis[L])
 
-  /** A batch of records laid out in order, uploaded in four tensors rather than four per drawing. */
-  def of[S: Label, Node: Label](records: Seq[RecordGraph], batch: Axis[S], nodes: AxisExtent[Node]): RecordBatch[S, Node] =
-    val placed = records.map(_.placed(nodes.size))
+  /** A batch of records laid out in order, uploaded in five tensors rather than five per drawing. */
+  def of[S: Label, Node: Label, Edge: Label](records: Seq[RecordGraph], batch: Axis[S], nodes: AxisExtent[Node], edges: AxisExtent[Edge]): RecordBatch[S, Node, Edge] =
+    val placed = records.map(_.placed(nodes.size, edges.size))
     RecordBatch(
       nodeClass = Tensor2(batch, nodes.axis, VType[Int32]).fromArray(placed.map(_.nodeClass).toArray),
       xs = Tensor3(batch, nodes.axis, Axis[NodePoint], VType[Float32]).fromArray(placed.map(_.xs).toArray),
       ys = Tensor3(batch, nodes.axis, Axis[NodePoint], VType[Float32]).fromArray(placed.map(_.ys).toArray),
-      links = Tensor3(batch, nodes.axis, Axis[NodeLink], VType[Int32]).fromArray(placed.map(_.links).toArray)
+      edgeClass = Tensor2(batch, edges.axis, VType[Int32]).fromArray(placed.map(_.edgeClass).toArray),
+      links = Tensor3(batch, edges.axis, Axis[NodeLink], VType[Int32]).fromArray(placed.map(_.links).toArray)
     )
 
 /** One drawn node of a record. */
 final case class RecordNode(nodeClass: NodeClass, points: Seq[Point])
 
 /** One relationship of a record, by the index of the [[RecordNode]]s it links. */
-final case class RecordEdge(edgeClass: NodeClass, subject: Int, obj: Int)
+final case class RecordEdge(edgeClass: EdgeClass, subject: Int, obj: Int)
 
 /** A record with nothing in it in any particular order, which is what a record is.
   *
@@ -182,17 +238,18 @@ final case class RecordGraph(nodes: Seq[RecordNode], edges: Seq[RecordEdge]):
 
   def size: Int = nodes.length + edges.length
 
-  /** The record laid out along the node axis: the nodes in their order, then the relationships. */
-  def record[Node: Label](nodes: AxisExtent[Node]): Record[Node] =
-    val laidOut = placed(nodes.size)
+  /** The record laid out along the node and the edge axis, each in its own order. */
+  def record[Node: Label, Edge: Label](nodes: AxisExtent[Node], edges: AxisExtent[Edge]): Record[Node, Edge] =
+    val laidOut = placed(nodes.size, edges.size)
     Record(
       nodeClass = Tensor1(nodes.axis, VType[Int32]).fromArray(laidOut.nodeClass),
       xs = Tensor2(nodes.axis, Axis[NodePoint], VType[Float32]).fromArray(laidOut.xs),
       ys = Tensor2(nodes.axis, Axis[NodePoint], VType[Float32]).fromArray(laidOut.ys),
-      links = Tensor2(nodes.axis, Axis[NodeLink], VType[Int32]).fromArray(laidOut.links)
+      edgeClass = Tensor1(edges.axis, VType[Int32]).fromArray(laidOut.edgeClass),
+      links = Tensor2(edges.axis, Axis[NodeLink], VType[Int32]).fromArray(laidOut.links)
     )
 
-  /** The same record with its nodes and relationships in a random order. */
+  /** The same record with its nodes and its relationships in a random order. */
   def permuted(random: Random): RecordGraph =
     val order = random.shuffle(nodes.indices.toVector)
     val movedTo = order.zipWithIndex.toMap
@@ -201,50 +258,61 @@ final case class RecordGraph(nodes: Seq[RecordNode], edges: Seq[RecordEdge]):
       edges = random.shuffle(edges).map(edge => RecordEdge(edge.edgeClass, movedTo(edge.subject), movedTo(edge.obj)))
     )
 
-  private[dataset] def placed(slots: Int): RecordGraph.Placement =
-    require(size <= slots, s"a record of $size nodes does not fit in $slots")
-    val inOrder = nodes.map(node => (node.nodeClass, node.points, Seq(0, 0))) ++ edges.map: edge =>
+  private[dataset] def placed(nodeSlots: Int, edgeSlots: Int): RecordGraph.Placement =
+    require(nodes.size <= nodeSlots, s"a record of ${nodes.size} nodes does not fit in $nodeSlots")
+    require(edges.size <= edgeSlots, s"a record of ${edges.size} relationships does not fit in $edgeSlots")
+    val related = edges.map: edge =>
       val ends = Seq(edge.subject, edge.obj)
-      (edge.edgeClass, Seq.empty[Point], if edge.edgeClass.isSymmetric then ends.sorted else ends)
+      (edge.edgeClass, if edge.edgeClass.isSymmetric then ends.sorted else ends)
     RecordGraph.Placement(
-      nodeClass = Array.tabulate(slots)(slot => inOrder.lift(slot).fold(NodeClass.NoNode)(_._1).id),
-      xs = Array.tabulate(slots, NodeClass.maxPoints)((slot, at) => inOrder.lift(slot).flatMap(_._2.lift(at)).fold(0f)(_.x)),
-      ys = Array.tabulate(slots, NodeClass.maxPoints)((slot, at) => inOrder.lift(slot).flatMap(_._2.lift(at)).fold(0f)(_.y)),
-      links = Array.tabulate(slots, NodeClass.maxLinks)((slot, at) => inOrder.lift(slot).flatMap(_._3.lift(at)).getOrElse(0))
+      nodeClass = Array.tabulate(nodeSlots)(slot => nodes.lift(slot).fold(NodeClass.NoNode)(_.nodeClass).id),
+      xs = Array.tabulate(nodeSlots, NodeClass.maxPoints)((slot, at) => nodes.lift(slot).flatMap(_.points.lift(at)).fold(0f)(_.x)),
+      ys = Array.tabulate(nodeSlots, NodeClass.maxPoints)((slot, at) => nodes.lift(slot).flatMap(_.points.lift(at)).fold(0f)(_.y)),
+      edgeClass = Array.tabulate(edgeSlots)(slot => related.lift(slot).fold(EdgeClass.NoEdge)(_._1).id),
+      links = Array.tabulate(edgeSlots, EdgeClass.maxLinks)((slot, at) => related.lift(slot).flatMap(_._2.lift(at)).getOrElse(0))
     )
 
 object RecordGraph:
 
-  /** A record laid out along the node axis, ready to be uploaded. */
+  /** A record laid out along its two axes, ready to be uploaded. */
   private[dataset] case class Placement(
       nodeClass: Array[Int],
       xs: Array[Array[Float]],
       ys: Array[Array[Float]],
+      edgeClass: Array[Int],
       links: Array[Array[Int]]
   )
 
   /** The record a layout holds, with every relationship resolved to the nodes it links. One
     * naming a position that holds no drawn node is dropped: it relates nothing.
     */
-  def of[Node: Label](record: Record[Node]): RecordGraph =
-    read(record.nodeClass.toArray, record.xs.toArray, record.ys.toArray, record.links.toArray)
+  def of[Node: Label, Edge: Label](record: Record[Node, Edge]): RecordGraph =
+    read(record.nodeClass.toArray, record.xs.toArray, record.ys.toArray, record.edgeClass.toArray, record.links.toArray)
 
   /** Every record of a batch, read to the host — once for the batch, not once per drawing. */
-  def of[S: Label, Node: Label](records: RecordBatch[S, Node]): Seq[RecordGraph] =
-    val (nodeClass, xs, ys, links) = (records.nodeClass.toArray, records.xs.toArray, records.ys.toArray, records.links.toArray)
-    nodeClass.indices.map(drawing => read(nodeClass(drawing), xs(drawing), ys(drawing), links(drawing)))
+  def of[S: Label, Node: Label, Edge: Label](records: RecordBatch[S, Node, Edge]): Seq[RecordGraph] =
+    val (nodeClass, xs, ys) = (records.nodeClass.toArray, records.xs.toArray, records.ys.toArray)
+    val (edgeClass, links) = (records.edgeClass.toArray, records.links.toArray)
+    nodeClass.indices.map(drawing => read(nodeClass(drawing), xs(drawing), ys(drawing), edgeClass(drawing), links(drawing)))
 
-  private def read(nodeClasses: Array[Int], xs: Array[Array[Float]], ys: Array[Array[Float]], links: Array[Array[Int]]): RecordGraph =
+  private def read(
+      nodeClasses: Array[Int],
+      xs: Array[Array[Float]],
+      ys: Array[Array[Float]],
+      edgeClasses: Array[Int],
+      links: Array[Array[Int]]
+  ): RecordGraph =
     val nodeClass = nodeClasses.map(NodeClass.fromId)
+    val edgeClass = edgeClasses.map(EdgeClass.fromId)
     val nodeAt = nodeClass.indices.filter(nodeClass(_).isDrawn).zipWithIndex.toMap
     RecordGraph(
       nodes = nodeAt.keys.toSeq.sorted.map: at =>
         RecordNode(nodeClass(at), (0 until nodeClass(at).numPoints).map(point => Point(xs(at)(point), ys(at)(point)))),
-      edges = nodeClass.indices.filter(nodeClass(_).isRelationship).flatMap: at =>
+      edges = edgeClass.indices.filter(edgeClass(_).relates).flatMap: at =>
         for
           subject <- nodeAt.get(links(at)(0))
           obj <- nodeAt.get(links(at)(1))
-        yield RecordEdge(nodeClass(at), subject, obj)
+        yield RecordEdge(edgeClass(at), subject, obj)
     )
 
   /** The nodes a detection holds, and nothing else — a detector predicts no relationships.
@@ -286,6 +354,6 @@ object RecordGraph:
         subject <- nodeAt.keys.toSeq.sorted
         obj <- nodeAt.keys.toSeq.sorted
         if relations(subject)(obj)(relation.id) > 0f
-        if !relation.nodeClass.isSymmetric || subject < obj
-      yield RecordEdge(relation.nodeClass, nodeAt(subject), nodeAt(obj))
+        if !relation.edgeClass.isSymmetric || subject < obj
+      yield RecordEdge(relation.edgeClass, nodeAt(subject), nodeAt(obj))
     )

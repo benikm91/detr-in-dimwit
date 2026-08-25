@@ -55,7 +55,7 @@ def egtrEval(): Unit =
   println(s"reading ${checkpoints.rootPath}")
   val model = EGTR(checkpoints.loadLatest[EGTRTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
   val loss = EGTRLoss(VType[Float32], HungarianLoss(VType[Float32])())()
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox])(Split.Validation)
+  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Validation)
 
   /* Matching and scoring stay on the device: only the four arrays a drawing is scored from come
    * back, so the whole split is one compiled function called once per drawing. */

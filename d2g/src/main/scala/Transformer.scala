@@ -2,6 +2,7 @@ import deepwit.activation.gelu
 import deepwit.attention.AttentionScore
 import deepwit.attention.MultiHeadAttention
 import deepwit.attention.MultiHeadCausalSelfAttention
+import deepwit.attention.MultiHeadCustomAttention
 import deepwit.attention.MultiHeadCustomSelfAttention
 import deepwit.attention.MultiHeadFullAttention
 import deepwit.attention.MultiHeadFullSelfAttention
@@ -106,7 +107,50 @@ object DocumentEncoderBlock:
         mlpNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
       )
 
-/** The decoder of the record, read through two doors.
+/** Which of the `2 * slots` embeddings of a joined training sequence each of them may attend to.
+  *
+  * The sequence is the embeddings of what is taken so far followed by the prediction embeddings
+  * beside them, so the mask falls into four blocks of one slot each — a row is an embedding that
+  * reads, a column one that is read:
+  *
+  * {{{
+  *                 source:  taken                 prediction
+  *   target: taken          up to its own slot    nothing
+  *   target: prediction     before its own slot   itself
+  * }}}
+  *
+  * A taken embedding carries the record as far as itself; a prediction embedding reads exactly
+  * what is taken before its own slot, so that what it may answer with is what is left over; and
+  * nothing reads a prediction embedding, which holds a guess rather than a record. The diagonal of
+  * the last block is what keeps the first prediction row, which has nothing taken before it, from
+  * being fully masked — a row of nothing but `-inf` has no softmax.
+  */
+def jointSequenceMask[Context: Λ](context: AxisExtent[Context]): Tensor2[Context, Context, Bool] =
+
+  // Define vocabulary to clarify mask creation
+  trait TakenSource derives Label
+  trait TakenTarget derives Label
+  trait PredictionSource derives Label
+  trait PredictionTarget derives Label
+
+  val blockSize = context.size / 2
+  def blockShape[S1: Label, S2: Label]: Shape2[S1, S2] =
+    Shape2(Axis[S1] -> blockSize, Axis[S2] -> blockSize)
+
+  val upToItsOwnSlot = tril(Tensor(blockShape[TakenTarget, TakenSource]).fill(true))
+  val noSlot = Tensor(blockShape[TakenTarget, PredictionSource]).fill(false)
+
+  val beforeItsOwnSlot = tril(Tensor(blockShape[PredictionTarget, TakenSource]).fill(true), kthDiagonal = -1)
+  val itselfOnly = Tensor2.eye(blockShape[PredictionTarget, PredictionSource], VType[Bool])
+
+  val mask = concatenate(
+    concatenate(upToItsOwnSlot, noSlot),
+    concatenate(beforeItsOwnSlot, itselfOnly)
+  )
+  // drop internal vocabulary
+  mask.relabelAll((Axis[Context], Axis[Context]))
+
+/** The decoder of the record's nodes, read through two doors.
   *
   * An embedding in a decoder has two jobs — become what its slot predicts, and keep carrying what
   * its slot holds for the others to read. Remaining-node prediction cannot do both at once, since
@@ -116,13 +160,13 @@ object DocumentEncoderBlock:
   *
   * Neither door takes a mask. What a slot may read is not the caller's to say.
   */
-class RecordDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
-    params: RecordDecoder.Params[PatchEmbedding, Embedding, V]
+class NodeDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
+    params: NodeDecoder.Params[PatchEmbedding, Embedding, V]
 ):
 
-  import RecordDecoder.Prediction
+  import NodeDecoder.Prediction
 
-  private val blocks = params.blocks.map(RecordDecoderBlock(_))
+  private val blocks = params.blocks.map(NodeDecoderBlock(_))
   private val finalNorm = LayerNorm(params.finalNorm)
 
   /** The taken nodes as the decoder carries them, and what every slot would answer with. */
@@ -135,17 +179,19 @@ class RecordDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
       case ((nodes, predictions), block) => block.forTraining(document, nodes, predictions)
     (carried.vmap(Axis[Node])(finalNorm), answered.vmap(Axis[Prediction])(finalNorm))
 
-  /** What the decoder would answer with next, after the nodes taken so far. */
+  /** The nodes taken so far as the decoder carries them — which is what an [[EdgeDecoder]]
+    * relates — and what it would answer with next.
+    */
   def forTranscription(
       document: Tensor2[Patch, PatchEmbedding, V],
       taken: Tensor2[Node, Embedding, V],
       prediction: Tensor1[Embedding, V]
-  ): Tensor1[Embedding, V] =
-    val (_, answered) = blocks.foldLeft((taken, prediction)):
+  ): (Tensor2[Node, Embedding, V], Tensor1[Embedding, V]) =
+    val (carried, answered) = blocks.foldLeft((taken, prediction)):
       case ((taken, prediction), block) => block.forTranscription(document, taken, prediction)
-    finalNorm(answered)
+    (carried.vmap(Axis[Node])(finalNorm), finalNorm(answered))
 
-object RecordDecoder:
+object NodeDecoder:
 
   /** Axis of the prediction embeddings, one beside every node slot: what the decoder would answer
     * with there, rather than what is taken there.
@@ -153,10 +199,10 @@ object RecordDecoder:
   trait Prediction derives Label
 
   /** The sequence a block decodes: every node embedding, then every prediction embedding. */
-  type DecoderContext = Node |+| Prediction
+  type Context = Node |+| Prediction
 
   case class Params[PatchEmbedding, Embedding, V](
-      blocks: List[RecordDecoderBlock.Params[PatchEmbedding, Embedding, V]],
+      blocks: List[NodeDecoderBlock.Params[PatchEmbedding, Embedding, V]],
       finalNorm: LayerNorm.Params[Embedding, V]
   )
 
@@ -164,33 +210,33 @@ object RecordDecoder:
 
     def xavierUniformDepthScaled[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](numBlocks: Int, numHeads: Int, patchEmbeddingExtent: AxisExtent[PatchEmbedding], embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], key: Key, vtype: VType[V] = VType[Float32]): Params[PatchEmbedding, Embedding, V] =
       Params(
-        blocks = key.split(numBlocks).map(RecordDecoderBlock.Params.xavierUniformDepthScaled(numBlocks, numHeads, patchEmbeddingExtent, embeddingExtent, embeddingMixedExtent, _, vtype)).toList,
+        blocks = key.split(numBlocks).map(NodeDecoderBlock.Params.xavierUniformDepthScaled(numBlocks, numHeads, patchEmbeddingExtent, embeddingExtent, embeddingMixedExtent, _, vtype)).toList,
         finalNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
       )
 
-/** One block of the [[RecordDecoder]]: masked self-attention, then cross-attention onto the
-  * encoded document, then the embedding mixer, each on its own residual branch.
+/** One block of the [[NodeDecoder]]: masked self-attention, then cross-attention onto the encoded
+  * document, then the embedding mixer, each on its own residual branch.
   *
   * The two doors join the halves they are given into one sequence and take the answer apart again,
   * so how they are laid out, and the mask that goes with the layout, stay in this class.
   */
-class RecordDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
-    params: RecordDecoderBlock.Params[PatchEmbedding, Embedding, V]
+class NodeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
+    params: NodeDecoderBlock.Params[PatchEmbedding, Embedding, V]
 ):
 
-  import RecordDecoder.{Prediction, DecoderContext}
+  import NodeDecoder.{Prediction, Context}
 
-  private val contextAxis = Axis[DecoderContext]
+  private val contextAxis = Axis[Context]
 
   private val jointAttention = MultiHeadCustomSelfAttention(
     params.selfAttention,
-    RecordDecoderBlock.jointSequenceMask,
+    jointSequenceMask[Context],
     AttentionScore.scaledDotProduct
   )
   private val causalAttention = MultiHeadCausalSelfAttention(contextAxis, params.selfAttention)
   private val selfAttentionPreNorm = LayerNorm(params.selfAttentionNorm)
-  private val crossAttention = MultiHeadFullAttention(Axis[Patch], contextAxis, params.crossAttention)
-  private val crossAttentionPreNorm = LayerNorm(params.crossAttentionNorm)
+  private val documentAttention = MultiHeadFullAttention(Axis[Patch], contextAxis, params.documentAttention)
+  private val documentAttentionPreNorm = LayerNorm(params.documentAttentionNorm)
   private val mlp = MLPEmbeddingMixer(params.mlp)
   private val mlpPreNorm = LayerNorm(params.mlpNorm)
 
@@ -201,7 +247,7 @@ class RecordDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
   ): (Tensor2[Node, Embedding, V], Tensor2[Prediction, Embedding, V]) =
     var x = concatenate(nodes, predictions)
     x = x + jointAttention(x.vmap(contextAxis)(selfAttentionPreNorm)) // self attention
-    x = x + crossAttention(document, x.vmap(contextAxis)(crossAttentionPreNorm)) // cross attention
+    x = x + documentAttention(document, x.vmap(contextAxis)(documentAttentionPreNorm)) // cross attention on the document
     x = x + x.vmap(contextAxis)(embedding => mlp(mlpPreNorm(embedding))) // embedding mixer
     x.deconcatenate(contextAxis, (nodes.extent(Axis[Node]), predictions.extent(Axis[Prediction])))
 
@@ -212,63 +258,18 @@ class RecordDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
   ): (Tensor2[Node, Embedding, V], Tensor1[Embedding, V]) =
     var x = concatenate(taken, prediction.prependAxis(Axis[Prediction]))
     x = x + causalAttention(x.vmap(contextAxis)(selfAttentionPreNorm)) // self attention
-    x = x + crossAttention(document, x.vmap(contextAxis)(crossAttentionPreNorm)) // cross attention
+    x = x + documentAttention(document, x.vmap(contextAxis)(documentAttentionPreNorm)) // cross attention on the document
     x = x + x.vmap(contextAxis)(embedding => mlp(mlpPreNorm(embedding))) // embedding mixer
     val (carried, answered) = x.deconcatenate(contextAxis, (taken.extent(Axis[Node]), Axis[Prediction] -> 1))
     (carried, answered.squeeze(Axis[Prediction]))
 
-object RecordDecoderBlock:
-
-  import RecordDecoder.DecoderContext
-
-  /** Which of the `2 * slots` embeddings of a joined training sequence each of them may attend to.
-    *
-    * The sequence is the node embeddings of the record taken so far followed by the prediction
-    * embeddings beside them, so the mask falls into four blocks of one slot each — a row is an
-    * embedding that reads, a column one that is read:
-    *
-    * {{{
-    *                          node (source)         prediction (source)
-    *   node (target)          up to its own slot    nothing
-    *   prediction (target)    before its own slot   itself
-    * }}}
-    *
-    * A node embedding carries the record as far as itself; a prediction embedding reads exactly
-    * what is taken before its own slot, so that what it may answer with is what is left over; and
-    * nothing reads a prediction embedding, which holds a guess rather than a node. The diagonal of
-    * the last block is what keeps the first prediction row, which has nothing taken before it,
-    * from being fully masked — a row of nothing but `-inf` has no softmax.
-    */
-  def jointSequenceMask(maskExtent: AxisExtent[DecoderContext]): Tensor2[DecoderContext, DecoderContext, Bool] =
-
-    // Define vocabulary to clarify mask creation
-    trait NodeSource derives Label
-    trait NodeTarget derives Label
-    trait PredictionSource derives Label
-    trait PredictionTarget derives Label
-
-    val blockSize = maskExtent.size / 2
-    def blockShape[S1: Label, S2: Label]: Shape2[S1, S2] =
-      Shape2(Axis[S1] -> blockSize, Axis[S2] -> blockSize)
-
-    val upToItsOwnSlot = tril(Tensor(blockShape[NodeTarget, NodeSource]).fill(true))
-    val noSlot = Tensor(blockShape[NodeTarget, PredictionSource]).fill(false)
-
-    val beforeItsOwnSlot = tril(Tensor(blockShape[PredictionTarget, NodeSource]).fill(true), kthDiagonal = -1)
-    val itselfOnly = Tensor2.eye(blockShape[PredictionTarget, PredictionSource], VType[Bool])
-
-    val mask = concatenate(
-      concatenate(upToItsOwnSlot, noSlot),
-      concatenate(beforeItsOwnSlot, itselfOnly)
-    )
-    // drop internal vocabulary
-    mask.relabelAll((Axis[DecoderContext], Axis[DecoderContext]))
+object NodeDecoderBlock:
 
   case class Params[PatchEmbedding, Embedding, V](
       selfAttention: MultiHeadSelfAttention.Params[Embedding, V],
       selfAttentionNorm: LayerNorm.Params[Embedding, V],
-      crossAttention: MultiHeadAttention.Params[PatchEmbedding, Embedding, V],
-      crossAttentionNorm: LayerNorm.Params[Embedding, V],
+      documentAttention: MultiHeadAttention.Params[PatchEmbedding, Embedding, V],
+      documentAttentionNorm: LayerNorm.Params[Embedding, V],
       mlp: MLPEmbeddingMixer.Params[Embedding, V],
       mlpNorm: LayerNorm.Params[Embedding, V]
   )
@@ -276,12 +277,170 @@ object RecordDecoderBlock:
   object Params:
 
     def xavierUniformDepthScaled[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](numBlocks: Int, numHeads: Int, patchEmbeddingExtent: AxisExtent[PatchEmbedding], embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], key: Key, vtype: VType[V] = VType[Float32]): Params[PatchEmbedding, Embedding, V] =
-      val (selfKey, crossKey, mlpKey) = key.splitToTuple(3)
+      val (selfKey, documentKey, mlpKey) = key.splitToTuple(3)
       Params(
         selfAttention = MultiHeadSelfAttention.Params.xavierUniformDepthScaled(numBlocks, numHeads, embeddingExtent, selfKey, vtype),
         selfAttentionNorm = LayerNorm.Params.identity(embeddingExtent, vtype),
-        crossAttention = MultiHeadAttention.Params.xavierUniformDepthScaled(numBlocks, numHeads, patchEmbeddingExtent, embeddingExtent, crossKey, vtype),
-        crossAttentionNorm = LayerNorm.Params.identity(embeddingExtent, vtype),
+        documentAttention = MultiHeadAttention.Params.xavierUniformDepthScaled(numBlocks, numHeads, patchEmbeddingExtent, embeddingExtent, documentKey, vtype),
+        documentAttentionNorm = LayerNorm.Params.identity(embeddingExtent, vtype),
+        mlp = MLPEmbeddingMixer.Params.init(embeddingExtent, embeddingMixedExtent, mlpKey, vtype),
+        mlpNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
+      )
+
+/** The decoder of the record's relationships, read through the same two doors as the
+  * [[NodeDecoder]].
+  *
+  * A relationship is a pair of nodes, so this decoder reads the nodes the [[NodeDecoder]] made of
+  * the record as well as the document — the nodes it is given are the taken ones, which are a
+  * record, and not the predictions, which are guesses and may hold a node twice or not at all.
+  */
+class EdgeDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
+    params: EdgeDecoder.Params[PatchEmbedding, Embedding, V]
+):
+
+  import EdgeDecoder.Prediction
+
+  private val blocks = params.blocks.map(EdgeDecoderBlock(_))
+  private val finalNorm = LayerNorm(params.finalNorm)
+
+  /** The taken relationships as the decoder carries them, and what every slot would answer with.
+    *
+    * `holdsNode` says which of the node slots hold a node, since the positions a record does not
+    * reach are there to make every record the same shape and relate nothing.
+    */
+  def forTraining(
+      document: Tensor2[Patch, PatchEmbedding, V],
+      nodes: Tensor2[Node, Embedding, V],
+      holdsNode: Tensor1[Node, Bool],
+      edges: Tensor2[Edge, Embedding, V],
+      predictions: Tensor2[Prediction, Embedding, V]
+  ): (Tensor2[Edge, Embedding, V], Tensor2[Prediction, Embedding, V]) =
+    val (carried, answered) = blocks.foldLeft((edges, predictions)):
+      case ((edges, predictions), block) => block.forTraining(document, nodes, holdsNode, edges, predictions)
+    (carried.vmap(Axis[Edge])(finalNorm), answered.vmap(Axis[Prediction])(finalNorm))
+
+  /** What the decoder would answer with next, after the relationships taken so far. */
+  def forTranscription(
+      document: Tensor2[Patch, PatchEmbedding, V],
+      nodes: Tensor2[Node, Embedding, V],
+      holdsNode: Tensor1[Node, Bool],
+      taken: Tensor2[Edge, Embedding, V],
+      prediction: Tensor1[Embedding, V]
+  ): Tensor1[Embedding, V] =
+    val (_, answered) = blocks.foldLeft((taken, prediction)):
+      case ((taken, prediction), block) => block.forTranscription(document, nodes, holdsNode, taken, prediction)
+    finalNorm(answered)
+
+object EdgeDecoder:
+
+  /** Axis of the prediction embeddings, one beside every relationship slot. */
+  trait Prediction derives Label
+
+  /** The sequence a block decodes: every relationship embedding, then every prediction embedding. */
+  type Context = Edge |+| Prediction
+
+  case class Params[PatchEmbedding, Embedding, V](
+      blocks: List[EdgeDecoderBlock.Params[PatchEmbedding, Embedding, V]],
+      finalNorm: LayerNorm.Params[Embedding, V]
+  )
+
+  object Params:
+
+    def xavierUniformDepthScaled[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](numBlocks: Int, numHeads: Int, patchEmbeddingExtent: AxisExtent[PatchEmbedding], embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], key: Key, vtype: VType[V] = VType[Float32]): Params[PatchEmbedding, Embedding, V] =
+      Params(
+        blocks = key.split(numBlocks).map(EdgeDecoderBlock.Params.xavierUniformDepthScaled(numBlocks, numHeads, patchEmbeddingExtent, embeddingExtent, embeddingMixedExtent, _, vtype)).toList,
+        finalNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
+      )
+
+/** One block of the [[EdgeDecoder]]: masked self-attention, then cross-attention onto the encoded
+  * document, then cross-attention onto the taken nodes, then the embedding mixer, each on its own
+  * residual branch.
+  */
+class EdgeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
+    params: EdgeDecoderBlock.Params[PatchEmbedding, Embedding, V]
+):
+
+  import EdgeDecoder.{Prediction, Context}
+
+  private val contextAxis = Axis[Context]
+
+  private val jointAttention = MultiHeadCustomSelfAttention(
+    params.selfAttention,
+    jointSequenceMask[Context],
+    AttentionScore.scaledDotProduct
+  )
+  private val causalAttention = MultiHeadCausalSelfAttention(contextAxis, params.selfAttention)
+  private val selfAttentionPreNorm = LayerNorm(params.selfAttentionNorm)
+  private val documentAttention = MultiHeadFullAttention(Axis[Patch], contextAxis, params.documentAttention)
+  private val documentAttentionPreNorm = LayerNorm(params.documentAttentionNorm)
+  private val nodeAttentionPreNorm = LayerNorm(params.nodeAttentionNorm)
+  private val mlp = MLPEmbeddingMixer(params.mlp)
+  private val mlpPreNorm = LayerNorm(params.mlpNorm)
+
+  def forTraining(
+      document: Tensor2[Patch, PatchEmbedding, V],
+      nodes: Tensor2[Node, Embedding, V],
+      holdsNode: Tensor1[Node, Bool],
+      edges: Tensor2[Edge, Embedding, V],
+      predictions: Tensor2[Prediction, Embedding, V]
+  ): (Tensor2[Edge, Embedding, V], Tensor2[Prediction, Embedding, V]) =
+    var x = concatenate(edges, predictions)
+    x = x + jointAttention(x.vmap(contextAxis)(selfAttentionPreNorm)) // self attention
+    x = x + documentAttention(document, x.vmap(contextAxis)(documentAttentionPreNorm)) // cross attention on the document
+    x = x + nodeAttention(holdsNode, x.shape.extent(contextAxis))(nodes, x.vmap(contextAxis)(nodeAttentionPreNorm)) // cross attention on the nodes that are there
+    x = x + x.vmap(contextAxis)(embedding => mlp(mlpPreNorm(embedding))) // embedding mixer
+    x.deconcatenate(contextAxis, (edges.extent(Axis[Edge]), predictions.extent(Axis[Prediction])))
+
+  def forTranscription(
+      document: Tensor2[Patch, PatchEmbedding, V],
+      nodes: Tensor2[Node, Embedding, V],
+      holdsNode: Tensor1[Node, Bool],
+      taken: Tensor2[Edge, Embedding, V],
+      prediction: Tensor1[Embedding, V]
+  ): (Tensor2[Edge, Embedding, V], Tensor1[Embedding, V]) =
+    var x = concatenate(taken, prediction.prependAxis(Axis[Prediction]))
+    x = x + causalAttention(x.vmap(contextAxis)(selfAttentionPreNorm)) // self attention
+    x = x + documentAttention(document, x.vmap(contextAxis)(documentAttentionPreNorm)) // cross attention on the document
+    x = x + nodeAttention(holdsNode, x.shape.extent(contextAxis))(nodes, x.vmap(contextAxis)(nodeAttentionPreNorm)) // cross attention on the nodes that are there
+    x = x + x.vmap(contextAxis)(embedding => mlp(mlpPreNorm(embedding))) // embedding mixer
+    val (carried, answered) = x.deconcatenate(contextAxis, (taken.extent(Axis[Edge]), Axis[Prediction] -> 1))
+    (carried, answered.squeeze(Axis[Prediction]))
+
+  /** Attention onto the nodes that are there, which is data rather than shape and so is built
+    * around the mask it is given rather than once.
+    *
+    * Where a record holds no node at all every slot is read instead, since a row of nothing but
+    * `-inf` has no softmax.
+    */
+  private def nodeAttention(holdsNode: Tensor1[Node, Bool], context: AxisExtent[Context]) =
+    val readable = where_!(holdsNode.any, holdsNode, Tensor.like(holdsNode).fill(true))
+    val mask = readable.broadcastTo(Shape2(context, holdsNode.shape.extent(Axis[Node])))
+    MultiHeadCustomAttention[Node, Embedding, Context, Embedding, V](params.nodeAttention, _ => mask, AttentionScore.scaledDotProduct)
+
+object EdgeDecoderBlock:
+
+  case class Params[PatchEmbedding, Embedding, V](
+      selfAttention: MultiHeadSelfAttention.Params[Embedding, V],
+      selfAttentionNorm: LayerNorm.Params[Embedding, V],
+      documentAttention: MultiHeadAttention.Params[PatchEmbedding, Embedding, V],
+      documentAttentionNorm: LayerNorm.Params[Embedding, V],
+      nodeAttention: MultiHeadAttention.Params[Embedding, Embedding, V],
+      nodeAttentionNorm: LayerNorm.Params[Embedding, V],
+      mlp: MLPEmbeddingMixer.Params[Embedding, V],
+      mlpNorm: LayerNorm.Params[Embedding, V]
+  )
+
+  object Params:
+
+    def xavierUniformDepthScaled[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](numBlocks: Int, numHeads: Int, patchEmbeddingExtent: AxisExtent[PatchEmbedding], embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], key: Key, vtype: VType[V] = VType[Float32]): Params[PatchEmbedding, Embedding, V] =
+      val (selfKey, documentKey, nodeKey, mlpKey) = key.splitToTuple(4)
+      Params(
+        selfAttention = MultiHeadSelfAttention.Params.xavierUniformDepthScaled(numBlocks, numHeads, embeddingExtent, selfKey, vtype),
+        selfAttentionNorm = LayerNorm.Params.identity(embeddingExtent, vtype),
+        documentAttention = MultiHeadAttention.Params.xavierUniformDepthScaled(numBlocks, numHeads, patchEmbeddingExtent, embeddingExtent, documentKey, vtype),
+        documentAttentionNorm = LayerNorm.Params.identity(embeddingExtent, vtype),
+        nodeAttention = MultiHeadAttention.Params.xavierUniformDepthScaled(numBlocks, numHeads, embeddingExtent, embeddingExtent, nodeKey, vtype),
+        nodeAttentionNorm = LayerNorm.Params.identity(embeddingExtent, vtype),
         mlp = MLPEmbeddingMixer.Params.init(embeddingExtent, embeddingMixedExtent, mlpKey, vtype),
         mlpNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
       )

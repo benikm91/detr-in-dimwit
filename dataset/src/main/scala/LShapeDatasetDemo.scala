@@ -9,6 +9,7 @@ private trait Width derives Label
 private trait Height derives Label
 private trait Channel derives Label
 private trait Node derives Label
+private trait Edge derives Label
 
 /** Shows what [[LShapeDataset]] hands out: `sbt "dataset/runMain dataset.lShapeDemo"`.
   *
@@ -20,7 +21,7 @@ private trait Node derives Label
 def lShapeDemo(): Unit =
   dimwit.initialize()
 
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node])(Split.Validation)
+  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation)
   println(data)
 
   val rows = data.samples.take(3).zipWithIndex.map: (sample, index) =>

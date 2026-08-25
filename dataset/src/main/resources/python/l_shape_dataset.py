@@ -6,11 +6,11 @@ The dataset ships its splits as plain repository files rather than as a
 drawings (row index = y, white background, dark ink) and
 ``{split}_labels.jsonl`` one drawing program per line.
 
-A drawing program is parsed into the record it draws -- the drawn nodes first,
-in the order they are drawn, then the relationships between them in a canonical
-order, so that a record read back out of an adjacency matrix is the record it
-came from. Everything else (``HelpLine``, ``BothSidedArrow``, ``FinishDrawing``)
-is rendering, not record.
+A drawing program is parsed into the record it draws -- the drawn nodes in the
+order they are drawn, and the relationships between them in a canonical order,
+so that a record read back out of an adjacency matrix is the record it came
+from. Everything else (``HelpLine``, ``BothSidedArrow``, ``FinishDrawing``) is
+rendering, not record.
 """
 
 import json
@@ -26,25 +26,29 @@ def drawings(split):
     return np.load(_file(split, "images.npy"), mmap_mode="r")
 
 
-def records(split, nodes, no_node, line, annotation, connected, annotates):
-    """``(node_class, xs, ys, links)`` of every drawing, padded to ``nodes`` nodes."""
+def records(split, nodes, edges, no_node, line, annotation, no_edge, connected, annotates):
+    """``(node_class, xs, ys, edge_class, links)`` of every drawing, padded to ``nodes`` drawn
+    nodes and ``edges`` relationships."""
     with open(_file(split, "labels.jsonl"), encoding="utf-8") as programs:
         parsed = [_record_of(_actions(program), line, annotation, connected, annotates) for program in programs]
 
     node_class = np.full((len(parsed), nodes), no_node, dtype=np.int32)
     xs = np.zeros((len(parsed), nodes, 2), dtype=np.float32)
     ys = np.zeros((len(parsed), nodes, 2), dtype=np.float32)
-    links = np.zeros((len(parsed), nodes, 2), dtype=np.int32)
+    edge_class = np.full((len(parsed), edges), no_edge, dtype=np.int32)
+    links = np.zeros((len(parsed), edges, 2), dtype=np.int32)
 
     for drawing, (drawn, related) in enumerate(parsed):
-        if len(drawn) + len(related) > nodes:
-            raise ValueError("a record of %d nodes does not fit in %d" % (len(drawn) + len(related), nodes))
+        if len(drawn) > nodes:
+            raise ValueError("a record of %d nodes does not fit in %d" % (len(drawn), nodes))
+        if len(related) > edges:
+            raise ValueError("a record of %d relationships does not fit in %d" % (len(related), edges))
         for at, (node, node_xs, node_ys) in enumerate(drawn):
             node_class[drawing, at], xs[drawing, at, : len(node_xs)], ys[drawing, at, : len(node_ys)] = node, node_xs, node_ys
-        for at, (relationship, subject, obj) in enumerate(related, start=len(drawn)):
-            node_class[drawing, at], links[drawing, at] = relationship, (subject, obj)
+        for at, (relationship, subject, obj) in enumerate(related):
+            edge_class[drawing, at], links[drawing, at] = relationship, (subject, obj)
 
-    return node_class, xs, ys, links
+    return node_class, xs, ys, edge_class, links
 
 
 def _record_of(actions, line, annotation, connected, annotates):
