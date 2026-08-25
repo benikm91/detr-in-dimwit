@@ -18,12 +18,12 @@ import scala.language.implicitConversions
   * to stop, and the pass-through of every taken node, which is what keeps a node embedding
   * carrying its node while the prediction embedding beside it becomes another one.
   */
-class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((D2G.Prediction[V], Record[Node]) => Tensor0[V]):
+class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((D2G.Scores[V], Record[Node]) => Tensor0[V]):
 
   /** Axis of the record's nodes seen as candidates to answer with rather than as positions. */
   private type Candidate = Prime[Node]
 
-  override def apply(prediction: D2G.Prediction[V], target: Record[Node]): Tensor0[V] =
+  override def apply(scored: D2G.Scores[V], target: Record[Node]): Tensor0[V] =
     val nodes = target.nodeClass.shape.extent(Axis[Node])
     val pairs = Shape2(nodes, Axis[Candidate] -> nodes.size)
     def classIs(holds: NodeClass => Boolean) =
@@ -36,9 +36,9 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((D
     val sameBlock = 1f -! (isRelationship.broadcastTo(pairs) - isRelationship.relabelTo(Axis[Candidate]).broadcastTo(pairs)).abs
     val candidates = triu(Tensor(pairs, vtype).fill(1f)) * sameBlock * holdsNode.relabelTo(Axis[Candidate]).broadcastTo(pairs)
 
-    val remaining = cheapest(dissimilarity(prediction.remaining, target), candidates) * candidates.max(Axis[Candidate])
-    val stops = costOfClass(prediction.remaining.nodeClass, NodeClass.NoNode) * isAt(numNodes, nodes)
-    val passedThrough = dissimilarity(prediction.taken, target) * Tensor2.eye(nodes, vtype) * holdsNode.broadcastTo(pairs)
+    val remaining = cheapest(dissimilarity(scored.remainingPredictions, target), candidates) * candidates.max(Axis[Candidate])
+    val stops = costOfClass(scored.remainingPredictions.nodeClass, NodeClass.NoNode) * isAt(numNodes, nodes)
+    val passedThrough = dissimilarity(scored.takenNodes, target) * Tensor2.eye(nodes, vtype) * holdsNode.broadcastTo(pairs)
 
     (remaining.sum + stops.sum) / (numNodes + Tensor0(vtype)(1f)) +
       passedThrough.sum / maximum(numNodes, Tensor0(vtype)(1f))

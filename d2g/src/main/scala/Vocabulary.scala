@@ -7,6 +7,9 @@ trait Channel derives Label
 /** Axis of the record's nodes, which is also what a relationship links them by. */
 trait Node derives Label
 
+/** Axis of the document flattened into the encoder's sequence of patches. */
+type Patch = Width |*| Height
+
 /** Axis over the pixel a coordinate is predicted as. Coordinates are discrete here, which is all
   * the precision a drawing has anyway.
   */

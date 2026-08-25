@@ -7,6 +7,8 @@ import deepwit.embedder.ImageToPatchEmbedder
 import deepwit.embedder.LearnedAbsolutePositionalInjector
 import dimwit.*
 
+import scala.annotation.tailrec
+
 import deepwit.init.Init
 
 /** Document-to-graph transcription,
@@ -20,54 +22,94 @@ import deepwit.init.Init
   */
 class D2G[V: IsFloating](params: D2G.Params[V]):
 
-  import D2G.Patch
-  import D2G.Prediction
+  import D2G.Scores
 
   private val patches = ImageToPatchEmbedder(params.patchEmbedder)
-  private val encoder = DocumentEncoder(Axis[Patch], params.encoder)
-  private val decoder = RecordDecoder(Axis[Patch], Axis[DecoderSlot], params.decoder)
+  private val encoder = DocumentEncoder(params.encoder)
+  private val decoder = RecordDecoder(params.decoder)
   private val position = LearnedAbsolutePositionalInjector(params.positions)
   private val scorer = NodeScorer(params.scorer)
   private val embed = NodeEmbedder(params.embedder, scorer.canvas)
 
-  /** What the model scores, given the document and the nodes taken from its record so far. */
-  def apply(document: Tensor3[Width, Height, Channel, V], taken: Record[Node]): Prediction[V] =
+  /** What the model scores, given the document and the nodes taken from its record so far.
+    *
+    * The nodes are the ones the record actually holds, so this is the teacher-forced door and
+    * belongs to training. Transcription reads [[transcribe]], which is given no record at all.
+    */
+  def apply(document: Tensor3[Width, Height, Channel, V], taken: Record[Node]): Scores[V] =
     predict(encode(document), taken)
 
   /** The document, once. Transcription reads it at every step, so it is worth keeping. */
   def encode(document: Tensor3[Width, Height, Channel, V]): Tensor2[Patch, Embedding, V] =
     encoder(patches(document))
 
-  def predict(document: Tensor2[Patch, Embedding, V], taken: Record[Node]): Prediction[V] =
+  def predict(document: Tensor2[Patch, Embedding, V], taken: Record[Node]): Scores[V] =
     val nodes = taken.nodeClass.shape.extent(Axis[Node])
-    val sequence = DecoderSequence.join(position(embed(taken)), predictionEmbeddings(nodes))
-    val decoded = decoder(document, sequence, DecoderSequence.mask(taken))
-    Prediction(
-      remaining = scorer(DecoderSequence.remaining(decoded)),
-      taken = scorer(DecoderSequence.taken(decoded))
+    val (carried, answered) = decoder.forTraining(document, position(embed(taken)), predictionEmbeddings(nodes))
+    // What a prediction slot answers with is a node, so what it became is read back as one.
+    Scores(
+      remainingPredictions = scorer(answered.relabel(Axis[RecordDecoder.Prediction] -> Axis[Node])),
+      takenNodes = scorer(carried)
     )
 
-  /** One step of transcription: what every position would take next, of which the loop that
-    * drives it keeps only the one it is at.
+  /** The record the document holds: every remaining node predicted after the ones taken before it,
+    * up to `slots` of them or to the node the model ends the record with.
+    *
+    * Nothing but the encoded document goes in, and every step reads back only what the model
+    * itself has taken, so no target record can reach it here.
     */
-  def step(document: Tensor2[Patch, Embedding, V], taken: Record[Node]): Record[Node] =
-    scorer.decide(predict(document, taken).remaining)
+  def predictRemainingNodes(document: Tensor2[Patch, Embedding, V], slots: AxisExtent[Node]): Record[Node] =
+    @tailrec def untilRecordEnds(taken: Record[Node]): Record[Node] =
+      val at = taken.nodeClass.shape(Axis[Node])
+      if at == slots.size then taken
+      else
+        val next = nextRemainingNode(document, taken, at)
+        if next.nodeClass.toArray.head == NodeClass.NoNode.id then taken
+        else untilRecordEnds(joined(taken, next))
+    untilRecordEnds(noNodes)
+
+  /** The node the model answers slot `at` with, having taken the nodes before it. */
+  private def nextRemainingNode(document: Tensor2[Patch, Embedding, V], taken: Record[Node], at: Int): Record[Node] =
+    val embedded = embed(taken)
+    val placed = position.injectToPrefix(concatenate(embedded, params.predictionToken.prependAxis(Axis[Node]), Axis[Node]))
+    // Nothing is taken at the first slot, and an empty range is not a slice the published dimwit takes.
+    val nodes = if at == 0 then embedded else placed.slice(Axis[Node].at(0 until at))
+    val answered = decoder.forTranscription(document, nodes, placed.slice(Axis[Node].at(at)))
+    scorer.decide(scorer(answered.prependAxis(Axis[Node])))
+
+  /** A record with nothing taken in it yet, which is where transcription starts. */
+  private def noNodes: Record[Node] =
+    val none = Axis[Node] -> 0
+    Record(
+      nodeClass = Tensor1(none, VType[Int32]).fill(0),
+      xs = Tensor2(none, Axis[NodePoint] -> NodeClass.maxPoints, VType[Float32]).fill(0f),
+      ys = Tensor2(none, Axis[NodePoint] -> NodeClass.maxPoints, VType[Float32]).fill(0f),
+      links = Tensor2(none, Axis[NodeLink] -> NodeClass.maxLinks, VType[Int32]).fill(0)
+    )
+
+  /** The record with one more node taken into the slot after its last. */
+  private def joined(taken: Record[Node], next: Record[Node]): Record[Node] =
+    Record(
+      nodeClass = concatenate(taken.nodeClass, next.nodeClass, Axis[Node]),
+      xs = concatenate(taken.xs, next.xs, Axis[Node]),
+      ys = concatenate(taken.ys, next.ys, Axis[Node]),
+      links = concatenate(taken.links, next.links, Axis[Node])
+    )
 
   /** The same `<P>` token everywhere, told apart only by the positional encoding of the node it
     * answers for and by what it may attend to.
     */
-  private def predictionEmbeddings(nodes: AxisExtent[Node]): Tensor2[Node, Embedding, V] =
-    position(params.predictionToken.broadcastTo(Shape2(nodes, params.predictionToken.shape.extent(Axis[Embedding]))))
+  private def predictionEmbeddings(nodes: AxisExtent[Node]): Tensor2[RecordDecoder.Prediction, Embedding, V] =
+    val tokens = params.predictionToken.broadcastTo(Shape2(nodes, params.predictionToken.shape.extent(Axis[Embedding])))
+    position(tokens).relabel(Axis[Node] -> Axis[RecordDecoder.Prediction])
 
 object D2G:
 
-  /** The document flattened into the encoder's sequence of patches. */
-  type Patch = Width |*| Height
-
-  /** Per position: the remaining node its prediction embedding answers with, and the taken node
-    * its node embedding passed through.
+  /** What the model scores per slot: the remaining node its prediction embedding answers with,
+    * and the taken node its node embedding passed through — the answer and, beside it, what the
+    * auxiliary term of [[RemainingNodeLoss]] holds the carrying half to.
     */
-  case class Prediction[V](remaining: NodeLogits[V], taken: NodeLogits[V])
+  case class Scores[V](remainingPredictions: NodeLogits[V], takenNodes: NodeLogits[V])
 
   case class Params[V](
       patchEmbedder: ImageToPatchEmbedder.Params[Width, Height, Channel, Embedding, V],
@@ -141,10 +183,10 @@ object D2G:
           xs = perCarried(pointExtent, xKey)(Init.xavierUniform(pixelExtent, partExtent, _)),
           ys = perCarried(pointExtent, yKey)(Init.xavierUniform(pixelExtent, partExtent, _)),
           links = perCarried(linkExtent, linkKey)(Init.xavierUniform(linkedExtent, partExtent, _)),
-          projection = AffineLayer.Params.xavierUniform(nodePartExtent, embeddingExtent, projectionKey)
+          projection = AffineLayer.Params.init(nodePartExtent, embeddingExtent, projectionKey)
         ),
         scorer = NodeScorer.Params(
-          nodeClass = AffineLayer.Params.xavierUniform(embeddingExtent, classExtent, classHeadKey),
+          nodeClass = AffineLayer.Params.init(embeddingExtent, classExtent, classHeadKey),
           xs = head(pointExtent, pixelExtent, xHeadKey),
           ys = head(pointExtent, pixelExtent, yHeadKey),
           links = head(linkExtent, linkedExtent, linkHeadKey)

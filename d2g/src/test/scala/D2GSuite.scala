@@ -21,28 +21,27 @@ class RecordSuite extends FunSuite:
   private val canvas = 8
 
   test("the mask is exactly what remaining-node prediction needs"):
-    val taken = 2
-    val mask = DecoderSequence.mask(slotted(annotation(0.1f, 0.2f), annotation(0.3f, 0.4f))).toArray
+    val mask = RecordDecoderBlock.jointSequenceMask(joined(slots = 4)).toArray
     for
       target <- 0 until 8
       source <- 0 until 8
     do
       val itself = target == source
       val expected =
-        if source >= 4 then itself                                             // a guess is read by no one but itself
-        else if target < 4 then itself || (source <= target && source < taken)  // a node embedding carries itself and what came before it
-        else source < target - 4 && source < taken                             // a prediction embedding sees only what is taken before it
+        if source >= 4 then itself                          // a guess is read by no one but itself
+        else if target < 4 then itself || source <= target   // a node embedding carries itself and what came before it
+        else source < target - 4                             // a prediction embedding sees only what is taken before it
       assertEquals(mask(target)(source), expected, s"row $target, column $source")
 
   test("no row is fully masked, since a fully masked row has no softmax"):
-    for taken <- 0 to 3 do
-      val mask = DecoderSequence.mask(slotted(Seq.fill(taken)(annotation(0.1f, 0.2f))*)).toArray
-      mask.zipWithIndex.foreach((row, index) => assert(row.exists(identity), s"row $index attends to nothing"))
+    for slots <- 1 to 4 do
+      val mask = RecordDecoderBlock.jointSequenceMask(joined(slots)).toArray
+      mask.zipWithIndex.foreach((row, index) => assert(row.exists(identity), s"row $index of $slots attends to nothing"))
 
   test("the loss accepts any remaining node, and no taken one"):
     val target = slotted(annotation(0.1f, 0.2f), annotation(0.3f, 0.4f))
     val loss = RemainingNodeLoss(VType[Float32], canvas)
-    def cost(answers: RecordNode*) = loss(D2G.Prediction(scored(slotted(answers*)), scored(target)), target).item
+    def cost(answers: RecordNode*) = loss(D2G.Scores(remainingPredictions = scored(slotted(answers*)), takenNodes = scored(target)), target).item
 
     val inOrder = cost(annotation(0.1f, 0.2f), annotation(0.3f, 0.4f), stop)
     val reversed = cost(annotation(0.3f, 0.4f), annotation(0.3f, 0.4f), stop)
@@ -53,6 +52,11 @@ class RecordSuite extends FunSuite:
     assertEqualsFloat(reversed, inOrder, 0.05f)
     assert(repeated > inOrder + 1f, s"answering with a node already taken costs $repeated, barely more than $inOrder")
     assert(runsOn > inOrder + 1f, s"running past the record costs $runsOn, barely more than $inOrder")
+
+  /** The joined sequence of `slots` node embeddings and as many prediction embeddings, which is
+    * the extent the mask is asked for.
+    */
+  private def joined(slots: Int) = Axis[RecordDecoder.DecoderContext] -> 2 * slots
 
   private def annotation(x: Float, y: Float) = RecordNode(NodeClass.Annotation, Seq(Point(x, y)))
 
@@ -118,11 +122,11 @@ class D2GSuite extends FunSuite:
   )
 
   test("every position is scored for its class, every coordinate and every link"):
-    val prediction = model(document, record.record(nodes))
-    assertEquals(prediction.remaining.nodeClass.shape.dimensions.toSeq, Seq(nodes.size, NodeClass.values.length))
-    assertEquals(prediction.remaining.xs.shape.dimensions.toSeq, Seq(nodes.size, NodeClass.maxPoints, canvas))
-    assertEquals(prediction.remaining.links.shape.dimensions.toSeq, Seq(nodes.size, NodeClass.maxLinks, nodes.size))
-    assertEquals(prediction.taken.nodeClass.shape.dimensions.toSeq, prediction.remaining.nodeClass.shape.dimensions.toSeq)
+    val scored = model(document, record.record(nodes))
+    assertEquals(scored.remainingPredictions.nodeClass.shape.dimensions.toSeq, Seq(nodes.size, NodeClass.values.length))
+    assertEquals(scored.remainingPredictions.xs.shape.dimensions.toSeq, Seq(nodes.size, NodeClass.maxPoints, canvas))
+    assertEquals(scored.remainingPredictions.links.shape.dimensions.toSeq, Seq(nodes.size, NodeClass.maxLinks, nodes.size))
+    assertEquals(scored.takenNodes.nodeClass.shape.dimensions.toSeq, scored.remainingPredictions.nodeClass.shape.dimensions.toSeq)
 
   test("training on one drawing learns to transcribe it"):
     val loss = RemainingNodeLoss(VType[Float32], canvas)

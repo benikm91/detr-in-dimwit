@@ -81,39 +81,18 @@ def d2gEval(): Unit =
 
 /** Transcribes a document, one remaining node at a time.
   *
-  * The document is encoded once and read at every step. There is no KV cache, so the decoder
-  * re-reads the whole sequence every time — slow, and no different. The loop runs to the last slot
-  * either way and the answer is cut where the model said the record ends.
+  * The document is encoded once and read at every step; the decoder re-reads the nodes taken so
+  * far every time, since there is no KV cache. That makes every step cost more than it needs to,
+  * which is of no consequence here: what matters is that the only thing handed to the model is
+  * the document, so no target can leak into what is scored.
   */
 class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node])
     extends (Tensor3[Width, Height, Channel, Float32] => RecordGraph):
 
   private val encode = jit(model.encode)
-  private val advance = jit: (document: Tensor2[D2G.Patch, Embedding, Float32], taken: Record[Node], position: Tensor0[Int32]) =>
-    taken.taking(model.step(document, taken), position)
 
   override def apply(document: Tensor3[Width, Height, Channel, Float32]): RecordGraph =
-    val encoded = encode(document)
-    val empty = RecordGraph(Seq.empty, Seq.empty).record(nodes)
-    RecordGraph.of(upToStop((0 until nodes.size - 1).foldLeft(empty)((taken, at) => advance(encoded, taken, Tensor0(at)))))
-
-  private def upToStop(record: Record[Node]): Record[Node] =
-    val stop = record.nodeClass.toArray.indexWhere(_ == NodeClass.NoNode.id) match
-      case -1 => nodes.size
-      case at => at
-    val kept = Axis[Node].at(0 until stop)
-    Record(record.nodeClass.slice(kept), record.xs.slice(kept), record.ys.slice(kept), record.links.slice(kept))
-
-extension (record: Record[Node])
-  /** The record with the node `decided` settled on at `position` taken into it. */
-  def taking(decided: Record[Node], position: Tensor0[Int32]): Record[Node] =
-    val at = Axis[Node].at(position)
-    Record(
-      nodeClass = record.nodeClass.set(at)(decided.nodeClass.slice(at)),
-      xs = record.xs.set(at)(decided.xs.slice(at)),
-      ys = record.ys.set(at)(decided.ys.slice(at)),
-      links = record.links.set(at)(decided.links.slice(at))
-    )
+    RecordGraph.of(model.predictRemainingNodes(encode(document), nodes))
 
 private def open(split: Split) =
   LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node])(split)
