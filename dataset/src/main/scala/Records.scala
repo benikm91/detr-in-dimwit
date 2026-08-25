@@ -160,8 +160,15 @@ object RecordGraph:
     * naming a position that holds no drawn node is dropped: it relates nothing.
     */
   def of[Node: Label](record: Record[Node]): RecordGraph =
-    val nodeClass = record.nodeClass.toArray.map(NodeClass.fromId)
-    val (xs, ys, links) = (record.xs.toArray, record.ys.toArray, record.links.toArray)
+    read(record.nodeClass.toArray, record.xs.toArray, record.ys.toArray, record.links.toArray)
+
+  /** Every record of a batch, read to the host — once for the batch, not once per drawing. */
+  def of[S: Label, Node: Label](records: RecordBatch[S, Node]): Seq[RecordGraph] =
+    val (nodeClass, xs, ys, links) = (records.nodeClass.toArray, records.xs.toArray, records.ys.toArray, records.links.toArray)
+    nodeClass.indices.map(drawing => read(nodeClass(drawing), xs(drawing), ys(drawing), links(drawing)))
+
+  private def read(nodeClasses: Array[Int], xs: Array[Array[Float]], ys: Array[Array[Float]], links: Array[Array[Int]]): RecordGraph =
+    val nodeClass = nodeClasses.map(NodeClass.fromId)
     val nodeAt = nodeClass.indices.filter(nodeClass(_).isDrawn).zipWithIndex.toMap
     RecordGraph(
       nodes = nodeAt.keys.toSeq.sorted.map: at =>
@@ -172,20 +179,6 @@ object RecordGraph:
           obj <- nodeAt.get(links(at)(1))
         yield RecordEdge(nodeClass(at), subject, obj)
     )
-
-  /** Every record of a batch, read to the host. */
-  def of[S: Label, Node: Label](records: RecordBatch[S, Node]): Seq[RecordGraph] =
-    val nodes = Axis[Node] -> records.nodeClass.shape(Axis[Node])
-    val (nodeClass, xs, ys, links) = (records.nodeClass.toArray, records.xs.toArray, records.ys.toArray, records.links.toArray)
-    nodeClass.indices.map: drawing =>
-      of(
-        Record(
-          Tensor1(nodes.axis, VType[Int32]).fromArray(nodeClass(drawing)),
-          Tensor2(nodes.axis, Axis[NodePoint], VType[Float32]).fromArray(xs(drawing)),
-          Tensor2(nodes.axis, Axis[NodePoint], VType[Float32]).fromArray(ys(drawing)),
-          Tensor2(nodes.axis, Axis[NodeLink], VType[Int32]).fromArray(links(drawing))
-        )
-      )
 
   /** The nodes a detection holds, and nothing else — a detector predicts no relationships.
     *

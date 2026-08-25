@@ -97,7 +97,6 @@ def d2gTrain(): Unit =
   batches
     .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):
       case (state, batch) =>
-        dimwit.gc()
         val linearized = RecordGraph.of(batch.target).map(_.permuted(linearize))
         jitGradientStep(batch.images, RecordBatch.of(linearized, Axis[Batch], nodes), state)
     .tapEvery(10):
