@@ -16,6 +16,7 @@ class ObjectsSuite extends FunSuite:
   private trait Height derives Label
   private trait Channel derives Label
   private trait Node derives Label
+  private trait Drawing derives Label
 
   private val nodes = Axis[Node] -> 8
 
@@ -55,6 +56,25 @@ class ObjectsSuite extends FunSuite:
       val permuted = RecordGraph.of(record.permuted(random).record(nodes))
       assertEquals(permuted.nodes.toSet, record.nodes.toSet)
       assertEquals(related(permuted), related(record))
+
+  test("a record permuted on the device is the same record, laid out again"):
+    val laid = RecordBatch.of(Seq(record, record), Axis[Drawing], nodes)
+    val slots = Axis[Node] -> 10
+    val compiled = jit((records: RecordBatch[Drawing, Node], key: dimwit.Random.Key) => records.permuted(key, slots))
+    for seed <- 1 to 10 do
+      val permuted = laid.permuted(dimwit.Random.Key(seed), slots)
+      // A key is an argument of the compiled permutation, not something baked into it.
+      assertEquals(compiled(laid, dimwit.Random.Key(seed)).nodeClass.toArray.map(_.toSeq).toSeq, permuted.nodeClass.toArray.map(_.toSeq).toSeq, s"seed $seed")
+      assertEquals(permuted.nodeClass.shape(Axis[Node]), slots.size)
+      RecordGraph.of(permuted).zipWithIndex.foreach: (read, drawing) =>
+        assertEquals(read.nodes.toSet, record.nodes.toSet, s"seed $seed, drawing $drawing")
+        assertEquals(related(read), related(record), s"seed $seed, drawing $drawing")
+      permuted.nodeClass.toArray.zipWithIndex.foreach: (drawing, at) =>
+        val classes = drawing.map(NodeClass.fromId).toSeq
+        assertEquals(classes.sortBy(held => if held.isDrawn then 0 else if held.isRelationship then 1 else 2), classes, s"seed $seed, drawing $at")
+      permuted.nodeClass.toArray.zip(permuted.links.toArray).foreach: (drawing, links) =>
+        drawing.zip(links).filter((held, _) => NodeClass.fromId(held).isSymmetric).foreach: (held, ends) =>
+          assert(ends(0) < ends(1), s"$held holds ${ends.toSeq} rather than its ends in ascending order")
 
   test("the objects of a record hold the record"):
     assertSameRecord(Objects.record(Objects.of(record.record(nodes))), record.record(nodes))

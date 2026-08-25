@@ -86,9 +86,76 @@ final case class RecordBatch[S, Node](
     xs: Tensor3[S, Node, NodePoint, Float32],
     ys: Tensor3[S, Node, NodePoint, Float32],
     links: Tensor3[S, Node, NodeLink, Int32]
-)
+):
+
+  /** The same records, laid out again in `slots` positions with their nodes in a fresh random
+    * order: the drawn nodes first, the relationships between them after them, and the positions
+    * the record does not reach last.
+    *
+    * A record is a set, so the order it is written down in is the model's to be indifferent to,
+    * which is what drawing a new one every step is for. This one is drawn on the device — nothing
+    * is read back to lay it out again.
+    */
+  def permuted(key: Key, slots: AxisExtent[Node])(using Label[S], Label[Node]): RecordBatch[S, Node] =
+    val drawings = nodeClass.shape.extent(Axis[S])
+    val padded = paddedTo(slots, drawings)
+    val keys = key.splitToTensor(drawings)
+    val (permutedClasses, permutedXs, permutedYs, permutedLinks) =
+      zipvmap(Axis[S])(padded.nodeClass, padded.xs, padded.ys, padded.links, keys):
+        case (nodeClass, xs, ys, links, key) =>
+          val permuted = RecordBatch.permutedRecord(Record(nodeClass, xs, ys, links), key.item)
+          (permuted.nodeClass, permuted.xs, permuted.ys, permuted.links)
+    RecordBatch(permutedClasses, permutedXs, permutedYs, permutedLinks)
+
+  /** The same records in as many positions, the ones they do not reach holding no node. */
+  private def paddedTo(slots: AxisExtent[Node], drawings: AxisExtent[S])(using Label[S], Label[Node]): RecordBatch[S, Node] =
+    val held = nodeClass.shape(Axis[Node])
+    require(held <= slots.size, s"records of $held positions do not fit in ${slots.size}")
+    val empty = Axis[Node] -> (slots.size - held)
+    RecordBatch(
+      nodeClass = concatenate(nodeClass, Tensor(Shape(drawings, empty), VType[Int32]).fill(NodeClass.NoNode.id), Axis[Node]),
+      xs = concatenate(xs, Tensor(Shape(drawings, empty, points), VType[Float32]).fill(0f), Axis[Node]),
+      ys = concatenate(ys, Tensor(Shape(drawings, empty, points), VType[Float32]).fill(0f), Axis[Node]),
+      links = concatenate(links, Tensor(Shape(drawings, empty, ends), VType[Int32]).fill(0), Axis[Node])
+    )
+
+  private def points = Axis[NodePoint] -> NodeClass.maxPoints
+
+  private def ends = Axis[NodeLink] -> NodeClass.maxLinks
 
 object RecordBatch:
+
+  /** One record in a fresh random order, with the drawn nodes kept ahead of the relationships and
+    * the positions it does not reach after both. A relationship names the nodes it links by their
+    * position, so the names are read in the new order too.
+    */
+  private def permutedRecord[Node: Label](record: Record[Node], key: Key): Record[Node] =
+    val slots = record.nodeClass.shape.extent(Axis[Node])
+    val shuffle = dimwit.Random.permutation(slots)(key)
+    def classIs(holds: NodeClass => Boolean)(of: Tensor1[Node, Int32]) =
+      NodeClass.indicator(VType[Float32])(holds).take(Axis[NodeClasses])(of)
+
+    val isRelationship = classIs(_.isRelationship)(record.nodeClass)
+    val isEmpty = classIs(_ == NodeClass.NoNode)(record.nodeClass)
+    val block = isRelationship + isEmpty + isEmpty // drawn nodes 0, relationships 1, empty positions 2
+    val within = shuffle.asFloat(VType[Float32])
+    val order = (block * Tensor.like(block).fill(slots.size.toFloat) + within).argsort(Axis[Node])
+    val nodeClass = record.nodeClass.take(Axis[Node])(order)
+
+    // A relationship names the nodes it links by their position, and a position that held the node
+    // `at` before holds it at `inverseOrder(at)` now.
+    val inverseOrder = order.argsort(Axis[Node])
+    val moved = record.links.take(Axis[Node])(order).vmap(Axis[NodeLink])(inverseOrder.take(Axis[Node])(_))
+    val ascending = stack(Seq(moved.min(Axis[NodeLink]), moved.max(Axis[NodeLink])), newAxis = Axis[NodeLink], afterAxis = Axis[Node])
+    def is(holds: NodeClass => Boolean) = classIs(holds)(nodeClass) > Tensor.like(block).fill(0f)
+    Record(
+      nodeClass = nodeClass,
+      xs = record.xs.take(Axis[Node])(order),
+      ys = record.ys.take(Axis[Node])(order),
+      // Two things [[RecordGraph.placed]] holds that a new order undoes: a symmetric relationship
+      // names the two it links in ascending order, and a node that links nothing links position 0.
+      links = where_!(is(_.isRelationship), where_!(is(_.isSymmetric), ascending, moved), Tensor.like(moved).fill(0))
+    )
 
   /** A batch of records laid out in order, uploaded in four tensors rather than four per drawing. */
   def of[S: Label, Node: Label](records: Seq[RecordGraph], batch: Axis[S], nodes: AxisExtent[Node]): RecordBatch[S, Node] =

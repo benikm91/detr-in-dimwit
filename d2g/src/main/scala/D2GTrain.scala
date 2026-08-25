@@ -3,7 +3,6 @@ import dataset.LShapeDataset
 import dataset.LShapeDataset.Split
 import dataset.Record
 import dataset.RecordBatch
-import dataset.RecordGraph
 import deepwit.checkpointing.TensorTreeCheckpointer
 import deepwit.optimizer.clipGlobalNorm
 import deepwit.training.Monitor
@@ -54,7 +53,7 @@ def d2gTrain(): Unit =
 
   val nodes = Axis[Node] -> RecordNodes
   val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node])(Split.Train)
-  val linearize = scala.util.Random(42)
+  var linearizeKey = Random.Key(42)
   val batches = data.batches(Axis[Batch] -> batchSize)
 
   val optimizer = AdamW(Adam(learningRate), weightDecay)
@@ -85,9 +84,10 @@ def d2gTrain(): Unit =
   def gradientStep(
       images: Tensor4[Batch, Width, Height, Channel, Float32],
       records: RecordBatch[Batch, Node],
+      linearization: Key,
       state: D2GTrainState
   ) =
-    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, records))(state.params)
+    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, records.permuted(linearization, nodes)))(state.params)
     val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(maxGradientNorm), state.params, state.optimizerState)
     D2GTrainState(params, optimizerState, lastCost)
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
@@ -97,8 +97,9 @@ def d2gTrain(): Unit =
   batches
     .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):
       case (state, batch) =>
-        val linearized = RecordGraph.of(batch.target).map(_.permuted(linearize))
-        jitGradientStep(batch.images, RecordBatch.of(linearized, Axis[Batch], nodes), state)
+        val (next, forThisStep) = linearizeKey.split2()
+        linearizeKey = next
+        jitGradientStep(batch.images, batch.target, forThisStep, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))
     .tapEvery(1_000):
