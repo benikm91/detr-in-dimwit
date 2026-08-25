@@ -70,11 +70,9 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
 
   /** The node the model answers slot `at` with, having taken the nodes before it. */
   private def nextRemainingNode(document: Tensor2[Patch, Embedding, V], taken: Record[Node], at: Int): Record[Node] =
-    val embedded = embed(taken)
-    val placed = position.injectToPrefix(concatenate(embedded, params.predictionToken.prependAxis(Axis[Node]), Axis[Node]))
-    // Nothing is taken at the first slot, and an empty range is not a slice the published dimwit takes.
-    val nodes = if at == 0 then embedded else placed.slice(Axis[Node].at(0 until at))
-    val answered = decoder.forTranscription(document, nodes, placed.slice(Axis[Node].at(at)))
+    val context = concatenate(embed(taken), params.predictionToken.prependAxis(Axis[Node]), Axis[Node])
+    val placed = position.injectToPrefix(context)
+    val answered = decoder.forTranscription(document, placed.slice(Axis[Node].at(0 until at)), placed.slice(Axis[Node].at(at)))
     scorer.decide(scorer(answered.prependAxis(Axis[Node])))
 
   /** A record with nothing taken in it yet, which is where transcription starts. */
