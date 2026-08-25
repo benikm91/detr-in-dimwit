@@ -15,19 +15,6 @@ case class ScorerHead[Carries, Values, V](
     bias: Tensor2[Carries, Values, V]
 )
 
-/** A record's nodes, scored: a class and a pixel per coordinate, per position. */
-case class NodeLogits[V](
-    nodeClass: Tensor2[Node, NodeClasses, V],
-    xs: Tensor3[Node, NodePoint, Pixel, V],
-    ys: Tensor3[Node, NodePoint, Pixel, V]
-)
-
-/** A record's relationships, scored: a class and a node per link, per position. */
-case class EdgeLogits[V](
-    edgeClass: Tensor2[Edge, EdgeClasses, V],
-    links: Tensor3[Edge, NodeLink, LinkedNode, V]
-)
-
 /** Reads a record's nodes into one embedding each: the class and the points it is placed by
   * embedded on their own, concatenated and projected into the space the decoder works in.
   */
@@ -97,7 +84,9 @@ object EdgeEmbedder:
 
 /** Reads an embedding per position back into a record's nodes, and settles them. */
 class NodeScorer[V: IsFloating](params: NodeScorer.Params[V])
-    extends (Tensor2[Node, Embedding, V] => NodeLogits[V]):
+    extends (Tensor2[Node, Embedding, V] => NodeScorer.NodeLogits[V]):
+
+  import NodeScorer.NodeLogits
 
   private val classify = AffineLayer(params.nodeClass)
 
@@ -128,6 +117,13 @@ class NodeScorer[V: IsFloating](params: NodeScorer.Params[V])
 
 object NodeScorer:
 
+  /** A record's nodes, scored: a class and a pixel per coordinate, per position. */
+  case class NodeLogits[V](
+      nodeClass: Tensor2[Node, NodeClasses, V],
+      xs: Tensor3[Node, NodePoint, Pixel, V],
+      ys: Tensor3[Node, NodePoint, Pixel, V]
+  )
+
   case class Params[V](
       nodeClass: AffineLayer.Params[Embedding, NodeClasses, V],
       xs: ScorerHead[NodePoint, Pixel, V],
@@ -140,7 +136,9 @@ object NodeScorer:
 
 /** Reads an embedding per position back into a record's relationships, and settles them. */
 class EdgeScorer[V: IsFloating](params: EdgeScorer.Params[V])
-    extends (Tensor2[Edge, Embedding, V] => EdgeLogits[V]):
+    extends (Tensor2[Edge, Embedding, V] => EdgeScorer.EdgeLogits[V]):
+
+  import EdgeScorer.EdgeLogits
 
   private val classify = AffineLayer(params.edgeClass)
 
@@ -160,6 +158,12 @@ class EdgeScorer[V: IsFloating](params: EdgeScorer.Params[V])
     RecordEdges(edgeClass = edgeClass, links = where(used > Tensor.like(used).fill(0f), named, Tensor.like(named).fill(0)))
 
 object EdgeScorer:
+
+  /** A record's relationships, scored: a class and a node per link, per position. */
+  case class EdgeLogits[V](
+      edgeClass: Tensor2[Edge, EdgeClasses, V],
+      links: Tensor3[Edge, NodeLink, LinkedNode, V]
+  )
 
   case class Params[V](
       edgeClass: AffineLayer.Params[Embedding, EdgeClasses, V],

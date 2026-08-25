@@ -9,6 +9,7 @@ import deepwit.base.LinearLayer
 import dimwit.*
 import dimwit.Conversions.given
 import dimwit.Label as Λ
+import deepwit.init.Init
 
 import scala.language.implicitConversions
 
@@ -179,14 +180,14 @@ object RelationExtractor:
               obj = LinearLayer.Params.xavierUniform(keyExtent, sourceExtent, objectKey, vtype)
             )
           .toList,
-        embedding = {
+        embedding =
           val (subjectKey, objectKey) = embeddingKey.splitToTuple(2)
           EmbeddingProjection(
             subject = LinearLayer.Params.xavierUniform(embeddingExtent, sourceExtent, subjectKey, vtype),
             obj = LinearLayer.Params.xavierUniform(embeddingExtent, sourceExtent, objectKey, vtype)
           )
-        },
-        gate = deepwit.init.Init.xavierUniform(pairExtent, Axis[Gate] -> 1, gateKey, vtype).slice(Axis[Gate].at(0)),
+        ,
+        gate = Init.xavierUniform(pairExtent, Axis[Gate] -> 1, gateKey, vtype).slice(Axis[Gate].at(0)),
         relation = perceptron(pairExtent, hiddenExtent, Axis[RelationClasses] -> dataset.RelationClass.values.length, relationKey, vtype),
         connectivity = perceptron(pairExtent, hiddenExtent, Axis[Connectivity] -> 1, connectivityKey, vtype)
       )

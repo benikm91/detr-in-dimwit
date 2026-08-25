@@ -10,6 +10,8 @@ import deepwit.base.AffineLayer
 import deepwit.embedder.ImageToPatchEmbedder
 import deepwit.embedder.LearnedAbsolutePositionalInjector
 import deepwit.init.Init
+import EdgeScorer.EdgeLogits
+import NodeScorer.NodeLogits
 import dimwit.*
 
 import scala.annotation.tailrec
@@ -65,11 +67,11 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
       // What a prediction slot answers with is a node, or a relationship, so what it became is
       // read back as one.
       nodes = NodeScores(
-        remaining = nodeScorer(answeredNodes.relabel(Axis[NodeDecoder.Prediction] -> Axis[Node])),
+        remaining = nodeScorer(answeredNodes.relabel(Axis[NodePrediction] -> Axis[Node])),
         taken = nodeScorer(carriedNodes)
       ),
       edges = EdgeScores(
-        remaining = edgeScorer(answeredEdges.relabel(Axis[EdgeDecoder.Prediction] -> Axis[Edge])),
+        remaining = edgeScorer(answeredEdges.relabel(Axis[EdgePrediction] -> Axis[Edge])),
         taken = edgeScorer(carriedEdges)
       )
     )
@@ -77,70 +79,87 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   /** The record the document holds: the nodes it draws, and then the relationships between them.
     *
     * Nothing but the encoded document goes in, and every step reads back only what the model
-    * itself has taken, so no target record can reach it here.
+    * itself has taken, so no target record can reach it here — which is the whole of transcription,
+    * and nothing else in this class is part of it.
     */
   def predictRecord(document: Tensor2[Patch, Embedding, V], nodeSlots: AxisExtent[Node], edgeSlots: AxisExtent[Edge]): Record[Node, Edge] =
-    val nodes = predictRemainingNodes(document, nodeSlots)
-    Record(nodes, predictRemainingEdges(document, carried(document, nodes), holdsNode(nodes), edgeSlots))
 
-  /** Every node the document draws, predicted after the ones taken before it, up to `slots` of
-    * them or to the node the model ends them with — which is not taken, so what comes back holds
-    * nothing but nodes.
-    */
-  def predictRemainingNodes(document: Tensor2[Patch, Embedding, V], slots: AxisExtent[Node]): RecordNodes[Node] =
-    @tailrec def untilNodesEnd(taken: RecordNodes[Node]): RecordNodes[Node] =
-      val at = taken.nodeClass.shape(Axis[Node])
-      if at == slots.size then taken
-      else
-        val next = nextRemainingNode(document, taken, at)
-        if next.nodeClass.toArray.head == NodeClass.NoNode.id then taken
-        else untilNodesEnd(joined(taken, next))
-    untilNodesEnd(noNodes(Axis[Node] -> 0))
+    def predictRemainingNodes: RecordNodes[Node] =
+      def noNodes(slots: AxisExtent[Node]) =
+        val points = Axis[NodePoint] -> NodeClass.maxPoints
+        RecordNodes(
+          nodeClass = Tensor1(slots, VType[Int32]).fill(NodeClass.NoNode.id),
+          xs = Tensor2(slots, points, VType[Float32]).fill(0f),
+          ys = Tensor2(slots, points, VType[Float32]).fill(0f)
+        )
 
-  /** Every relationship between those nodes, predicted the same way. */
-  def predictRemainingEdges(
-      document: Tensor2[Patch, Embedding, V],
-      nodes: Tensor2[Node, Embedding, V],
-      holdsNode: Tensor1[Node, Bool],
-      slots: AxisExtent[Edge]
-  ): RecordEdges[Edge] =
-    @tailrec def untilEdgesEnd(taken: RecordEdges[Edge]): RecordEdges[Edge] =
-      val at = taken.edgeClass.shape(Axis[Edge])
-      if at == slots.size then taken
-      else
-        val next = nextRemainingEdge(document, nodes, holdsNode, taken, at)
-        if next.edgeClass.toArray.head == EdgeClass.NoEdge.id then taken
-        else untilEdgesEnd(joined(taken, next))
-    untilEdgesEnd(noEdges(Axis[Edge] -> 0))
+      def joined(taken: RecordNodes[Node], next: RecordNodes[Node]) =
+        RecordNodes(
+          nodeClass = concatenate(taken.nodeClass, next.nodeClass, Axis[Node]),
+          xs = concatenate(taken.xs, next.xs, Axis[Node]),
+          ys = concatenate(taken.ys, next.ys, Axis[Node])
+        )
 
-  /** The node the model answers slot `at` with, having taken the nodes before it. */
-  private def nextRemainingNode(document: Tensor2[Patch, Embedding, V], taken: RecordNodes[Node], at: Int): RecordNodes[Node] =
-    val context = concatenate(embedNodes(taken), params.nodes.token.prependAxis(Axis[Node]), Axis[Node])
-    val placed = nodePosition.injectToPrefix(context)
-    val (_, answered) = nodeDecoder.forTranscription(document, placed.slice(Axis[Node].at(0 until at)), placed.slice(Axis[Node].at(at)))
-    nodeScorer.decide(nodeScorer(answered.prependAxis(Axis[Node])))
+      /** The node the model answers slot `at` with, having taken the nodes before it. */
+      def nextRemainingNode(taken: RecordNodes[Node], at: Int) =
+        val context = concatenate(embedNodes(taken), params.nodes.token.prependAxis(Axis[Node]), Axis[Node])
+        val placed = nodePosition.injectToPrefix(context)
+        val (_, answered) = nodeDecoder.forTranscription(document, placed.slice(Axis[Node].at(0 until at)), placed.slice(Axis[Node].at(at)))
+        nodeScorer.decide(nodeScorer(answered.prependAxis(Axis[Node])))
 
-  /** The relationship the model answers slot `at` with, having taken the ones before it. */
-  private def nextRemainingEdge(
-      document: Tensor2[Patch, Embedding, V],
-      nodes: Tensor2[Node, Embedding, V],
-      holdsNode: Tensor1[Node, Bool],
-      taken: RecordEdges[Edge],
-      at: Int
-  ): RecordEdges[Edge] =
-    val context = concatenate(embedEdges(taken), params.edges.token.prependAxis(Axis[Edge]), Axis[Edge])
-    val placed = edgePosition.injectToPrefix(context)
-    val answered = edgeDecoder.forTranscription(document, nodes, holdsNode, placed.slice(Axis[Edge].at(0 until at)), placed.slice(Axis[Edge].at(at)))
-    edgeScorer.decide(edgeScorer(answered.prependAxis(Axis[Edge])))
+      @tailrec def untilNodesEnd(taken: RecordNodes[Node]): RecordNodes[Node] =
+        val at = taken.nodeClass.shape(Axis[Node])
+        if at == nodeSlots.size then taken
+        else
+          val next = nextRemainingNode(taken, at)
+          if next.nodeClass.toArray.head == NodeClass.NoNode.id then taken
+          else untilNodesEnd(joined(taken, next))
 
-  /** The nodes as the node decoder carries them, which is what the relationships relate. The
-    * prediction the door answers with is thrown away: nothing is being predicted here.
-    */
-  private def carried(document: Tensor2[Patch, Embedding, V], nodes: RecordNodes[Node]): Tensor2[Node, Embedding, V] =
-    nodeDecoder.forTranscription(document, nodePosition.injectToPrefix(embedNodes(nodes)), params.nodes.token)._1
+      untilNodesEnd(noNodes(Axis[Node] -> 0))
+
+    /** Every relationship between those nodes, predicted the same way. The nodes are read as the
+      * node decoder carries them, since that is what an [[EdgeDecoder]] relates; the prediction
+      * that door answers with is thrown away, nothing being predicted there.
+      */
+    def predictRemainingEdges(nodes: RecordNodes[Node]): RecordEdges[Edge] =
+      val related = nodeDecoder.forTranscription(document, nodePosition.injectToPrefix(embedNodes(nodes)), params.nodes.token)._1
+      val holds = holdsNode(nodes)
+
+      def noEdges(slots: AxisExtent[Edge]) =
+        RecordEdges(
+          edgeClass = Tensor1(slots, VType[Int32]).fill(EdgeClass.NoEdge.id),
+          links = Tensor2(slots, Axis[NodeLink] -> EdgeClass.maxLinks, VType[Int32]).fill(0)
+        )
+
+      def joined(taken: RecordEdges[Edge], next: RecordEdges[Edge]) =
+        RecordEdges(
+          edgeClass = concatenate(taken.edgeClass, next.edgeClass, Axis[Edge]),
+          links = concatenate(taken.links, next.links, Axis[Edge])
+        )
+
+      /** The relationship the model answers slot `at` with, having taken the ones before it. */
+      def nextRemainingEdge(taken: RecordEdges[Edge], at: Int) =
+        val context = concatenate(embedEdges(taken), params.edges.token.prependAxis(Axis[Edge]), Axis[Edge])
+        val placed = edgePosition.injectToPrefix(context)
+        val answered = edgeDecoder.forTranscription(document, related, holds, placed.slice(Axis[Edge].at(0 until at)), placed.slice(Axis[Edge].at(at)))
+        edgeScorer.decide(edgeScorer(answered.prependAxis(Axis[Edge])))
+
+      @tailrec def untilEdgesEnd(taken: RecordEdges[Edge]): RecordEdges[Edge] =
+        val at = taken.edgeClass.shape(Axis[Edge])
+        if at == edgeSlots.size then taken
+        else
+          val next = nextRemainingEdge(taken, at)
+          if next.edgeClass.toArray.head == EdgeClass.NoEdge.id then taken
+          else untilEdgesEnd(joined(taken, next))
+
+      untilEdgesEnd(noEdges(Axis[Edge] -> 0))
+
+    val nodes = predictRemainingNodes
+    Record(nodes, predictRemainingEdges(nodes))
 
   /** Which node slots hold a node: the positions past the record are there to make every record
-    * the same shape, and relate nothing.
+    * the same shape, and relate nothing. Both doors ask, since both hand nodes to an
+    * [[EdgeDecoder]].
     */
   private def holdsNode(nodes: RecordNodes[Node]): Tensor1[Node, Bool] =
     val drawn = NodeClass.indicator(VType[Float32])(_.isDrawn).take(Axis[NodeClasses])(nodes.nodeClass)
@@ -149,44 +168,14 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   /** The same `<P>` token at every node slot, told apart only by the positional encoding of the
     * node it answers for and by what it may attend to.
     */
-  private def nodePredictions(nodes: AxisExtent[Node]): Tensor2[NodeDecoder.Prediction, Embedding, V] =
+  private def nodePredictions(nodes: AxisExtent[Node]): Tensor2[NodePrediction, Embedding, V] =
     val tokens = params.nodes.token.broadcastTo(Shape2(nodes, params.nodes.token.shape.extent(Axis[Embedding])))
-    nodePosition(tokens).relabel(Axis[Node] -> Axis[NodeDecoder.Prediction])
+    nodePosition(tokens).relabel(Axis[Node] -> Axis[NodePrediction])
 
   /** The same, at every relationship slot. */
-  private def edgePredictions(edges: AxisExtent[Edge]): Tensor2[EdgeDecoder.Prediction, Embedding, V] =
+  private def edgePredictions(edges: AxisExtent[Edge]): Tensor2[EdgePrediction, Embedding, V] =
     val tokens = params.edges.token.broadcastTo(Shape2(edges, params.edges.token.shape.extent(Axis[Embedding])))
-    edgePosition(tokens).relabel(Axis[Edge] -> Axis[EdgeDecoder.Prediction])
-
-  /** As many positions holding no node as asked for, which is where transcription starts and how
-    * it pads out what it did not reach.
-    */
-  private def noNodes(slots: AxisExtent[Node]): RecordNodes[Node] =
-    val points = Axis[NodePoint] -> NodeClass.maxPoints
-    RecordNodes(
-      nodeClass = Tensor1(slots, VType[Int32]).fill(NodeClass.NoNode.id),
-      xs = Tensor2(slots, points, VType[Float32]).fill(0f),
-      ys = Tensor2(slots, points, VType[Float32]).fill(0f)
-    )
-
-  private def noEdges(slots: AxisExtent[Edge]): RecordEdges[Edge] =
-    RecordEdges(
-      edgeClass = Tensor1(slots, VType[Int32]).fill(EdgeClass.NoEdge.id),
-      links = Tensor2(slots, Axis[NodeLink] -> EdgeClass.maxLinks, VType[Int32]).fill(0)
-    )
-
-  private def joined(taken: RecordNodes[Node], next: RecordNodes[Node]): RecordNodes[Node] =
-    RecordNodes(
-      nodeClass = concatenate(taken.nodeClass, next.nodeClass, Axis[Node]),
-      xs = concatenate(taken.xs, next.xs, Axis[Node]),
-      ys = concatenate(taken.ys, next.ys, Axis[Node])
-    )
-
-  private def joined(taken: RecordEdges[Edge], next: RecordEdges[Edge]): RecordEdges[Edge] =
-    RecordEdges(
-      edgeClass = concatenate(taken.edgeClass, next.edgeClass, Axis[Edge]),
-      links = concatenate(taken.links, next.links, Axis[Edge])
-    )
+    edgePosition(tokens).relabel(Axis[Edge] -> Axis[EdgePrediction])
 
 object D2G:
 

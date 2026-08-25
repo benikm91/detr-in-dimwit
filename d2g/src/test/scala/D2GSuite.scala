@@ -12,9 +12,12 @@ import dataset.RecordGraph
 import dataset.RecordNode
 import dataset.RecordNodes
 import dataset.RecordScoring
+import EdgeScorer.EdgeLogits
+import NodeScorer.NodeLogits
 import dimwit.*
 import dimwit.optimizer.Adam
 import munit.FunSuite
+import deepwit.init.Init
 
 /** What an embedding may attend to, and what the loss accepts. */
 class RecordSuite extends FunSuite:
@@ -33,9 +36,9 @@ class RecordSuite extends FunSuite:
     do
       val itself = target == source
       val expected =
-        if source >= 4 then itself                          // a guess is read by no one but itself
-        else if target < 4 then itself || source <= target   // a taken embedding carries itself and what came before it
-        else source < target - 4                             // a prediction embedding sees only what is taken before it
+        if source >= 4 then itself // a guess is read by no one but itself
+        else if target < 4 then itself || source <= target // a taken embedding carries itself and what came before it
+        else source < target - 4 // a prediction embedding sees only what is taken before it
       assertEquals(mask(target)(source), expected, s"row $target, column $source")
 
   test("no row is fully masked, since a fully masked row has no softmax"):
@@ -77,10 +80,10 @@ class RecordSuite extends FunSuite:
     val (patches, embedding, mixed) = (Axis[Patch] -> 5, Axis[Embedding] -> 8, Axis[EmbeddingMixed] -> 16)
     val (held, padded) = (Axis[Node] -> 2, Axis[Node] -> 4)
     val decoder = EdgeDecoder(EdgeDecoder.Params.xavierUniformDepthScaled(numBlocks = 1, numHeads = 2, embedding, embedding, mixed, Random.Key(3)))
-    val document = deepwit.init.Init.xavierUniform(patches, embedding, Random.Key(4))
-    val taken = deepwit.init.Init.xavierUniform(edges, embedding, Random.Key(5))
-    val predictions = deepwit.init.Init.xavierUniform(edges, embedding, Random.Key(6)).relabel(Axis[Edge] -> Axis[EdgeDecoder.Prediction])
-    val nodes = deepwit.init.Init.xavierUniform(padded, embedding, Random.Key(7))
+    val document = Init.xavierUniform(patches, embedding, Random.Key(4))
+    val taken = Init.xavierUniform(edges, embedding, Random.Key(5))
+    val predictions = Init.xavierUniform(edges, embedding, Random.Key(6)).relabel(Axis[Edge] -> Axis[EdgePrediction])
+    val nodes = Init.xavierUniform(padded, embedding, Random.Key(7))
 
     def answered(nodes: Tensor2[Node, Embedding, Float32], holdsNode: Seq[Boolean]) =
       val mask = Tensor1(nodes.shape.extent(Axis[Node]), VType[Bool]).fromArray(holdsNode.toArray)

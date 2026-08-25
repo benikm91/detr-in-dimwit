@@ -7,6 +7,7 @@ import deepwit.base.AffineLayer
 import deepwit.embedder.ImageToPatchEmbedder
 import deepwit.normalization.LayerNorm
 import deepwit.attention.MultiHeadAttention
+import deepwit.init.Init
 import dimwit.*
 import dimwit.tensor.Tensor4
 
@@ -149,7 +150,7 @@ object DETR:
           embeddingMixedExtent,
           decoderKey
         ),
-        objectQueries = deepwit.init.Init.xavierUniform(boundingBoxExtent, embeddingExtent, queryKey),
+        objectQueries = Init.xavierUniform(boundingBoxExtent, embeddingExtent, queryKey),
         classification = AffineLayer.Params.xavierUniform(embeddingExtent, Axis[ObjectClasses] -> ObjectClass.values.length, classKey),
         boxHidden1 = AffineLayer.Params.xavierUniform(embeddingExtent, boxHiddenExtent, box1Key),
         boxHidden2 = AffineLayer.Params.xavierUniform(boxHiddenExtent, boxHiddenExtent2, box2Key),

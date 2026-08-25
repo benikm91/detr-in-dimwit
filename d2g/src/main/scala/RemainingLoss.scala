@@ -6,6 +6,8 @@ import dataset.NodeLink
 import dataset.NodePoint
 import dataset.RecordEdges
 import dataset.RecordNodes
+import EdgeScorer.EdgeLogits
+import NodeScorer.NodeLogits
 import dimwit.*
 import dimwit.Conversions.given
 

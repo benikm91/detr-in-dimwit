@@ -150,6 +150,11 @@ def jointSequenceMask[Context: Λ](context: AxisExtent[Context]): Tensor2[Contex
   // drop internal vocabulary
   mask.relabelAll((Axis[Context], Axis[Context]))
 
+/** Axis of the node prediction embeddings, one beside every node slot: what the decoder would
+  * answer with there, rather than what is taken there.
+  */
+trait NodePrediction derives Label
+
 /** The decoder of the record's nodes, read through two doors.
   *
   * An embedding in a decoder has two jobs — become what its slot predicts, and keep carrying what
@@ -164,8 +169,6 @@ class NodeDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
     params: NodeDecoder.Params[PatchEmbedding, Embedding, V]
 ):
 
-  import NodeDecoder.Prediction
-
   private val blocks = params.blocks.map(NodeDecoderBlock(_))
   private val finalNorm = LayerNorm(params.finalNorm)
 
@@ -173,11 +176,11 @@ class NodeDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
   def forTraining(
       document: Tensor2[Patch, PatchEmbedding, V],
       nodes: Tensor2[Node, Embedding, V],
-      predictions: Tensor2[Prediction, Embedding, V]
-  ): (Tensor2[Node, Embedding, V], Tensor2[Prediction, Embedding, V]) =
+      predictions: Tensor2[NodePrediction, Embedding, V]
+  ): (Tensor2[Node, Embedding, V], Tensor2[NodePrediction, Embedding, V]) =
     val (carried, answered) = blocks.foldLeft((nodes, predictions)):
       case ((nodes, predictions), block) => block.forTraining(document, nodes, predictions)
-    (carried.vmap(Axis[Node])(finalNorm), answered.vmap(Axis[Prediction])(finalNorm))
+    (carried.vmap(Axis[Node])(finalNorm), answered.vmap(Axis[NodePrediction])(finalNorm))
 
   /** The nodes taken so far as the decoder carries them — which is what an [[EdgeDecoder]]
     * relates — and what it would answer with next.
@@ -193,13 +196,8 @@ class NodeDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
 
 object NodeDecoder:
 
-  /** Axis of the prediction embeddings, one beside every node slot: what the decoder would answer
-    * with there, rather than what is taken there.
-    */
-  trait Prediction derives Label
-
   /** The sequence a block decodes: every node embedding, then every prediction embedding. */
-  type Context = Node |+| Prediction
+  type Context = Node |+| NodePrediction
 
   case class Params[PatchEmbedding, Embedding, V](
       blocks: List[NodeDecoderBlock.Params[PatchEmbedding, Embedding, V]],
@@ -224,7 +222,7 @@ class NodeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
     params: NodeDecoderBlock.Params[PatchEmbedding, Embedding, V]
 ):
 
-  import NodeDecoder.{Prediction, Context}
+  import NodeDecoder.Context
 
   private val contextAxis = Axis[Context]
 
@@ -243,25 +241,25 @@ class NodeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
   def forTraining(
       document: Tensor2[Patch, PatchEmbedding, V],
       nodes: Tensor2[Node, Embedding, V],
-      predictions: Tensor2[Prediction, Embedding, V]
-  ): (Tensor2[Node, Embedding, V], Tensor2[Prediction, Embedding, V]) =
+      predictions: Tensor2[NodePrediction, Embedding, V]
+  ): (Tensor2[Node, Embedding, V], Tensor2[NodePrediction, Embedding, V]) =
     var x = concatenate(nodes, predictions)
     x = x + jointAttention(x.vmap(contextAxis)(selfAttentionPreNorm)) // self attention
     x = x + documentAttention(document, x.vmap(contextAxis)(documentAttentionPreNorm)) // cross attention on the document
     x = x + x.vmap(contextAxis)(embedding => mlp(mlpPreNorm(embedding))) // embedding mixer
-    x.deconcatenate(contextAxis, (nodes.extent(Axis[Node]), predictions.extent(Axis[Prediction])))
+    x.deconcatenate(contextAxis, (nodes.extent(Axis[Node]), predictions.extent(Axis[NodePrediction])))
 
   def forTranscription(
       document: Tensor2[Patch, PatchEmbedding, V],
       taken: Tensor2[Node, Embedding, V],
       prediction: Tensor1[Embedding, V]
   ): (Tensor2[Node, Embedding, V], Tensor1[Embedding, V]) =
-    var x = concatenate(taken, prediction.prependAxis(Axis[Prediction]))
+    var x = concatenate(taken, prediction.prependAxis(Axis[NodePrediction]))
     x = x + causalAttention(x.vmap(contextAxis)(selfAttentionPreNorm)) // self attention
     x = x + documentAttention(document, x.vmap(contextAxis)(documentAttentionPreNorm)) // cross attention on the document
     x = x + x.vmap(contextAxis)(embedding => mlp(mlpPreNorm(embedding))) // embedding mixer
-    val (carried, answered) = x.deconcatenate(contextAxis, (taken.extent(Axis[Node]), Axis[Prediction] -> 1))
-    (carried, answered.squeeze(Axis[Prediction]))
+    val (carried, answered) = x.deconcatenate(contextAxis, (taken.extent(Axis[Node]), Axis[NodePrediction] -> 1))
+    (carried, answered.squeeze(Axis[NodePrediction]))
 
 object NodeDecoderBlock:
 
@@ -287,6 +285,9 @@ object NodeDecoderBlock:
         mlpNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
       )
 
+/** Axis of the relationship prediction embeddings, one beside every relationship slot. */
+trait EdgePrediction derives Label
+
 /** The decoder of the record's relationships, read through the same two doors as the
   * [[NodeDecoder]].
   *
@@ -297,8 +298,6 @@ object NodeDecoderBlock:
 class EdgeDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
     params: EdgeDecoder.Params[PatchEmbedding, Embedding, V]
 ):
-
-  import EdgeDecoder.Prediction
 
   private val blocks = params.blocks.map(EdgeDecoderBlock(_))
   private val finalNorm = LayerNorm(params.finalNorm)
@@ -313,11 +312,11 @@ class EdgeDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
       nodes: Tensor2[Node, Embedding, V],
       holdsNode: Tensor1[Node, Bool],
       edges: Tensor2[Edge, Embedding, V],
-      predictions: Tensor2[Prediction, Embedding, V]
-  ): (Tensor2[Edge, Embedding, V], Tensor2[Prediction, Embedding, V]) =
+      predictions: Tensor2[EdgePrediction, Embedding, V]
+  ): (Tensor2[Edge, Embedding, V], Tensor2[EdgePrediction, Embedding, V]) =
     val (carried, answered) = blocks.foldLeft((edges, predictions)):
       case ((edges, predictions), block) => block.forTraining(document, nodes, holdsNode, edges, predictions)
-    (carried.vmap(Axis[Edge])(finalNorm), answered.vmap(Axis[Prediction])(finalNorm))
+    (carried.vmap(Axis[Edge])(finalNorm), answered.vmap(Axis[EdgePrediction])(finalNorm))
 
   /** What the decoder would answer with next, after the relationships taken so far. */
   def forTranscription(
@@ -333,11 +332,8 @@ class EdgeDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
 
 object EdgeDecoder:
 
-  /** Axis of the prediction embeddings, one beside every relationship slot. */
-  trait Prediction derives Label
-
   /** The sequence a block decodes: every relationship embedding, then every prediction embedding. */
-  type Context = Edge |+| Prediction
+  type Context = Edge |+| EdgePrediction
 
   case class Params[PatchEmbedding, Embedding, V](
       blocks: List[EdgeDecoderBlock.Params[PatchEmbedding, Embedding, V]],
@@ -360,7 +356,7 @@ class EdgeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
     params: EdgeDecoderBlock.Params[PatchEmbedding, Embedding, V]
 ):
 
-  import EdgeDecoder.{Prediction, Context}
+  import EdgeDecoder.Context
 
   private val contextAxis = Axis[Context]
 
@@ -382,14 +378,14 @@ class EdgeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
       nodes: Tensor2[Node, Embedding, V],
       holdsNode: Tensor1[Node, Bool],
       edges: Tensor2[Edge, Embedding, V],
-      predictions: Tensor2[Prediction, Embedding, V]
-  ): (Tensor2[Edge, Embedding, V], Tensor2[Prediction, Embedding, V]) =
+      predictions: Tensor2[EdgePrediction, Embedding, V]
+  ): (Tensor2[Edge, Embedding, V], Tensor2[EdgePrediction, Embedding, V]) =
     var x = concatenate(edges, predictions)
     x = x + jointAttention(x.vmap(contextAxis)(selfAttentionPreNorm)) // self attention
     x = x + documentAttention(document, x.vmap(contextAxis)(documentAttentionPreNorm)) // cross attention on the document
     x = x + nodeAttention(holdsNode, x.shape.extent(contextAxis))(nodes, x.vmap(contextAxis)(nodeAttentionPreNorm)) // cross attention on the nodes that are there
     x = x + x.vmap(contextAxis)(embedding => mlp(mlpPreNorm(embedding))) // embedding mixer
-    x.deconcatenate(contextAxis, (edges.extent(Axis[Edge]), predictions.extent(Axis[Prediction])))
+    x.deconcatenate(contextAxis, (edges.extent(Axis[Edge]), predictions.extent(Axis[EdgePrediction])))
 
   def forTranscription(
       document: Tensor2[Patch, PatchEmbedding, V],
@@ -398,13 +394,13 @@ class EdgeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
       taken: Tensor2[Edge, Embedding, V],
       prediction: Tensor1[Embedding, V]
   ): (Tensor2[Edge, Embedding, V], Tensor1[Embedding, V]) =
-    var x = concatenate(taken, prediction.prependAxis(Axis[Prediction]))
+    var x = concatenate(taken, prediction.prependAxis(Axis[EdgePrediction]))
     x = x + causalAttention(x.vmap(contextAxis)(selfAttentionPreNorm)) // self attention
     x = x + documentAttention(document, x.vmap(contextAxis)(documentAttentionPreNorm)) // cross attention on the document
     x = x + nodeAttention(holdsNode, x.shape.extent(contextAxis))(nodes, x.vmap(contextAxis)(nodeAttentionPreNorm)) // cross attention on the nodes that are there
     x = x + x.vmap(contextAxis)(embedding => mlp(mlpPreNorm(embedding))) // embedding mixer
-    val (carried, answered) = x.deconcatenate(contextAxis, (taken.extent(Axis[Edge]), Axis[Prediction] -> 1))
-    (carried, answered.squeeze(Axis[Prediction]))
+    val (carried, answered) = x.deconcatenate(contextAxis, (taken.extent(Axis[Edge]), Axis[EdgePrediction] -> 1))
+    (carried, answered.squeeze(Axis[EdgePrediction]))
 
   /** Attention onto the nodes that are there, which is data rather than shape and so is built
     * around the mask it is given rather than once.
