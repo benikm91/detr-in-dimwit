@@ -23,6 +23,9 @@ val CheckpointRoot = "out/detr"
 
 private trait Batch derives Label
 
+/** Axis of a model's parameters, flattened into one vector so that they can be counted. */
+trait Parameter derives Label
+
 case class TrainState(
     params: DETR.Params[Float32],
     optimizerState: AdamState[DETR.Params[Float32]],
@@ -64,6 +67,9 @@ def detrTrain(): Unit =
     patchSize = 10,
     key = Random.Key(0)
   )
+
+  val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
+  println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
   val loss = HungarianLoss(VType[Float32])()
 

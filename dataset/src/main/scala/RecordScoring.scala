@@ -73,6 +73,29 @@ object RecordScoring:
   private def multiset(edges: Seq[RecordEdge]): Map[RecordEdge, Int] =
     edges.groupBy(identity).view.mapValues(_.length).toMap
 
+  /** Every line an evaluation of a record reports, so that two models are compared by the same
+    * code and not merely by the same words.
+    *
+    *   - `found` — of what the drawing holds, how much the model found. Recall.
+    *   - `right` — of what the model claims, how much of it is there. Precision, and what makes
+    *     predicting too much cost something rather than nothing.
+    *   - `records exactly right` — the whole record at once: every node, every relationship,
+    *     nothing missing and nothing spurious.
+    *
+    * The relationship lines are left out where no drawing holds a relationship, which is what a
+    * detector is scored against.
+    */
+  def reportAt(tolerance: Float, scored: Seq[Scored]): Unit =
+    val prefix = at(tolerance)
+    def line(what: String, correct: Scored => Int, total: Scored => Int): Unit =
+      report(prefix, what, scored.map(correct).sum, scored.map(total).sum)
+    line("nodes found", _.nodesFound, _.nodes)
+    line("nodes right", _.nodesFound, _.nodesPredicted)
+    if scored.exists(_.relationships > 0) then
+      line("relationships found", _.relationshipsFound, _.relationships)
+      line("relationships right", _.relationshipsFound, _.relationshipsPredicted)
+    report(prefix, "records exactly right", scored.count(_.isExact), scored.length)
+
 /** One line of a score report: `<prefix>  <what>  <correct> / <total>  <percentage>`. */
 def report(prefix: String, what: String, correct: Int, total: Int): Unit =
   println(f"$prefix%5s  $what%-26s $correct%6d / $total%-6d ${100f * correct / total}%5.1f%%")

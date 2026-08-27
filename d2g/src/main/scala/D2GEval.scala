@@ -82,10 +82,7 @@ def d2gEval(): Unit =
   report("", "records the right length", rightLength, drawings.length)
 
   Tolerances.foreach: tolerance =>
-    val scored = drawings.map((target, transcribed) => RecordScoring.score(target, transcribed, tolerance / Canvas))
-    report(at(tolerance), "nodes transcribed", scored.map(_.nodesFound).sum, scored.map(_.nodes).sum)
-    report(at(tolerance), "relationships transcribed", scored.map(_.relationshipsFound).sum, scored.map(_.relationships).sum)
-    report(at(tolerance), "records exactly right", scored.count(_.isExact), scored.length)
+    RecordScoring.reportAt(tolerance, drawings.map((target, transcribed) => RecordScoring.score(target, transcribed, tolerance / Canvas)))
 
 /** Axis of the drawings transcribed together. */
 private trait Drawing derives Label

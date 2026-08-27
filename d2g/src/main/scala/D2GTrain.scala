@@ -30,6 +30,9 @@ val D2GCheckpointRoot = "out/d2g"
 /** Axis of a batch of drawings. */
 private trait Batch derives Label
 
+/** Axis of a model's parameters, flattened into one vector so that they can be counted. */
+private trait Parameter derives Label
+
 case class D2GTrainState(
     params: D2G.Params[Float32],
     optimizerState: AdamState[D2G.Params[Float32]],
@@ -72,6 +75,9 @@ def d2gTrain(): Unit =
     canvas = Canvas,
     key = initKey
   )
+
+  val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
+  println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
   val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas)
   val edgeLoss = RemainingEdgeLoss(VType[Float32])

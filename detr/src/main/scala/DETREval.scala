@@ -48,10 +48,9 @@ def detrPlot(): Unit =
   * drawing was rendered from, which is how [[d2gEval]] scores too — a detector predicts no
   * relationships, so the record it is held against holds none either.
   *
-  *   - `nodes detected` — recall: of the lines and annotations of the split, how many the model
-  *     found, to within the tolerance.
-  *   - `detections right` — precision: of the objects it claims, how many are one.
-  *   - `drawings fully detected` — every node of the drawing found at once, and nothing spurious.
+  * The lines are the ones [[RecordScoring.reportAt]] reports for every model — `found` is recall,
+  * `right` is precision, and `records exactly right` is every node of the drawing at once with
+  * nothing spurious. A detector predicts no relationships, so those lines are left out.
   */
 @main
 def detrEval(): Unit =
@@ -70,7 +69,4 @@ def detrEval(): Unit =
     .toSeq
 
   Tolerances.foreach: tolerance =>
-    val scored = drawings.map((target, detected) => RecordScoring.score(target, detected, tolerance / Canvas))
-    report(at(tolerance), "nodes detected", scored.map(_.nodesFound).sum, scored.map(_.nodes).sum)
-    report(at(tolerance), "detections right", scored.map(_.nodesFound).sum, scored.map(_.nodesPredicted).sum)
-    report(at(tolerance), "drawings fully detected", scored.count(_.isExact), scored.length)
+    RecordScoring.reportAt(tolerance, drawings.map((target, detected) => RecordScoring.score(target, detected, tolerance / Canvas)))

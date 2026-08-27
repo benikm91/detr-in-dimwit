@@ -89,6 +89,9 @@ def egtrTrain(detectorRun: String*): Unit =
     key = Random.Key(1)
   )
 
+  val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
+  println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
+
   val loss = EGTRLoss(VType[Float32], HungarianLoss(VType[Float32])())()
 
   def cost(
