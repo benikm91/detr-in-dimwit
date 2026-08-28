@@ -13,6 +13,11 @@ import deepwit.attention.HeadQuery
 import deepwit.attention.HeadValue
 import deepwit.optimizer.clipGlobalNorm
 import dimwit.*
+import deepwit.optimizer.CosineDecay
+import deepwit.optimizer.LearningRateSchedule
+import deepwit.optimizer.LearningRateScheduler
+import deepwit.optimizer.LearningRateSchedulerState
+import deepwit.optimizer.LinearWarmup
 import dimwit.optimizer.Adam
 import dimwit.optimizer.AdamState
 import dimwit.optimizer.AdamW
@@ -28,7 +33,7 @@ trait Parameter derives Label
 
 case class TrainState(
     params: DETR.Params[Float32],
-    optimizerState: AdamState[DETR.Params[Float32]],
+    optimizerState: LearningRateSchedulerState[DETR.Params[Float32], AdamState],
     lastCost: Tensor0[Float32]
 )
 
@@ -46,15 +51,25 @@ def detrTrain(): Unit =
     * the matching produces a far larger gradient than a batch that confirms it; clipping keeps
     * those steps from undoing what the settled ones learned.
     */
-  val maxGradientNorm = 0.1f
+  val maxGradientNorm = 1.0f
 
   val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
   val batches = data.objectBatches(Axis[Batch] -> batchSize)
 
-  val optimizer = AdamW(
-    Adam(learningRate = Tensor0(learningRate)),
-    weightDecayFactor = Tensor0(weightDecay)
-  )
+  /** How long the rate climbs before it starts to fall. */
+  val warmupSteps = 2_000
+
+  /** Where the cosine bottoms out. Aligned with the other two models. */
+  val finalLearningRate = 1e-4f
+
+  /** Linear warmup into a cosine decay to nothing. Adam moves the weights by the same amount
+    * whatever the gradient is, so the rate is the only thing that sets how far a step travels;
+    * held constant it never shrinks and the model orbits a solution instead of settling on it.
+    */
+  val schedule: LearningRateSchedule =
+    LinearWarmup(Tensor0(learningRate), Tensor0(warmupSteps))
+      .followBy(CosineDecay(Tensor0(learningRate), Tensor0(finalLearningRate), Tensor0(numIterations - warmupSteps)))
+  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), Tensor0(weightDecay)), schedule)
 
   val initialParams = DETR.Params.init(
     numLayers = 3,
@@ -64,7 +79,7 @@ def detrTrain(): Unit =
     // above that for a few of them to compete over the same object before one wins it. Every
     // query beyond that is one more slot that has to learn to stay empty.
     numQueries = 32,
-    patchSize = 10,
+    patchSize = 16,
     key = Random.Key(0)
   )
 
@@ -111,11 +126,15 @@ def detrTrain(): Unit =
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
   val checkpointer = TensorTreeCheckpointer.newIn(CheckpointRoot)
-  val monitor = Monitor.default[TrainState](batchSize = batchSize, lossLens = _.lastCost.item)
+  val monitor = Monitor.ConcatMonitor[TrainState](List(
+    Monitor.StepMonitor(),
+    Monitor.LossMonitor(_.lastCost.item),
+    Monitor.LearningRateMonitor(schedule),
+    Monitor.PerformanceMonitor(batchSize)
+  ))
   batches
     .scanLeft(TrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):
       case (state, batch) =>
-        dimwit.gc()
         jitGradientStep(batch.images, batch.target.detection, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))

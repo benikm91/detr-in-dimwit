@@ -11,6 +11,11 @@ import deepwit.training.Monitor
 import deepwit.training.tapEvery
 import dimwit.*
 import dimwit.Conversions.given
+import deepwit.optimizer.CosineDecay
+import deepwit.optimizer.LearningRateSchedule
+import deepwit.optimizer.LearningRateScheduler
+import deepwit.optimizer.LearningRateSchedulerState
+import deepwit.optimizer.LinearWarmup
 import dimwit.optimizer.Adam
 import dimwit.optimizer.AdamState
 import dimwit.optimizer.AdamW
@@ -35,7 +40,7 @@ private trait Parameter derives Label
 
 case class D2GTrainState(
     params: D2G.Params[Float32],
-    optimizerState: AdamState[D2G.Params[Float32]],
+    optimizerState: LearningRateSchedulerState[D2G.Params[Float32], AdamState],
     linearization: Key,
     lastCost: Tensor0[Float32]
 )
@@ -56,6 +61,22 @@ def d2gTrain(): Unit =
   val weightDecay = 1e-4f
   val maxGradientNorm = 1.0f
 
+  /** How long the rate climbs before it starts to fall. Adam's own step is the same size whatever
+    * the gradient is, so a fresh model with a meaningless gradient would otherwise take full sized
+    * steps in an arbitrary direction.
+    */
+  val warmupSteps = 2_000
+
+  /** Where the cosine bottoms out rather than reaching nothing.
+    *
+    * A record is written in two stages and the relationships can only be learned once the nodes
+    * they name are right, so they are learned late — decaying the rate to zero takes the rate away
+    * exactly when that half of the model still needs it. Measured at 100k: decayed to zero, the
+    * relationships fall from 91.5% to 89.6% and whole records from 73.4% to 50.2%, while the nodes
+    * improve. A floor keeps the late half learning.
+    */
+  val finalLearningRate = 1e-4f
+
   val nodes = Axis[Node] -> NodeSlots
   val edges = Axis[Edge] -> EdgeSlots
   val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
@@ -63,7 +84,18 @@ def d2gTrain(): Unit =
 
   val (initKey, dataKey) = Random.Key(42).splitToTuple(2)
 
-  val optimizer = AdamW(Adam(learningRate), weightDecay)
+  /** Linear warmup into a cosine decay to nothing.
+    *
+    * Clipping cannot set the step size here — Adam normalises per parameter, so a clipped
+    * gradient and an unclipped one move the weights by the same 0.2% of their norm — which leaves
+    * the rate as the only thing that can. Held constant it never shrinks, so the model keeps
+    * taking full sized steps long after it has found a solution and can only orbit one; decayed
+    * to zero it can actually settle on it.
+    */
+  val schedule: LearningRateSchedule =
+    LinearWarmup(Tensor0(learningRate), Tensor0(warmupSteps))
+      .followBy(CosineDecay(Tensor0(learningRate), Tensor0(finalLearningRate), Tensor0(numIterations - warmupSteps)))
+  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), Tensor0(weightDecay)), schedule)
 
   val initialParams = D2G.Params.init(
     numLayers = 3,
@@ -106,7 +138,12 @@ def d2gTrain(): Unit =
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
   val checkpointer = TensorTreeCheckpointer.newIn(D2GCheckpointRoot)
-  val monitor = Monitor.default[D2GTrainState](batchSize = batchSize, lossLens = _.lastCost.item)
+  val monitor = Monitor.ConcatMonitor[D2GTrainState](List(
+    Monitor.StepMonitor(),
+    Monitor.LossMonitor(_.lastCost.item),
+    Monitor.LearningRateMonitor(schedule),
+    Monitor.PerformanceMonitor(batchSize)
+  ))
   batches
     .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, Tensor0(-1f))):
       case (state, batch) => jitGradientStep(batch.images, batch.target, state)
