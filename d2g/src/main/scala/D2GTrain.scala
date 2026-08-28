@@ -55,7 +55,7 @@ case class D2GTrainState(
 def d2gTrain(): Unit =
   dimwit.initialize()
 
-  val numIterations = 100_000
+  val numIterations = 150_000
   val batchSize = 64
   val learningRate = 3e-4f
   val weightDecay = 1e-4f
@@ -149,7 +149,7 @@ def d2gTrain(): Unit =
       case (state, batch) => jitGradientStep(batch.images, batch.target, state)
     .tapEvery(100):
       case (state, step) => println(monitor.report(step, state))
-    .tapEvery(1_000):
+    .tapEvery(10_000):
       case (state, step) =>
         checkpointer.save(state, step)
         println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")

@@ -41,7 +41,7 @@ case class TrainState(
 def detrTrain(): Unit =
   dimwit.initialize()
 
-  val numIterations = 100_000
+  val numIterations = 150_000
   val batchSize = 64
   val learningRate = 3e-4f
   val weightDecay = 1e-4f
@@ -138,7 +138,7 @@ def detrTrain(): Unit =
         jitGradientStep(batch.images, batch.target.detection, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))
-    .tapEvery(1_000):
+    .tapEvery(10_000):
       case (state, step) =>
         checkpointer.save(state, step)
         println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
