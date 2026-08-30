@@ -194,7 +194,10 @@ class D2GSuite extends FunSuite:
     assertEquals(scored.edges.taken.edgeClass.shape.dimensions.toSeq, scored.edges.remaining.edgeClass.shape.dimensions.toSeq)
 
   test("the training state carries a new linearization on to every step"):
-    val optimizer = Adam(learningRate = Tensor0(1e-3f))
+    val optimizer = deepwit.optimizer.LearningRateScheduler(
+      lr => dimwit.optimizer.AdamW(Adam(learningRate = lr), Tensor0(0f)),
+      deepwit.optimizer.ConstantLearningRate(Tensor0(1e-3f))
+    )
     val advance = jit: (state: D2GTrainState) =>
       val (next, _) = state.linearization.split2()
       state.copy(linearization = next)

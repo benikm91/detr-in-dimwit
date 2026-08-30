@@ -111,8 +111,14 @@ def d2gTrain(): Unit =
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
-  val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas)
-  val edgeLoss = RemainingEdgeLoss(VType[Float32])
+  /** Whether equation 4's pass-through term is included — the one that keeps a taken node's own
+    * embedding carrying it while the prediction embedding beside it becomes a different node.
+    * Turned off to measure what it is worth.
+    */
+  val withPassThrough = false
+
+  val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas, withPassThrough)
+  val edgeLoss = RemainingEdgeLoss(VType[Float32], withPassThrough)
 
   def cost(
       images: Tensor4[Batch, Width, Height, Channel, Float32],

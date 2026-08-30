@@ -20,7 +20,7 @@ import scala.language.implicitConversions
   * where to stop, and the pass-through of every taken node, which is what keeps a node embedding
   * carrying its node while the prediction embedding beside it becomes another one.
   */
-class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((D2G.NodeScores[V], RecordNodes[Node]) => Tensor0[V]):
+class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int, withPassThrough: Boolean = true) extends ((D2G.NodeScores[V], RecordNodes[Node]) => Tensor0[V]):
 
   /** Axis of the record's nodes seen as candidates to answer with rather than as positions. */
   private type Candidate = Prime[Node]
@@ -34,10 +34,12 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((D
 
     val remaining = cheapest(dissimilarity(scored.remaining, target), candidates) * candidates.max(Axis[Candidate])
     val stops = costOfClass(scored.remaining.nodeClass, NodeClass.NoNode.id) * isAt(taken, nodes, vtype)
-    val passedThrough = dissimilarity(scored.taken, target) * Tensor2.eye(nodes, vtype) * holdsNode.broadcastTo(pairs)
+    val answered = (remaining.sum + stops.sum) / (taken + Tensor0(vtype)(1f))
 
-    (remaining.sum + stops.sum) / (taken + Tensor0(vtype)(1f)) +
-      passedThrough.sum / maximum(taken, Tensor0(vtype)(1f))
+    if !withPassThrough then answered
+    else
+      val passedThrough = dissimilarity(scored.taken, target) * Tensor2.eye(nodes, vtype) * holdsNode.broadcastTo(pairs)
+      answered + passedThrough.sum / maximum(taken, Tensor0(vtype)(1f))
 
   /** What every position's scores would cost against every node of the record: its class, and
     * where the *target* node is placed — so that nothing depends on what the model predicts. A
@@ -57,7 +59,7 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((D
 /** The same over the relationships of a record, which are predicted the same way and cost the
   * same three terms — a relationship carries the nodes it links where a node carries its points.
   */
-class RemainingEdgeLoss[V: IsFloating](vtype: VType[V]) extends ((D2G.EdgeScores[V], RecordEdges[Edge]) => Tensor0[V]):
+class RemainingEdgeLoss[V: IsFloating](vtype: VType[V], withPassThrough: Boolean = true) extends ((D2G.EdgeScores[V], RecordEdges[Edge]) => Tensor0[V]):
 
   /** Axis of the record's relationships seen as candidates to answer with rather than as
     * positions.
@@ -73,10 +75,12 @@ class RemainingEdgeLoss[V: IsFloating](vtype: VType[V]) extends ((D2G.EdgeScores
 
     val remaining = cheapest(dissimilarity(scored.remaining, target), candidates) * candidates.max(Axis[Candidate])
     val stops = costOfClass(scored.remaining.edgeClass, EdgeClass.NoEdge.id) * isAt(taken, edges, vtype)
-    val passedThrough = dissimilarity(scored.taken, target) * Tensor2.eye(edges, vtype) * holdsEdge.broadcastTo(pairs)
+    val answered = (remaining.sum + stops.sum) / (taken + Tensor0(vtype)(1f))
 
-    (remaining.sum + stops.sum) / (taken + Tensor0(vtype)(1f)) +
-      passedThrough.sum / maximum(taken, Tensor0(vtype)(1f))
+    if !withPassThrough then answered
+    else
+      val passedThrough = dissimilarity(scored.taken, target) * Tensor2.eye(edges, vtype) * holdsEdge.broadcastTo(pairs)
+      answered + passedThrough.sum / maximum(taken, Tensor0(vtype)(1f))
 
   /** The same for a relationship, which carries the two nodes it relates where a node carries the
     * points it is placed by. Only relationships are ever candidates, so both ends always count.
