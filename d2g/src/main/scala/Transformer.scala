@@ -141,7 +141,9 @@ def jointSequenceMask[Context: Λ](context: AxisExtent[Context]): Tensor2[Contex
   val noSlot = Tensor(blockShape[TakenTarget, PredictionSource]).fill(false)
 
   val beforeItsOwnSlot = tril(Tensor(blockShape[PredictionTarget, TakenSource]).fill(true), kthDiagonal = -1)
-  val itselfOnly = Tensor2.eye(blockShape[PredictionTarget, PredictionSource], VType[Bool])
+  val itselfOnly = Tensor2
+    .eye(Axis[PredictionTarget] -> blockSize, VType[Bool])
+    .relabel(Axis[Prime[PredictionTarget]] -> Axis[PredictionSource])
 
   val mask = concatenate(
     concatenate(upToItsOwnSlot, noSlot),
@@ -409,7 +411,8 @@ class EdgeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
     * `-inf` has no softmax.
     */
   private def nodeAttention(holdsNode: Tensor1[Node, Bool], context: AxisExtent[Context]) =
-    val readable = where_!(holdsNode.any, holdsNode, Tensor.like(holdsNode).fill(true))
+    val anyNode = holdsNode.any.broadcastTo(holdsNode.shape)
+    val readable = where(anyNode, holdsNode, Tensor.like(holdsNode).fill(true))
     val mask = readable.broadcastTo(Shape2(context, holdsNode.shape.extent(Axis[Node])))
     MultiHeadCustomAttention[Node, Embedding, Context, Embedding, V](params.nodeAttention, _ => mask, AttentionScore.scaledDotProduct)
 

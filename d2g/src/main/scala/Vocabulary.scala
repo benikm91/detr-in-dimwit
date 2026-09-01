@@ -21,6 +21,7 @@ trait Pixel derives Label
 /** Axis over the node a link is predicted to name. */
 trait LinkedNode derives Label
 
+
 /** Axis of the space the decoder works in. */
 trait Embedding derives Label
 
