@@ -2,8 +2,9 @@ import dataset.Box
 import dataset.Detection
 import dataset.Box
 import dataset.DetectionBatch
-import dataset.LShapeDataset
-import dataset.LShapeDataset.Split
+import dataset.Corpus
+import dataset.DrawingDataset
+import dataset.DrawingDataset.Split
 import deepwit.checkpointing.TensorTreeCheckpointer
 import deepwit.training.Monitor
 import deepwit.training.tapEvery
@@ -23,9 +24,6 @@ import dimwit.optimizer.AdamState
 import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
 
-/** Where [[detrTrain]] writes and [[detrEval]] reads its checkpoints. */
-val CheckpointRoot = "out/detr"
-
 private trait Batch derives Label
 
 /** Axis of a model's parameters, flattened into one vector so that they can be counted. */
@@ -37,50 +35,36 @@ case class TrainState(
     lastCost: Tensor0[Float32]
 )
 
-@main
-def detrTrain(): Unit =
+/** Trains a detector on the corpus its [[DETRSetup]] names. */
+def detrTrain(setup: DETRSetup): Unit =
   dimwit.initialize()
+  println(s"training $setup")
 
-  val numIterations = 150_000
-  val batchSize = 64
-  val learningRate = 3e-4f
-  val weightDecay = 1e-4f
+  val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
+  val batches = data.objectBatches(Axis[Batch] -> setup.batchSize)
 
-  /** Global L2 norm the gradients are rescaled to, as in the DETR paper. The set loss reassigns
-    * which query is responsible for which object from step to step, so a batch that reshuffles
-    * the matching produces a far larger gradient than a batch that confirms it; clipping keeps
-    * those steps from undoing what the settled ones learned.
-    */
-  val maxGradientNorm = 1.0f
-
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
-  val batches = data.objectBatches(Axis[Batch] -> batchSize)
-
-  /** How long the rate climbs before it starts to fall. */
-  val warmupSteps = 2_000
-
-  /** Where the cosine bottoms out. Aligned with the other two models. */
-  val finalLearningRate = 1e-4f
-
-  /** Linear warmup into a cosine decay to nothing. Adam moves the weights by the same amount
+  /** Linear warmup into a cosine decay to a floor. Adam moves the weights by the same amount
     * whatever the gradient is, so the rate is the only thing that sets how far a step travels;
     * held constant it never shrinks and the model orbits a solution instead of settling on it.
     */
   val schedule: LearningRateSchedule =
-    LinearWarmup(Tensor0(learningRate), Tensor0(warmupSteps))
-      .followBy(CosineDecay(Tensor0(learningRate), Tensor0(finalLearningRate), Tensor0(numIterations - warmupSteps)))
-  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), Tensor0(weightDecay)), schedule)
+    LinearWarmup(Tensor0(setup.learningRate), Tensor0(setup.warmupSteps))
+      .followBy(
+        CosineDecay(
+          Tensor0(setup.learningRate),
+          Tensor0(setup.finalLearningRate),
+          Tensor0(setup.numIterations - setup.warmupSteps)
+        )
+      )
+  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), Tensor0(setup.weightDecay)), schedule)
 
   val initialParams = DETR.Params.init(
-    numLayers = 3,
-    numHeads = 4,
-    embedding = 128,
-    // The split holds at most 12 objects in a drawing, so the queries only need enough headroom
-    // above that for a few of them to compete over the same object before one wins it. Every
-    // query beyond that is one more slot that has to learn to stay empty.
-    numQueries = 32,
-    patchSize = 16,
-    key = Random.Key(0)
+    numLayers = setup.numLayers,
+    numHeads = setup.numHeads,
+    embedding = setup.embedding,
+    numQueries = setup.numQueries,
+    patchSize = setup.patchSize,
+    key = Random.Key(setup.seed)
   )
 
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
@@ -106,7 +90,7 @@ def detrTrain(): Unit =
       state: TrainState
   ) =
     val (lastCost, gradients) = Autodiff.valueAndGrad(cost(imgs, objects))(state.params)
-    val clipped = gradients.clipGlobalNorm(Tensor0(maxGradientNorm))
+    val clipped = gradients.clipGlobalNorm(Tensor0(setup.maxGradientNorm))
     val (params, optimizerState) = optimizer.update(clipped, state.params, state.optimizerState)
     val newState = TrainState(params, optimizerState, lastCost)
     summon[TensorTree[TrainState]].map(
@@ -125,12 +109,12 @@ def detrTrain(): Unit =
     newState
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
-  val checkpointer = TensorTreeCheckpointer.newIn(CheckpointRoot)
+  val checkpointer = TensorTreeCheckpointer.newIn(setup.checkpointRoot)
   val monitor = Monitor.ConcatMonitor[TrainState](List(
     Monitor.StepMonitor(),
     Monitor.LossMonitor(_.lastCost.item),
     Monitor.LearningRateMonitor(schedule),
-    Monitor.PerformanceMonitor(batchSize)
+    Monitor.PerformanceMonitor(setup.batchSize)
   ))
   batches
     .scanLeft(TrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):
@@ -138,9 +122,9 @@ def detrTrain(): Unit =
         jitGradientStep(batch.images, batch.target.detection, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))
-    .tapEvery(10_000):
+    .tapEvery(setup.checkpointEvery):
       case (state, step) =>
         checkpointer.save(state, step)
         println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
-    .drop(numIterations)
+    .drop(setup.numIterations)
     .next()

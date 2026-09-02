@@ -1,10 +1,12 @@
-"""The `benikm91/l-shape <https://huggingface.co/datasets/benikm91/l-shape>`_
-drawings, as the arrays DimWit lifts them from. Everything else happens in Scala.
+"""The drawing datasets, as the arrays DimWit lifts them from. Everything else
+happens in Scala.
 
-The dataset ships its splits as plain repository files rather than as a
+Every corpus ships its splits as plain repository files rather than as a
 ``datasets`` config: ``{split}_images.npy`` holds ``(N, 256, 256)`` uint8
 drawings (row index = y, white background, dark ink) and
-``{split}_labels.jsonl`` one drawing program per line.
+``{split}_labels.jsonl`` one drawing program per line. The programs are written
+in the same vocabulary whatever the corpus draws, so one parser reads them all
+and the repository is the only thing that varies.
 
 A drawing program is parsed into the record it draws -- the drawn nodes in the
 order they are drawn, and the relationships between them in a canonical order,
@@ -18,22 +20,19 @@ import json
 import numpy as np
 from huggingface_hub import hf_hub_download
 
-REPO_ID = "benikm91/l-shape"
-
-
-def drawings(split):
+def drawings(repo_id, split):
     """The images of a split, memory mapped so that only what is read is read."""
-    return np.load(_file(split, "images.npy"), mmap_mode="r")
+    return np.load(_file(repo_id, split, "images.npy"), mmap_mode="r")
 
 
-def records(split, nodes, edges, no_node, line, annotation, no_edge, connected, annotates):
+def records(repo_id, split, nodes, edges, no_node, line, annotation, no_edge, connected, annotates):
     """``(node_class, start_x, start_y, end_x, end_y, edge_class, subject, obj)`` of every drawing,
     padded to ``nodes`` drawn nodes and ``edges`` relationships.
 
     A node is placed by where it starts and, if it runs somewhere, by where it ends; an annotation
     ends nowhere and leaves that at zero.
     """
-    with open(_file(split, "labels.jsonl"), encoding="utf-8") as programs:
+    with open(_file(repo_id, split, "labels.jsonl"), encoding="utf-8") as programs:
         parsed = [_record_of(_actions(program), line, annotation, connected, annotates) for program in programs]
 
     node_class = np.full((len(parsed), nodes), no_node, dtype=np.int32)
@@ -85,5 +84,5 @@ def _actions(program):
     return json.loads(actions) if isinstance(actions, str) else actions
 
 
-def _file(split, name):
-    return hf_hub_download(repo_id=REPO_ID, filename="%s_%s" % (split, name), repo_type="dataset")
+def _file(repo_id, split, name):
+    return hf_hub_download(repo_id=repo_id, filename="%s_%s" % (split, name), repo_type="dataset")

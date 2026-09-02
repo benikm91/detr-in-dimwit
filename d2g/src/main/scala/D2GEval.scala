@@ -1,6 +1,7 @@
 import dataset.Canvas
-import dataset.LShapeDataset
-import dataset.LShapeDataset.Split
+import dataset.Corpus
+import dataset.DrawingDataset
+import dataset.DrawingDataset.Split
 import dataset.NodeClass
 import dataset.Outlines
 import dataset.Record
@@ -16,22 +17,22 @@ import dimwit.tensor.Tensor4
 import plotwit.*
 import viz.PlotTargets.websocket
 
-/** Plots what a trained model transcribes: `sbt "d2g/runMain d2gPlot"`.
+/** Plots what a trained model transcribes.
   *
   * A record has no drawing of its own, so it is drawn as the objects it stands for, and its
-  * relationships are printed. Note that touching the training split downloads 8.6 GB on first use.
+  * relationships are printed. Note that touching the training split downloads the whole of it on
+  * first use.
   */
-@main
-def d2gPlot(): Unit =
+def d2gPlot(setup: D2GSetup): Unit =
   dimwit.initialize()
 
-  val checkpoints = TensorTreeCheckpointer.latestIn(D2GCheckpointRoot).getOrElse(sys.error(s"no training run in $D2GCheckpointRoot"))
+  val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
   val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
-  val (nodes, edges) = (Axis[Node] -> NodeSlots, Axis[Edge] -> EdgeSlots)
+  val (nodes, edges) = (Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots)
   val transcriber = Transcriber(model, nodes, edges)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
-    val data = open(split)
+    val data = open(setup, split)
     data
       .samples
       .take(3)
@@ -57,21 +58,20 @@ def d2gPlot(): Unit =
   */
 private val TranscribedTogether = 32
 
-/** Scores a trained model on the whole validation split: `sbt "d2g/runMain d2gEval"`.
+/** Scores a trained model on the whole validation split of the corpus its setup names.
   *
   * Every drawing is transcribed autoregressively and the record that comes out is compared with
   * the record it was rendered from, as a record rather than as a sequence. The node lines are what
-  * [[detrEval]] reports, on the same records.
+  * the detector reports, on the same records and through the same reporter.
   */
-@main
-def d2gEval(): Unit =
+def d2gEval(setup: D2GSetup): Unit =
   dimwit.initialize()
 
-  val checkpoints = TensorTreeCheckpointer.latestIn(D2GCheckpointRoot).getOrElse(sys.error(s"no training run in $D2GCheckpointRoot"))
+  val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
   val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
-  val transcriber = Transcriber(model, Axis[Node] -> NodeSlots, Axis[Edge] -> EdgeSlots, TranscribedTogether)
-  val data = open(Split.Validation)
+  val transcriber = Transcriber(model, Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots, TranscribedTogether)
+  val data = open(setup, Split.Validation)
 
   val drawings = data.samples
     .grouped(TranscribedTogether)
@@ -115,8 +115,8 @@ class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExten
     val filled = documents.padTo(drawings, documents.last)
     RecordGraph.of(transcribe(stack(filled, Axis[Drawing]))).take(documents.size)
 
-private def open(split: Split) =
-  LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
+private def open(setup: D2GSetup, split: Split) =
+  DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
 
 /** How much of a record there is to see, for the header of a drawing of it. */
 private def counted(record: RecordGraph): String =

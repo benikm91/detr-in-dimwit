@@ -1,8 +1,7 @@
 import dataset.Canvas
-import dataset.MaxEdges
-import dataset.MaxNodes
-import dataset.LShapeDataset
-import dataset.LShapeDataset.Split
+import dataset.Corpus
+import dataset.DrawingDataset
+import dataset.DrawingDataset.Split
 import dataset.Record
 import dataset.RecordBatch
 import deepwit.checkpointing.TensorTreeCheckpointer
@@ -21,17 +20,6 @@ import dimwit.optimizer.AdamState
 import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
 
-/** How many positions the nodes of a record are laid out in: one more than any drawing of this
-  * dataset draws, so that the last prediction embedding has somewhere to say they have ended.
-  */
-val NodeSlots = MaxNodes + 1
-
-/** The same for the relationships between them. */
-val EdgeSlots = MaxEdges + 1
-
-/** Where a training run of this model writes its checkpoints. */
-val D2GCheckpointRoot = "out/d2g"
-
 /** Axis of a batch of drawings. */
 private trait Batch derives Label
 
@@ -45,65 +33,54 @@ case class D2GTrainState(
     lastCost: Tensor0[Float32]
 )
 
-/** Trains a transcription model: `sbt "d2g/runMain d2gTrain"`.
+/** Trains a transcription model on the corpus its [[D2GSetup]] names.
   *
   * Every step draws a fresh linearization of every drawing's record, so the same drawing is seen
   * with its nodes in a different order each time it comes round — which is the point: an order
   * the loss does not commit to is an order the model cannot learn to rely on.
+  *
+  * One implementation serves every corpus. What differs between them is held in the setup, so that
+  * a change to how training works cannot reach one corpus and miss another — which is the failure
+  * this codebase has already had once, in evaluation, and the reason scoring was pulled into a
+  * single reporter.
   */
-@main
-def d2gTrain(): Unit =
+def d2gTrain(setup: D2GSetup): Unit =
   dimwit.initialize()
+  println(s"training $setup")
 
-  val numIterations = 150_000
-  val batchSize = 64
-  val learningRate = 3e-4f
-  val weightDecay = 1e-4f
-  val maxGradientNorm = 1.0f
+  val nodes = Axis[Node] -> setup.nodeSlots
+  val edges = Axis[Edge] -> setup.edgeSlots
+  val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
+  val batches = data.batches(Axis[Batch] -> setup.batchSize)
 
-  /** How long the rate climbs before it starts to fall. Adam's own step is the same size whatever
-    * the gradient is, so a fresh model with a meaningless gradient would otherwise take full sized
-    * steps in an arbitrary direction.
-    */
-  val warmupSteps = 2_000
+  val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 
-  /** Where the cosine bottoms out rather than reaching nothing.
-    *
-    * A record is written in two stages and the relationships can only be learned once the nodes
-    * they name are right, so they are learned late — decaying the rate to zero takes the rate away
-    * exactly when that half of the model still needs it. Measured at 100k: decayed to zero, the
-    * relationships fall from 91.5% to 89.6% and whole records from 73.4% to 50.2%, while the nodes
-    * improve. A floor keeps the late half learning.
-    */
-  val finalLearningRate = 1e-4f
-
-  val nodes = Axis[Node] -> NodeSlots
-  val edges = Axis[Edge] -> EdgeSlots
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
-  val batches = data.batches(Axis[Batch] -> batchSize)
-
-  val (initKey, dataKey) = Random.Key(42).splitToTuple(2)
-
-  /** Linear warmup into a cosine decay to nothing.
+  /** Linear warmup into a cosine decay to a floor.
     *
     * Clipping cannot set the step size here — Adam normalises per parameter, so a clipped
     * gradient and an unclipped one move the weights by the same 0.2% of their norm — which leaves
     * the rate as the only thing that can. Held constant it never shrinks, so the model keeps
     * taking full sized steps long after it has found a solution and can only orbit one; decayed
-    * to zero it can actually settle on it.
+    * it can actually settle on it.
     */
   val schedule: LearningRateSchedule =
-    LinearWarmup(Tensor0(learningRate), Tensor0(warmupSteps))
-      .followBy(CosineDecay(Tensor0(learningRate), Tensor0(finalLearningRate), Tensor0(numIterations - warmupSteps)))
-  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), Tensor0(weightDecay)), schedule)
+    LinearWarmup(Tensor0(setup.learningRate), Tensor0(setup.warmupSteps))
+      .followBy(
+        CosineDecay(
+          Tensor0(setup.learningRate),
+          Tensor0(setup.finalLearningRate),
+          Tensor0(setup.numIterations - setup.warmupSteps)
+        )
+      )
+  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), Tensor0(setup.weightDecay)), schedule)
 
   val initialParams = D2G.Params.init(
-    numLayers = 3,
-    numHeads = 4,
-    embedding = 128,
-    nodes = NodeSlots,
-    edges = EdgeSlots,
-    patchSize = 16,
+    numLayers = setup.numLayers,
+    numHeads = setup.numHeads,
+    embedding = setup.embedding,
+    nodes = setup.nodeSlots,
+    edges = setup.edgeSlots,
+    patchSize = setup.patchSize,
     canvas = Canvas,
     key = initKey
   )
@@ -111,14 +88,8 @@ def d2gTrain(): Unit =
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
-  /** Whether equation 4's pass-through term is included — the one that keeps a taken node's own
-    * embedding carrying it while the prediction embedding beside it becomes a different node.
-    * Turned off to measure what it is worth.
-    */
-  val withPassThrough = false
-
-  val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas, withPassThrough)
-  val edgeLoss = RemainingEdgeLoss(VType[Float32], withPassThrough)
+  val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas, setup.withPassThrough)
+  val edgeLoss = RemainingEdgeLoss(VType[Float32], setup.withPassThrough)
 
   def cost(
       images: Tensor4[Batch, Width, Height, Channel, Float32],
@@ -139,25 +110,25 @@ def d2gTrain(): Unit =
   ) =
     val (nextLinearization, forThisStep) = state.linearization.split2()
     val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, records.permuted(forThisStep, nodes, edges)))(state.params)
-    val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(maxGradientNorm), state.params, state.optimizerState)
+    val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)
     D2GTrainState(params, optimizerState, nextLinearization, lastCost)
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
-  val checkpointer = TensorTreeCheckpointer.newIn(D2GCheckpointRoot)
+  val checkpointer = TensorTreeCheckpointer.newIn(setup.checkpointRoot)
   val monitor = Monitor.ConcatMonitor[D2GTrainState](List(
     Monitor.StepMonitor(),
     Monitor.LossMonitor(_.lastCost.item),
     Monitor.LearningRateMonitor(schedule),
-    Monitor.PerformanceMonitor(batchSize)
+    Monitor.PerformanceMonitor(setup.batchSize)
   ))
   batches
     .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, Tensor0(-1f))):
       case (state, batch) => jitGradientStep(batch.images, batch.target, state)
     .tapEvery(100):
       case (state, step) => println(monitor.report(step, state))
-    .tapEvery(10_000):
+    .tapEvery(setup.checkpointEvery):
       case (state, step) =>
         checkpointer.save(state, step)
         println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
-    .drop(numIterations)
+    .drop(setup.numIterations)
     .next()

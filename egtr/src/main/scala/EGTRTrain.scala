@@ -1,8 +1,9 @@
 import dataset.Box
 import dataset.Detection
 import dataset.DetectionBatch
-import dataset.LShapeDataset
-import dataset.LShapeDataset.Split
+import dataset.Corpus
+import dataset.DrawingDataset
+import dataset.DrawingDataset.Split
 import dataset.RelationClasses
 import deepwit.checkpointing.TensorTreeCheckpointer
 import deepwit.training.Monitor
@@ -19,16 +20,6 @@ import dimwit.optimizer.AdamState
 import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
 
-/** Where [[egtrTrain]] writes and [[egtrEval]] reads its checkpoints. */
-val EGTRCheckpointRoot = "out/egtr"
-
-/** Where [[egtrTrain]] looks for a detector to start from.
-  *
-  * sbt forks a `runMain` from the base directory of the project it belongs to, so the runs of
-  * [[detrTrain]] sit under the detr project rather than next to this one's.
-  */
-val DetectorCheckpointRoot = s"../detr/$CheckpointRoot"
-
 /** Axis of a batch of drawings. Named for the drawings rather than the batch because the graph
   * axes are already called after the boxes they run over.
   */
@@ -40,66 +31,59 @@ case class EGTRTrainState(
     lastCost: Tensor0[Float32]
 )
 
-/** Trains a scene graph model: `sbt "egtr/runMain egtrTrain"`.
+/** Trains a scene graph model on the corpus its [[EGTRSetup]] names.
   *
-  * With no argument the detector is started from the newest [[detrTrain]] run, and from scratch
-  * if there is none; pass a run directory to pick one. Starting from a trained detector is what
-  * the paper does — the relations are read out of the detector's own attention, so they have
-  * little to say until the detection is roughly right, and the [[EGTRLoss]] smoothing keeps them
-  * quiet until it is. The detector is not frozen: it keeps training on the joint loss.
+  * The detector underneath is started from whatever `detectorRun` names, failing that from the
+  * newest run under the setup's `detectorCheckpointRoot`, and failing that from scratch. Starting
+  * from a trained detector is what the paper does — the relations are read out of the detector's
+  * own attention, so they have little to say until the detection is roughly right, and the
+  * [[EGTRLoss]] smoothing keeps them quiet until it is. The detector is not frozen: it keeps
+  * training on the joint loss.
   */
-@main
-def egtrTrain(detectorRun: String*): Unit =
+def egtrTrain(setup: EGTRSetup, detectorRun: Option[String] = None): Unit =
   dimwit.initialize()
+  println(s"training $setup")
 
-  val numIterations = 150_000
-  val batchSize = 64
-  val learningRate = 3e-4f
-  val weightDecay = 1e-4f
-  val maxGradientNorm = 1.0f
+  val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
+  val batches = data.objectBatches(Axis[Drawing] -> setup.batchSize)
 
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
-  val batches = data.objectBatches(Axis[Drawing] -> batchSize)
-
-  /** How long the rate climbs before it starts to fall. */
-  val warmupSteps = 2_000
-
-  /** Where the cosine bottoms out. Aligned with the other two models. */
-  val finalLearningRate = 1e-4f
-
-  /** Linear warmup into a cosine decay to nothing — see [[detrTrain]] for why the rate has to
+  /** Linear warmup into a cosine decay to a floor — see the detector for why the rate has to
     * shrink. Held at a constant 3e-4 this model's detector moved 8% of its weight norm every two
     * thousand steps and its accuracy swung by five points; decayed, it can settle.
     */
   val schedule: LearningRateSchedule =
-    LinearWarmup(Tensor0(learningRate), Tensor0(warmupSteps))
-      .followBy(CosineDecay(Tensor0(learningRate), Tensor0(finalLearningRate), Tensor0(numIterations - warmupSteps)))
-  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), Tensor0(weightDecay)), schedule)
+    LinearWarmup(Tensor0(setup.learningRate), Tensor0(setup.warmupSteps))
+      .followBy(
+        CosineDecay(
+          Tensor0(setup.learningRate),
+          Tensor0(setup.finalLearningRate),
+          Tensor0(setup.numIterations - setup.warmupSteps)
+        )
+      )
+  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), Tensor0(setup.weightDecay)), schedule)
 
-  val detector = detectorRun.headOption
+  val detector = detectorRun
     .map(TensorTreeCheckpointer(_))
-    .orElse(TensorTreeCheckpointer.latestIn(DetectorCheckpointRoot)) match
+    .orElse(setup.detectorCheckpointRoot.flatMap(root => TensorTreeCheckpointer.latestIn(root))) match
     case Some(checkpoints) =>
       println(s"starting from the detector of ${checkpoints.rootPath}")
       checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params
     case None =>
-      println(s"no detector in $DetectorCheckpointRoot, starting from scratch")
+      println("starting the detector from scratch")
       DETR.Params.init(
-        numLayers = 3,
-        numHeads = 4,
-        embedding = 128,
-        numQueries = 32,
-        patchSize = 16,
-        key = Random.Key(0)
+        numLayers = setup.numLayers,
+        numHeads = setup.numHeads,
+        embedding = setup.embedding,
+        numQueries = setup.numQueries,
+        patchSize = setup.patchSize,
+        key = Random.Key(setup.seed)
       )
 
   val initialParams = EGTR.Params.init(
     detector = detector,
-    // One source projects a query into this, and a pair of queries into twice it, which is what
-    // the heads read. The paper keeps both at the detector's embedding width.
-    sourceExtent = 128,
-    hiddenExtent = 128,
-    key = Random.Key(1)
+    sourceExtent = setup.sourceExtent,
+    hiddenExtent = setup.hiddenExtent,
+    key = Random.Key(setup.seed + 1)
   )
 
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
@@ -126,7 +110,7 @@ def egtrTrain(detectorRun: String*): Unit =
       state: EGTRTrainState
   ) =
     val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, objects, relations))(state.params)
-    val clipped = gradients.clipGlobalNorm(Tensor0(maxGradientNorm))
+    val clipped = gradients.clipGlobalNorm(Tensor0(setup.maxGradientNorm))
     val (params, optimizerState) = optimizer.update(clipped, state.params, state.optimizerState)
     val newState = EGTRTrainState(params, optimizerState, lastCost)
     // The donated state and the batch are dead the moment the step returns, so their device
@@ -149,12 +133,12 @@ def egtrTrain(detectorRun: String*): Unit =
     newState
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
-  val checkpointer = TensorTreeCheckpointer.newIn(EGTRCheckpointRoot)
+  val checkpointer = TensorTreeCheckpointer.newIn(setup.checkpointRoot)
   val monitor = Monitor.ConcatMonitor[EGTRTrainState](List(
     Monitor.StepMonitor(),
     Monitor.LossMonitor(_.lastCost.item),
     Monitor.LearningRateMonitor(schedule),
-    Monitor.PerformanceMonitor(batchSize)
+    Monitor.PerformanceMonitor(setup.batchSize)
   ))
   batches
     .scanLeft(EGTRTrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):
@@ -162,9 +146,9 @@ def egtrTrain(detectorRun: String*): Unit =
         jitGradientStep(batch.images, batch.target.detection, batch.target.relations, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))
-    .tapEvery(10_000):
+    .tapEvery(setup.checkpointEvery):
       case (state, step) =>
         checkpointer.save(state, step)
         println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
-    .drop(numIterations)
+    .drop(setup.numIterations)
     .next()

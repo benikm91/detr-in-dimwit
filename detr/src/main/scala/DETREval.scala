@@ -1,6 +1,7 @@
 import dataset.Canvas
-import dataset.LShapeDataset
-import dataset.LShapeDataset.Split
+import dataset.Corpus
+import dataset.DrawingDataset
+import dataset.DrawingDataset.Split
 import dataset.Outlines
 import dataset.RecordGraph
 import dataset.RecordScoring
@@ -12,21 +13,20 @@ import dimwit.*
 import plotwit.*
 import viz.PlotTargets.websocket
 
-/** Plots what a trained model detects: `sbt "detr/runMain detrPlot"`.
+/** Plots what a trained model detects.
   *
   * Shows the first drawings of the validation and the training split on their own, with their
-  * targets, and with what the model predicts. Note that touching the training split downloads
-  * 8.6 GB on first use.
+  * targets, and with what the model predicts. Note that touching the training split downloads the
+  * whole of it on first use.
   */
-@main
-def detrPlot(): Unit =
+def detrPlot(setup: DETRSetup): Unit =
   dimwit.initialize()
 
-  val checkpoints = TensorTreeCheckpointer.latestIn(CheckpointRoot).getOrElse(sys.error(s"no training run in $CheckpointRoot"))
+  val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
   val model = DETR(checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
-    val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(split)
+    val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(split)
     data
       .objects
       .take(3)
@@ -42,7 +42,7 @@ def detrPlot(): Unit =
 
   display(grid(rows))
 
-/** Scores a trained model on the whole validation split: `sbt "detr/runMain detrEval"`.
+/** Scores a trained model on the whole validation split of the corpus its setup names.
   *
   * What is detected is read back into the record it stands for and compared with the record the
   * drawing was rendered from, which is how [[d2gEval]] scores too — a detector predicts no
@@ -52,14 +52,13 @@ def detrPlot(): Unit =
   * `right` is precision, and `records exactly right` is every node of the drawing at once with
   * nothing spurious. A detector predicts no relationships, so those lines are left out.
   */
-@main
-def detrEval(): Unit =
+def detrEval(setup: DETRSetup): Unit =
   dimwit.initialize()
 
-  val checkpoints = TensorTreeCheckpointer.latestIn(CheckpointRoot).getOrElse(sys.error(s"no training run in $CheckpointRoot"))
+  val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
   val model = DETR(checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Validation)
+  val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Validation)
   val detect = jit(model.apply)
 
   val drawings = data

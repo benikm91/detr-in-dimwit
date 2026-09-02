@@ -1,6 +1,6 @@
 package dataset
 
-import dataset.LShapeDataset.Split
+import dataset.DrawingDataset.Split
 import dimwit.*
 import munit.FunSuite
 
@@ -95,7 +95,7 @@ class ObjectsSuite extends FunSuite:
     assertEquals(drawn(canvas / 2)(math.round(0.4f * canvas)).toSeq, Seq(20, 60, 190), "the middle of a line is drawn in the line's colour")
 
   test("a record is drawn where the drawing it was read from has its ink"):
-    val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation)
+    val data = DrawingDataset.open(Corpus.LShape)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation)
     data.samples.take(3).zipWithIndex.foreach: (sample, index) =>
       val drawing = Outlines.greyLevels(sample.image)
       val drawn = RecordDrawing(RecordGraph.of(sample.target), drawing, Axis[Channel]).asInt(VType[Int32]).toArray
@@ -115,8 +115,8 @@ class ObjectsSuite extends FunSuite:
 
   Split.values.foreach: split =>
     test(s"the objects of every record of the ${split.fileName} split hold that record"):
-      val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
-      val edgeSlots = Axis[Edge] -> MaxEdges
+      val data = DrawingDataset.open(Corpus.LShape)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
+      val edgeSlots = Axis[Edge] -> Corpus.LShape.maxEdges
       data.samples.take(200).zipWithIndex.foreach: (sample, index) =>
         assertSameRecord(Objects.record(Objects.of(sample.target), edgeSlots), sample.target, s"sample $index")
 
