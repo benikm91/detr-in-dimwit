@@ -1,3 +1,5 @@
+package detr
+
 import dataset.ObjectClass
 import dimwit.*
 

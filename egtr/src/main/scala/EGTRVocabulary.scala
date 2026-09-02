@@ -1,3 +1,6 @@
+package egtr
+
+import detr.*
 import dimwit.*
 
 /** The axis of the object of a relation.

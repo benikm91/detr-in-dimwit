@@ -1,9 +1,12 @@
+package egtr
+
 import dataset.Detection
 import dataset.ObjectClass
 import dataset.RelationClass
 import dataset.RelationClasses
 import deepwit.activation.sigmoid
 import deepwit.activation.softmax
+import detr.*
 import dimwit.*
 import dimwit.Conversions.given
 

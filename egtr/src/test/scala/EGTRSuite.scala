@@ -1,9 +1,12 @@
+package egtr
+
 import dataset.Box
 import dataset.Detection
 import dataset.ObjectClass
 import dataset.RelationClass
 import dataset.RelationClasses
 import deepwit.activation.sigmoid
+import detr.*
 import dimwit.*
 import dimwit.optimizer.Adam
 import munit.FunSuite

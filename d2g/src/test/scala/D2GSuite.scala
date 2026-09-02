@@ -1,3 +1,6 @@
+package d2g
+
+import d2g.lshape.TrainState
 import dataset.EdgeClass
 import dataset.EdgeClasses
 import dataset.NodeClass
@@ -198,10 +201,10 @@ class D2GSuite extends FunSuite:
       lr => dimwit.optimizer.AdamW(Adam(learningRate = lr), Tensor0(0f)),
       deepwit.optimizer.ConstantLearningRate(Tensor0(1e-3f))
     )
-    val advance = jit: (state: D2GTrainState) =>
+    val advance = jit: (state: TrainState) =>
       val (next, _) = state.linearization.split2()
       state.copy(linearization = next)
-    val start = D2GTrainState(params, optimizer.init(params), Random.Key(42), Tensor0(-1f))
+    val start = TrainState(params, optimizer.init(params), Random.Key(42), Tensor0(-1f))
     val once = advance(start)
     val twice = advance(once)
     assertNotEquals(once.linearization, start.linearization, "the key a compiled step hands on is the one it was given")

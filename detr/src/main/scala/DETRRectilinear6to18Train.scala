@@ -1,9 +1,11 @@
+package detr.rectilinear6to18
+
 import dataset.Box
 import dataset.Detection
-import dataset.Box
 import dataset.DetectionBatch
-import dataset.LShapeDataset
-import dataset.LShapeDataset.Split
+import dataset.Corpus
+import dataset.DrawingDataset
+import dataset.DrawingDataset.Split
 import deepwit.checkpointing.TensorTreeCheckpointer
 import deepwit.training.Monitor
 import deepwit.training.tapEvery
@@ -12,6 +14,7 @@ import deepwit.attention.HeadKey
 import deepwit.attention.HeadQuery
 import deepwit.attention.HeadValue
 import deepwit.optimizer.clipGlobalNorm
+import detr.*
 import dimwit.*
 import deepwit.optimizer.CosineDecay
 import deepwit.optimizer.LearningRateSchedule
@@ -23,13 +26,15 @@ import dimwit.optimizer.AdamState
 import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
 
-/** Where [[detrTrain]] writes and [[detrEval]] reads its checkpoints. */
-val CheckpointRoot = "out/detr"
+/** Where [[detrRectilinear6to18Train]] writes and [[detrRectilinear6to18Eval]] reads its
+  * checkpoints.
+  */
+val CheckpointRoot = "out/detr/rectilinear-6to18"
 
 private trait Batch derives Label
 
 /** Axis of a model's parameters, flattened into one vector so that they can be counted. */
-trait Parameter derives Label
+private trait Parameter derives Label
 
 case class TrainState(
     params: DETR.Params[Float32],
@@ -37,9 +42,28 @@ case class TrainState(
     lastCost: Tensor0[Float32]
 )
 
+/** Trains a detector on the rectilinear parts of six to eighteen lines:
+  * `sbt "detr/runMain detr.rectilinear6to18.detrRectilinear6to18Train"`.
+  *
+  * A copy of [[detrLShapeTrain]] differing in the values at the top. The model is the size the
+  * l-shape run uses, deliberately — the corpus is what changes here, and a model that changed with
+  * it would leave the two unable to be compared. The queries are the exception, and they have to
+  * change: see below.
+  */
 @main
-def detrTrain(): Unit =
+def detrRectilinear6to18Train(): Unit =
   dimwit.initialize()
+
+  val corpus = Corpus.Rectilinear6to18
+
+  /** How many objects the decoder may answer with.
+    *
+    * A drawing of this corpus holds at most 22 objects against the L's 12, so the 32 queries the
+    * l-shape run asks with would leave ten slots to cover ten objects with no room to compete.
+    * Sixty-four keeps the headroom the L had, in the same proportion.
+    */
+  val numQueries = 64
+  require(numQueries > corpus.maxNodes, s"$numQueries queries cannot answer for a drawing of up to ${corpus.maxNodes} objects")
 
   val numIterations = 150_000
   val batchSize = 64
@@ -53,14 +77,14 @@ def detrTrain(): Unit =
     */
   val maxGradientNorm = 1.0f
 
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
-  val batches = data.objectBatches(Axis[Batch] -> batchSize)
-
   /** How long the rate climbs before it starts to fall. */
   val warmupSteps = 2_000
 
   /** Where the cosine bottoms out. Aligned with the other two models. */
   val finalLearningRate = 1e-4f
+
+  val data = DrawingDataset.open(corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
+  val batches = data.objectBatches(Axis[Batch] -> batchSize)
 
   /** Linear warmup into a cosine decay to nothing. Adam moves the weights by the same amount
     * whatever the gradient is, so the rate is the only thing that sets how far a step travels;
@@ -75,10 +99,7 @@ def detrTrain(): Unit =
     numLayers = 3,
     numHeads = 4,
     embedding = 128,
-    // The split holds at most 12 objects in a drawing, so the queries only need enough headroom
-    // above that for a few of them to compete over the same object before one wins it. Every
-    // query beyond that is one more slot that has to learn to stay empty.
-    numQueries = 32,
+    numQueries = numQueries,
     patchSize = 16,
     key = Random.Key(0)
   )

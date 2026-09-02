@@ -1,3 +1,5 @@
+package d2g
+
 import deepwit.activation.gelu
 import deepwit.attention.AttentionScore
 import deepwit.attention.MultiHeadAttention

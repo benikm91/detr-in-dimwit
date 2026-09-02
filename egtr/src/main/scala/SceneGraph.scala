@@ -1,4 +1,7 @@
+package egtr
+
 import dataset.RelationClasses
+import detr.*
 import dimwit.*
 
 /** The objects of a drawing and the relations between them.

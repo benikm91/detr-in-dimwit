@@ -1,3 +1,5 @@
+package d2g
+
 import dataset.EdgeClass
 import dataset.NodeClass
 import dataset.NodeClasses

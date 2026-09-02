@@ -1,3 +1,5 @@
+package egtr
+
 import dataset.RelationClasses
 import deepwit.activation.relu
 import deepwit.activation.sigmoid
@@ -6,6 +8,7 @@ import deepwit.attention.HeadKey
 import deepwit.attention.HeadQuery
 import deepwit.base.AffineLayer
 import deepwit.base.LinearLayer
+import detr.*
 import dimwit.*
 import dimwit.Conversions.given
 import dimwit.Label as Λ

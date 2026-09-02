@@ -1,3 +1,5 @@
+package detr
+
 import deepwit.attention.{MultiHeadFullSelfAttention, MultiHeadSelfAttention}
 import deepwit.normalization.LayerNorm
 import deepwit.transformer.TransformerBlock

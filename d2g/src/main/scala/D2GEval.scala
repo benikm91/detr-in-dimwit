@@ -1,6 +1,9 @@
+package d2g
+
 import dataset.Canvas
-import dataset.LShapeDataset
-import dataset.LShapeDataset.Split
+import dataset.Corpus
+import dataset.DrawingDataset
+import dataset.DrawingDataset.Split
 import dataset.NodeClass
 import dataset.Outlines
 import dataset.Record
@@ -16,22 +19,60 @@ import dimwit.tensor.Tensor4
 import plotwit.*
 import viz.PlotTargets.websocket
 
-/** Plots what a trained model transcribes: `sbt "d2g/runMain d2gPlot"`.
-  *
-  * A record has no drawing of its own, so it is drawn as the objects it stands for, and its
-  * relationships are printed. Note that touching the training split downloads 8.6 GB on first use.
-  */
+/** Plots what the l-shape run transcribes: `sbt "d2g/runMain d2g.d2gLShapePlot"`. */
 @main
-def d2gPlot(): Unit =
+def d2gLShapePlot(): Unit =
+  import d2g.lshape.{CheckpointRoot, EdgeSlots, NodeSlots, TrainState}
   dimwit.initialize()
 
-  val checkpoints = TensorTreeCheckpointer.latestIn(D2GCheckpointRoot).getOrElse(sys.error(s"no training run in $D2GCheckpointRoot"))
+  val checkpoints = TensorTreeCheckpointer.latestIn(CheckpointRoot).getOrElse(sys.error(s"no training run in $CheckpointRoot"))
   println(s"reading ${checkpoints.rootPath}")
-  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
-  val (nodes, edges) = (Axis[Node] -> NodeSlots, Axis[Edge] -> EdgeSlots)
+  val model = D2G(checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
+  d2gPlot(Corpus.LShape, model, Axis[Node] -> NodeSlots, Axis[Edge] -> EdgeSlots)
+
+/** Scores the l-shape run: `sbt "d2g/runMain d2g.d2gLShapeEval"`. */
+@main
+def d2gLShapeEval(): Unit =
+  import d2g.lshape.{CheckpointRoot, EdgeSlots, NodeSlots, TrainState}
+  dimwit.initialize()
+
+  val checkpoints = TensorTreeCheckpointer.latestIn(CheckpointRoot).getOrElse(sys.error(s"no training run in $CheckpointRoot"))
+  println(s"reading ${checkpoints.rootPath}")
+  val model = D2G(checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
+  d2gEval(Corpus.LShape, model, Axis[Node] -> NodeSlots, Axis[Edge] -> EdgeSlots)
+
+/** Plots what the rectilinear run transcribes: `sbt "d2g/runMain d2g.d2gRectilinear6to18Plot"`. */
+@main
+def d2gRectilinear6to18Plot(): Unit =
+  import d2g.rectilinear6to18.{CheckpointRoot, EdgeSlots, NodeSlots, TrainState}
+  dimwit.initialize()
+
+  val checkpoints = TensorTreeCheckpointer.latestIn(CheckpointRoot).getOrElse(sys.error(s"no training run in $CheckpointRoot"))
+  println(s"reading ${checkpoints.rootPath}")
+  val model = D2G(checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
+  d2gPlot(Corpus.Rectilinear6to18, model, Axis[Node] -> NodeSlots, Axis[Edge] -> EdgeSlots)
+
+/** Scores the rectilinear run: `sbt "d2g/runMain d2g.d2gRectilinear6to18Eval"`. */
+@main
+def d2gRectilinear6to18Eval(): Unit =
+  import d2g.rectilinear6to18.{CheckpointRoot, EdgeSlots, NodeSlots, TrainState}
+  dimwit.initialize()
+
+  val checkpoints = TensorTreeCheckpointer.latestIn(CheckpointRoot).getOrElse(sys.error(s"no training run in $CheckpointRoot"))
+  println(s"reading ${checkpoints.rootPath}")
+  val model = D2G(checkpoints.loadLatest[TrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
+  d2gEval(Corpus.Rectilinear6to18, model, Axis[Node] -> NodeSlots, Axis[Edge] -> EdgeSlots)
+
+/** Plots what a trained model transcribes.
+  *
+  * A record has no drawing of its own, so it is drawn as the objects it stands for, and its
+  * relationships are printed. Note that touching the training split downloads the whole of it on
+  * first use.
+  */
+private def d2gPlot(corpus: Corpus, model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExtent[Edge]): Unit =
   val transcriber = Transcriber(model, nodes, edges)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
-    val data = open(split)
+    val data = open(corpus, split)
     data
       .samples
       .take(3)
@@ -57,21 +98,15 @@ def d2gPlot(): Unit =
   */
 private val TranscribedTogether = 32
 
-/** Scores a trained model on the whole validation split: `sbt "d2g/runMain d2gEval"`.
+/** Scores a trained model on the whole validation split of a corpus.
   *
   * Every drawing is transcribed autoregressively and the record that comes out is compared with
   * the record it was rendered from, as a record rather than as a sequence. The node lines are what
-  * [[detrEval]] reports, on the same records.
+  * the detector reports, on the same records and through the same reporter.
   */
-@main
-def d2gEval(): Unit =
-  dimwit.initialize()
-
-  val checkpoints = TensorTreeCheckpointer.latestIn(D2GCheckpointRoot).getOrElse(sys.error(s"no training run in $D2GCheckpointRoot"))
-  println(s"reading ${checkpoints.rootPath}")
-  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
-  val transcriber = Transcriber(model, Axis[Node] -> NodeSlots, Axis[Edge] -> EdgeSlots, TranscribedTogether)
-  val data = open(Split.Validation)
+private def d2gEval(corpus: Corpus, model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExtent[Edge]): Unit =
+  val transcriber = Transcriber(model, nodes, edges, TranscribedTogether)
+  val data = open(corpus, Split.Validation)
 
   val drawings = data.samples
     .grouped(TranscribedTogether)
@@ -115,8 +150,8 @@ class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExten
     val filled = documents.padTo(drawings, documents.last)
     RecordGraph.of(transcribe(stack(filled, Axis[Drawing]))).take(documents.size)
 
-private def open(split: Split) =
-  LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
+private def open(corpus: Corpus, split: Split) =
+  DrawingDataset.open(corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
 
 /** How much of a record there is to see, for the header of a drawing of it. */
 private def counted(record: RecordGraph): String =

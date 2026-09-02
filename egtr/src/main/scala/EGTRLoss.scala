@@ -1,6 +1,9 @@
+package egtr
+
 import dataset.ObjectClass
 import dataset.RelationClasses
 import deepwit.activation.sigmoid
+import detr.*
 import dimwit.*
 import dimwit.Conversions.given
 

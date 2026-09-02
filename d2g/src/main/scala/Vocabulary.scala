@@ -1,3 +1,5 @@
+package d2g
+
 import dimwit.*
 
 trait Width derives Label

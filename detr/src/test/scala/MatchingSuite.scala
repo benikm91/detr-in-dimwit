@@ -1,3 +1,5 @@
+package detr
+
 import dimwit.*
 import munit.FunSuite
 

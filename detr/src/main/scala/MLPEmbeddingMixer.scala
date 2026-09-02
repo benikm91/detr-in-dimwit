@@ -1,3 +1,5 @@
+package detr
+
 import dimwit.*
 import deepwit.activation.gelu
 import deepwit.base.AffineLayer

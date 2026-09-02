@@ -1,6 +1,6 @@
 package dataset
 
-import dataset.LShapeDataset.Split
+import dataset.DrawingDataset.Split
 import dimwit.*
 import plotwit.*
 import viz.PlotTargets.websocket
@@ -11,7 +11,7 @@ private trait Channel derives Label
 private trait Node derives Label
 private trait Edge derives Label
 
-/** Shows what [[LShapeDataset]] hands out: `sbt "dataset/runMain dataset.lShapeDemo"`.
+/** Shows what [[DrawingDataset]] hands out: `sbt "dataset/runMain dataset.lShapeDemo"`.
   *
   * Reads the validation split (67 MB, downloaded into the HuggingFace cache on first run) and
   * plots the first few drawings next to the same drawings with the boxes their records are drawn
@@ -21,7 +21,7 @@ private trait Edge derives Label
 def lShapeDemo(): Unit =
   dimwit.initialize()
 
-  val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation)
+  val data = DrawingDataset.open(Corpus.LShape)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation)
   println(data)
 
   val rows = data.samples.take(3).zipWithIndex.map: (sample, index) =>

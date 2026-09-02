@@ -1,3 +1,5 @@
+package detr
+
 import dataset.Detection
 import dimwit.*
 

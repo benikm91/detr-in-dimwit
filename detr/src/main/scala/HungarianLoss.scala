@@ -1,3 +1,5 @@
+package detr
+
 import dataset.Box
 import dataset.Detection
 import dataset.ObjectClass

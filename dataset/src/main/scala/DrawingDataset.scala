@@ -9,16 +9,8 @@ import me.shadaj.scalapy.py
 
 import scala.language.implicitConversions
 
-/** The side of a drawing, in pixels. */
+/** The side of a drawing, in pixels. Every corpus renders onto the same canvas. */
 val Canvas = 256
-
-/** The most drawn nodes a record of this dataset holds: six lines and up to six annotations. */
-val MaxNodes = 12
-
-/** The most relationships a record of this dataset holds: six corners and up to six annotated
-  * lines.
-  */
-val MaxEdges = 12
 
 /** One drawing and what is to be predicted in it. */
 final case class Sample[W, H, C, Target](image: Tensor3[W, H, C, Float32], target: Target):
@@ -31,11 +23,26 @@ final case class Batch[S, W, H, C, Target](images: Tensor4[S, W, H, C, Float32],
 /** Axis of the drawings of a split. */
 private trait Drawings derives Label
 
-/** DimWit wrapper around the [[https://huggingface.co/datasets/benikm91/l-shape benikm91/l-shape]]
-  * dataset, backed by ScalaPy.
+/** A corpus of drawings, and how much room a record of it needs.
   *
-  * [[LShapeDataset.samples]] and [[LShapeDataset.batches]] hand out the [[Record]] every drawing
-  * was rendered from. [[LShapeDataset.objects]] and [[LShapeDataset.objectBatches]] hand out the
+  * The corpora differ in what they draw and in nothing else: the same drawing vocabulary, the same
+  * canvas, the same files. So the only thing a corpus has to carry beyond where it is published is
+  * how many nodes and relationships the largest record of it holds — which is what every slot in
+  * this codebase is sized from, and the one number that must not be guessed. Both are measured
+  * over the training split, which is the wider of the two.
+  */
+enum Corpus(val repoId: String, val maxNodes: Int, val maxEdges: Int):
+
+  /** Six lines forming an L, and up to six annotations of them. */
+  case LShape extends Corpus("benikm91/l-shape", 12, 12)
+
+  /** A general rectilinear part of six to eighteen lines, and up to that many annotations. */
+  case Rectilinear6to18 extends Corpus("benikm91/rectilinear-6to18", 22, 22)
+
+/** DimWit wrapper around the drawing datasets, backed by ScalaPy.
+  *
+  * [[DrawingDataset.samples]] and [[DrawingDataset.batches]] hand out the [[Record]] every drawing
+  * was rendered from. [[DrawingDataset.objects]] and [[DrawingDataset.objectBatches]] hand out the
   * same drawings as something to detect, which is that very data through [[Objects.of]] and
   * nothing else.
   *
@@ -44,33 +51,34 @@ private trait Drawings derives Label
   * {{{
   * dimwit.initialize()
   *
-  * val data = LShapeDataset.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
+  * val data = DrawingDataset.open(Corpus.LShape)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
   * val record = data.samples.next().target
   * val detected = data.objectBatches(Axis[Drawings] -> 16).next().target
   * }}}
   */
-object LShapeDataset:
+object DrawingDataset:
 
   enum Split(val fileName: String):
     case Train extends Split("train")
     case Validation extends Split("val")
 
-  /** Opens a split, downloading the repository files on first use.
+  /** Opens a split of a corpus, downloading the repository files on first use.
     *
     * The records are read into tensors here and for good; the drawings stay memory mapped, since
-    * the train split is 8.6 GB and only the batches asked for are ever read.
+    * a train split runs to gigabytes and only the batches asked for are ever read.
     */
-  def open[W: Label, H: Label, C: Label, Node: Label, Edge: Label](
+  def open[W: Label, H: Label, C: Label, Node: Label, Edge: Label](corpus: Corpus)(
       width: Axis[W],
       height: Axis[H],
       channel: Axis[C],
       node: Axis[Node],
       edge: Axis[Edge]
-  )(split: Split): LShapeDataset[W, H, C, Node, Edge] =
+  )(split: Split): DrawingDataset[W, H, C, Node, Edge] =
     val parsed = module.records(
+      corpus.repoId,
       split.fileName,
-      MaxNodes,
-      MaxEdges,
+      corpus.maxNodes,
+      corpus.maxEdges,
       NodeClass.NoNode.id,
       NodeClass.Line.id,
       NodeClass.Annotation.id,
@@ -79,8 +87,9 @@ object LShapeDataset:
       EdgeClass.Annotates.id
     )
     def read(at: Int) = Jax.jnp.asarray(parsed.applyDynamic("__getitem__")(at))
-    new LShapeDataset(
-      module.drawings(split.fileName),
+    new DrawingDataset(
+      corpus,
+      module.drawings(corpus.repoId, split.fileName),
       RecordBatch(
         nodeClass = liftPyTensor[(Drawings, Node), Int32](read(0)),
         startX = liftPyTensor[(Drawings, Node), Float32](read(1)),
@@ -93,10 +102,11 @@ object LShapeDataset:
       )
     )
 
-  private lazy val module: py.Dynamic = PythonModules("l_shape_dataset")
+  private lazy val module: py.Dynamic = PythonModules("drawing_dataset")
 
-/** A single split of the l-shape dataset. Use [[LShapeDataset.open]] to create one. */
-final class LShapeDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Label] private[dataset] (
+/** A single split of a drawing dataset. Use [[DrawingDataset.open]] to create one. */
+final class DrawingDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Label] private[dataset] (
+    val corpus: Corpus,
     private val images: py.Dynamic,
     private val records: RecordBatch[Drawings, Node, Edge]
 ):
@@ -122,7 +132,7 @@ final class LShapeDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Label
   def objectBatches[S: Label](batch: AxisExtent[S]): Iterator[Batch[S, W, H, C, ObjectBatch[S, Node]]] =
     batches(batch).map(_.map(Objects.of))
 
-  override def toString: String = s"LShapeDataset(drawings=$numSamples, nodes=$MaxNodes)"
+  override def toString: String = s"DrawingDataset(${corpus.repoId}, drawings=$numSamples, nodes=${corpus.maxNodes})"
 
   /** The drawings from `from` on, as ink on a white canvas in `[0, 1]`. They are stored row major
     * — row index = y — so the axes are swapped to put x first, as a record's coordinates are.
