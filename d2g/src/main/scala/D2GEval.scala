@@ -28,7 +28,7 @@ def d2gPlot(setup: D2GSetup): Unit =
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
-  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
+  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params, setup.predictionNoise)
   val (nodes, edges) = (Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots)
   val transcriber = Transcriber(model, nodes, edges)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
@@ -69,7 +69,7 @@ def d2gEval(setup: D2GSetup): Unit =
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
-  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
+  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params, setup.predictionNoise)
   val transcriber = Transcriber(model, Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots, TranscribedTogether)
   val data = open(setup, Split.Validation)
 
@@ -100,11 +100,16 @@ private trait Drawing derives Label
   * every step cost more than it needs to, which is of no consequence here: what matters is that
   * the only thing handed to the model is the document, so no target can leak into what is scored.
   */
-class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: Int = 1)
+class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: Int = 1, seed: Int = 0)
     extends (Tensor3[Width, Height, Channel, Float32] => RecordGraph):
 
-  private val transcribe = jit: (documents: Tensor4[Drawing, Width, Height, Channel, Float32]) =>
-    model.predictRecords(documents.vmap(Axis[Drawing])(model.encode), nodes, edges)
+  /** Every batch is transcribed with fresh noise, since the noise is what decides which of the
+    * remaining nodes a step answers with. Started from a seed so that a run repeats.
+    */
+  private var noise = Random.Key(seed)
+
+  private val transcribe = jit: (documents: Tensor4[Drawing, Width, Height, Channel, Float32], key: Key) =>
+    model.predictRecords(documents.vmap(Axis[Drawing])(model.encode), nodes, edges, key)
 
   override def apply(document: Tensor3[Width, Height, Channel, Float32]): RecordGraph =
     apply(Seq(document)).head
@@ -113,7 +118,9 @@ class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExten
     require(documents.nonEmpty, "there is nothing to transcribe")
     require(documents.size <= drawings, s"${documents.size} drawings do not fit in a batch of $drawings")
     val filled = documents.padTo(drawings, documents.last)
-    RecordGraph.of(transcribe(stack(filled, Axis[Drawing]))).take(documents.size)
+    val (next, forThese) = noise.split2()
+    noise = next
+    RecordGraph.of(transcribe(stack(filled, Axis[Drawing]), forThese)).take(documents.size)
 
 private def open(setup: D2GSetup, split: Split) =
   DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)

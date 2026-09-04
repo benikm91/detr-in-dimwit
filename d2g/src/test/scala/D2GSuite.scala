@@ -27,16 +27,20 @@ class RecordSuite extends FunSuite:
   private val canvas = 8
 
   test("the mask is exactly what remaining-node prediction needs"):
-    val mask = jointSequenceMask(joined(slots = 4)).toArray
+    val slots = 4
+    val mask = jointSequenceMask(joined(slots)).toArray
     for
-      target <- 0 until 8
-      source <- 0 until 8
+      target <- 0 until joined(slots).size
+      source <- 0 until joined(slots).size
     do
-      val itself = target == source
       val expected =
-        if source >= 4 then itself // a guess is read by no one but itself
-        else if target < 4 then itself || source <= target // a taken embedding carries itself and what came before it
-        else source < target - 4 // a prediction embedding sees only what is taken before it
+        // a guess is read by no one but itself, its own token's twin included
+        if source >= slots then target == source
+        // a taken embedding carries itself and what came before it
+        else if target < slots then source <= target
+        // a prediction embedding sees only what is taken before the slot it answers for, which is
+        // where it sits within its own token's block
+        else source < (target - slots) % slots
       assertEquals(mask(target)(source), expected, s"row $target, column $source")
 
   test("no row is fully masked, since a fully masked row has no softmax"):
@@ -47,27 +51,34 @@ class RecordSuite extends FunSuite:
   test("the node loss accepts any remaining node, and no taken one"):
     val target = slotted(annotation(0.1f, 0.2f), annotation(0.3f, 0.4f))
     val loss = RemainingNodeLoss(VType[Float32], canvas)
-    def cost(answers: RecordNode*) = loss(D2G.NodeScores(remaining = scored(slotted(answers*)), taken = scored(target)), target).item
+    // The two prediction tokens of a slot answer separately, so a cost takes what each said.
+    def cost(one: Seq[RecordNode], other: Seq[RecordNode]) =
+      loss(D2G.NodeScores(D2G.Guesses(scored(slotted(one*)), scored(slotted(other*))), scored(target)), target).cost.item
 
-    val inOrder = cost(annotation(0.1f, 0.2f), annotation(0.3f, 0.4f), noNode)
-    val reversed = cost(annotation(0.3f, 0.4f), annotation(0.3f, 0.4f), noNode)
-    val repeated = cost(annotation(0.1f, 0.2f), annotation(0.1f, 0.2f), noNode)
-    val runsOn = cost(annotation(0.1f, 0.2f), annotation(0.3f, 0.4f), annotation(0.5f, 0.6f))
+    val first = Seq(annotation(0.1f, 0.2f), annotation(0.3f, 0.4f), noNode)
+    val second = Seq(annotation(0.3f, 0.4f), annotation(0.3f, 0.4f), noNode)
+    val apart = cost(first, second)
+    val together = cost(first, first)
+    val repeated = cost(Seq(annotation(0.1f, 0.2f), annotation(0.1f, 0.2f), noNode), second)
+    val runsOn = cost(Seq(annotation(0.1f, 0.2f), annotation(0.3f, 0.4f), annotation(0.5f, 0.6f)), second)
 
-    assert(inOrder < 0.1f, s"a valid transcription still costs $inOrder")
-    assertEqualsFloat(reversed, inOrder, 0.05f)
-    assert(repeated > inOrder + 1f, s"answering with a node already taken costs $repeated, barely more than $inOrder")
-    assert(runsOn > inOrder + 1f, s"running past the nodes costs $runsOn, barely more than $inOrder")
+    assert(apart < 0.1f, s"two different remaining nodes still cost $apart")
+    assert(together > apart + 0.5f, s"both tokens naming the same node costs $together, barely more than $apart")
+    assert(repeated > apart + 1f, s"answering with a node already taken costs $repeated, barely more than $apart")
+    assert(runsOn > apart + 1f, s"running past the nodes costs $runsOn, barely more than $apart")
 
   test("the edge loss accepts any remaining relationship, and no taken one"):
     val target = related(RecordEdge(EdgeClass.Connected, 0, 1), RecordEdge(EdgeClass.Annotates, 2, 0))
     val loss = RemainingEdgeLoss(VType[Float32])
-    def cost(answers: RecordEdge*) = loss(D2G.EdgeScores(remaining = scored(related(answers*)), taken = scored(target)), target).item
+    def cost(one: Seq[RecordEdge], other: Seq[RecordEdge]) =
+      loss(D2G.EdgeScores(D2G.Guesses(scored(related(one*)), scored(related(other*))), scored(target)), target).cost.item
 
-    val inOrder = cost(RecordEdge(EdgeClass.Connected, 0, 1), RecordEdge(EdgeClass.Annotates, 2, 0), noEdge)
-    val reversed = cost(RecordEdge(EdgeClass.Annotates, 2, 0), RecordEdge(EdgeClass.Annotates, 2, 0), noEdge)
-    val repeated = cost(RecordEdge(EdgeClass.Connected, 0, 1), RecordEdge(EdgeClass.Connected, 0, 1), noEdge)
-    val runsOn = cost(RecordEdge(EdgeClass.Connected, 0, 1), RecordEdge(EdgeClass.Annotates, 2, 0), RecordEdge(EdgeClass.Annotates, 1, 2))
+    val first = Seq(RecordEdge(EdgeClass.Connected, 0, 1), RecordEdge(EdgeClass.Annotates, 2, 0), noEdge)
+    val second = Seq(RecordEdge(EdgeClass.Annotates, 2, 0), RecordEdge(EdgeClass.Annotates, 2, 0), noEdge)
+    val inOrder = cost(first, second)
+    val reversed = cost(second, first)
+    val repeated = cost(Seq(RecordEdge(EdgeClass.Connected, 0, 1), RecordEdge(EdgeClass.Connected, 0, 1), noEdge), second)
+    val runsOn = cost(Seq(RecordEdge(EdgeClass.Connected, 0, 1), RecordEdge(EdgeClass.Annotates, 2, 0), RecordEdge(EdgeClass.Annotates, 1, 2)), second)
 
     assert(inOrder < 0.1f, s"a valid transcription still costs $inOrder")
     assertEqualsFloat(reversed, inOrder, 0.05f)
@@ -80,7 +91,9 @@ class RecordSuite extends FunSuite:
     val decoder = EdgeDecoder(EdgeDecoder.Params.xavierUniformDepthScaled(numBlocks = 1, numHeads = 2, embedding, embedding, mixed, Random.Key(3)))
     val document = Init.xavierUniform(patches, embedding, Random.Key(4))
     val taken = Init.xavierUniform(edges, embedding, Random.Key(5))
-    val predictions = Init.xavierUniform(edges, embedding, Random.Key(6)).relabel(Axis[Edge] -> Axis[EdgePrediction])
+    val predictions = Init
+      .xavierUniform(Axis[Edge] -> (edges.size * PredictionsPerSlot), embedding, Random.Key(6))
+      .relabel(Axis[Edge] -> Axis[EdgePrediction])
     val nodes = Init.xavierUniform(padded, embedding, Random.Key(7))
 
     def answered(nodes: Tensor2[Node, Embedding, Float32], holdsNode: Seq[Boolean]) =
@@ -95,7 +108,7 @@ class RecordSuite extends FunSuite:
   /** The joined sequence of `slots` taken embeddings and as many prediction embeddings, which is
     * the extent the mask is asked for.
     */
-  private def joined(slots: Int) = Axis[NodeDecoder.Context] -> 2 * slots
+  private def joined(slots: Int) = Axis[NodeDecoder.Context] -> (1 + PredictionsPerSlot) * slots
 
   private def annotation(x: Float, y: Float) = RecordNode(NodeClass.Annotation, Seq(Point(x, y)))
 
@@ -168,7 +181,8 @@ class D2GSuite extends FunSuite:
   private val nodes = Axis[Node] -> 4
   private val edges = Axis[Edge] -> 3
   private val params = D2G.Params.init(numLayers = 2, numHeads = 2, embedding = 32, nodes = nodes.size, edges = edges.size, patchSize = 16, canvas = canvas, key = Random.Key(0))
-  private val model = D2G(params)
+  private val noise = 0.15f
+  private val model = D2G(params, noise)
 
   private val record = RecordGraph(
     nodes = Seq(
@@ -185,13 +199,15 @@ class D2GSuite extends FunSuite:
   )
 
   test("every position is scored for what its half of a record carries"):
-    val scored = model(document, record.record(nodes, edges))
-    assertEquals(scored.nodes.remaining.nodeClass.shape.dimensions.toSeq, Seq(nodes.size, NodeClass.values.length))
-    assertEquals(scored.nodes.remaining.startX.shape.dimensions.toSeq, Seq(nodes.size, canvas))
-    assertEquals(scored.nodes.taken.nodeClass.shape.dimensions.toSeq, scored.nodes.remaining.nodeClass.shape.dimensions.toSeq)
-    assertEquals(scored.edges.remaining.edgeClass.shape.dimensions.toSeq, Seq(edges.size, EdgeClass.values.length))
-    assertEquals(scored.edges.remaining.subject.shape.dimensions.toSeq, Seq(edges.size, nodes.size))
-    assertEquals(scored.edges.taken.edgeClass.shape.dimensions.toSeq, scored.edges.remaining.edgeClass.shape.dimensions.toSeq)
+    val scored = model(document, record.record(nodes, edges), Random.Key(0))
+    scored.nodes.remaining.toSeq.foreach: guess =>
+      assertEquals(guess.nodeClass.shape.dimensions.toSeq, Seq(nodes.size, NodeClass.values.length))
+      assertEquals(guess.startX.shape.dimensions.toSeq, Seq(nodes.size, canvas))
+    assertEquals(scored.nodes.taken.nodeClass.shape.dimensions.toSeq, scored.nodes.remaining.one.nodeClass.shape.dimensions.toSeq)
+    scored.edges.remaining.toSeq.foreach: guess =>
+      assertEquals(guess.edgeClass.shape.dimensions.toSeq, Seq(edges.size, EdgeClass.values.length))
+      assertEquals(guess.subject.shape.dimensions.toSeq, Seq(edges.size, nodes.size))
+    assertEquals(scored.edges.taken.edgeClass.shape.dimensions.toSeq, scored.edges.remaining.one.edgeClass.shape.dimensions.toSeq)
 
   test("the training state carries a new linearization on to every step"):
     val optimizer = deepwit.optimizer.LearningRateScheduler(
@@ -210,27 +226,28 @@ class D2GSuite extends FunSuite:
   test("training on one drawing learns to transcribe it"):
     val nodeLoss = RemainingNodeLoss(VType[Float32], canvas)
     val edgeLoss = RemainingEdgeLoss(VType[Float32])
-    def cost(params: D2G.Params[Float32], target: Record[Node, Edge]) =
-      val scored = D2G(params)(document, target)
-      nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target.edges)
+    def cost(params: D2G.Params[Float32], target: Record[Node, Edge], key: Key) =
+      val scored = D2G(params, noise)(document, target, key)
+      nodeLoss(scored.nodes, target.nodes).cost + edgeLoss(scored.edges, target.edges).cost
 
     val optimizer = Adam(learningRate = Tensor0(3e-3f))
-    val step = jit: (params: D2G.Params[Float32], state: dimwit.optimizer.AdamState[D2G.Params[Float32]], target: Record[Node, Edge]) =>
-      val (lastCost, gradients) = Autodiff.valueAndGrad((p: D2G.Params[Float32]) => cost(p, target))(params)
+    val step = jit: (params: D2G.Params[Float32], state: dimwit.optimizer.AdamState[D2G.Params[Float32]], target: Record[Node, Edge], key: Key) =>
+      val (lastCost, gradients) = Autodiff.valueAndGrad((p: D2G.Params[Float32]) => cost(p, target, key))(params)
       val (next, nextState) = optimizer.update(gradients, params, state)
       (lastCost, next, nextState)
 
     // A fresh linearization every step, so nothing can be learned about the order.
     val random = scala.util.Random(1)
-    val (first, trained) = (1 to 800).foldLeft((Option.empty[Float], (params, optimizer.init(params)))):
-      case ((first, (params, state)), _) =>
-        val (lastCost, next, nextState) = step(params, state, record.permuted(random).record(nodes, edges))
-        (first.orElse(Some(lastCost.item)), (next, nextState))
+    val (first, trained) = (1 to 800).foldLeft((Option.empty[Float], (params, optimizer.init(params), Random.Key(3)))):
+      case ((first, (params, state, key)), _) =>
+        val (nextKey, forStep) = key.split2()
+        val (lastCost, next, nextState) = step(params, state, record.permuted(random).record(nodes, edges), forStep)
+        (first.orElse(Some(lastCost.item)), (next, nextState, nextKey))
 
-    val (finalParams, _) = trained
+    val (finalParams, _, _) = trained
     val linearized = record.permuted(random).record(nodes, edges)
-    val last = cost(finalParams, linearized).item
+    val last = cost(finalParams, linearized, Random.Key(5)).item
     assert(last < first.get * 0.01f, s"the loss barely moved: ${first.get} -> $last")
 
-    val transcribed = Transcriber(D2G(finalParams), nodes, edges)(document)
+    val transcribed = Transcriber(D2G(finalParams, noise), nodes, edges)(document)
     assert(RecordScoring.score(record, transcribed, tolerance = 0.5f / canvas).isExact, s"transcribed $transcribed instead of $record")

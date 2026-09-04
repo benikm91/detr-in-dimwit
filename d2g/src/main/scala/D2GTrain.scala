@@ -88,31 +88,63 @@ def d2gTrain(setup: D2GSetup): Unit =
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
-  val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas, setup.withPassThrough)
-  val edgeLoss = RemainingEdgeLoss(VType[Float32], setup.withPassThrough)
+  val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas, setup.withPassThrough, setup.separation)
+  val edgeLoss = RemainingEdgeLoss(VType[Float32], setup.withPassThrough, setup.separation)
 
   def cost(
       images: Tensor4[Batch, Width, Height, Channel, Float32],
-      records: RecordBatch[Batch, Node, Edge]
+      records: RecordBatch[Batch, Node, Edge],
+      key: Key
   )(params: D2G.Params[Float32]): Tensor0[Float32] =
-    val model = D2G(params)
-    zipvmap(Axis[Batch])(images, records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.edgeClass, records.subject, records.obj):
-      case (image, nodeClass, startX, startY, endX, endY, edgeClass, subject, obj) =>
+    val model = D2G(params, setup.predictionNoise)
+    val keys = key.splitToTensor(images.shape.extent(Axis[Batch]))
+    zipvmap(Axis[Batch])(images, records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.edgeClass, records.subject, records.obj, keys):
+      case (image, nodeClass, startX, startY, endX, endY, edgeClass, subject, obj, key) =>
         val target = Record(nodeClass, startX, startY, endX, endY, edgeClass, subject, obj)
-        val scored = model(image, target)
-        nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target.edges)
+        val scored = model(image, target, key.item)
+        nodeLoss(scored.nodes, target.nodes).cost + edgeLoss(scored.edges, target.edges).cost
     .mean
+
+  /** How often the two prediction tokens of a slot answered with the same node, over one batch
+    * held aside for the purpose.
+    *
+    * Nothing about accuracy — it says whether the noise is doing anything at all. Near 100% and the
+    * two tokens have collapsed into one and none of this is working; falling toward nothing and
+    * they are answering independently.
+    */
+  def collisions(
+      images: Tensor4[Batch, Width, Height, Channel, Float32],
+      records: RecordBatch[Batch, Node, Edge],
+      key: Key,
+      params: D2G.Params[Float32]
+  ): Tensor0[Float32] =
+    val model = D2G(params, setup.predictionNoise)
+    val keys = key.splitToTensor(images.shape.extent(Axis[Batch]))
+    val counted = zipvmap(Axis[Batch])(images, records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.edgeClass, records.subject, records.obj, keys):
+      case (image, nodeClass, startX, startY, endX, endY, edgeClass, subject, obj, key) =>
+        val target = Record(nodeClass, startX, startY, endX, endY, edgeClass, subject, obj)
+        val scored = model(image, target, key.item)
+        val (nodes, edges) = (nodeLoss(scored.nodes, target.nodes), edgeLoss(scored.edges, target.edges))
+        (nodes.collided + edges.collided, nodes.asked + edges.asked)
+    counted._1.sum / counted._2.sum
 
   def gradientStep(
       images: Tensor4[Batch, Width, Height, Channel, Float32],
       records: RecordBatch[Batch, Node, Edge],
       state: D2GTrainState
   ) =
-    val (nextLinearization, forThisStep) = state.linearization.split2()
-    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, records.permuted(forThisStep, nodes, edges)))(state.params)
+    val (nextLinearization, forThisStep, forNoise) = state.linearization.splitToTuple(3)
+    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, records.permuted(forThisStep, nodes, edges), forNoise))(state.params)
     val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)
     D2GTrainState(params, optimizerState, nextLinearization, lastCost)
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
+
+  /** One batch kept aside, so that the collision rate is read from the same drawings every time
+    * and its movement is the model's rather than the batch's.
+    */
+  val watched = data.batches(Axis[Batch] -> setup.batchSize).next()
+  val watchCollisions = jit: (params: D2G.Params[Float32], key: Key) =>
+    collisions(watched.images, watched.target.permuted(key, nodes, edges), key, params)
 
   val checkpointer = TensorTreeCheckpointer.newIn(setup.checkpointRoot)
   val monitor = Monitor.ConcatMonitor[D2GTrainState](List(
@@ -125,7 +157,9 @@ def d2gTrain(setup: D2GSetup): Unit =
     .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, Tensor0(-1f))):
       case (state, batch) => jitGradientStep(batch.images, batch.target, state)
     .tapEvery(100):
-      case (state, step) => println(monitor.report(step, state))
+      case (state, step) =>
+        val collided = watchCollisions(state.params, Random.Key(step)).item
+        println(f"${monitor.report(step, state)} | Collisions: ${100f * collided}%5.1f%%")
     .tapEvery(setup.checkpointEvery):
       case (state, step) =>
         checkpointer.save(state, step)

@@ -107,11 +107,21 @@ object DocumentEncoderBlock:
         mlpNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
       )
 
-/** Which of the `2 * slots` embeddings of a joined training sequence each of them may attend to.
+/** How many prediction tokens stand beside every slot of a record.
   *
-  * The sequence is the embeddings of what is taken so far followed by the prediction embeddings
-  * beside them, so the mask falls into four blocks of one slot each — a row is an embedding that
-  * reads, a column one that is read:
+  * Two. A slot must answer with two *different* remaining nodes, so it cannot settle for the one it
+  * finds easiest and leave the rest of them unlearned — which is what a single token does, and why
+  * a transcription that has spent its easy answers cannot finish. The two are told apart by nothing
+  * but the noise added to them: same token, same position, and no sight of one another, so neither
+  * is a first choice and the model has no way to split them by rank.
+  */
+val PredictionsPerSlot = 2
+
+/** Which embeddings of a joined training sequence each of them may attend to.
+  *
+  * The sequence is the embeddings of what is taken so far followed by the [[PredictionsPerSlot]]
+  * prediction embeddings of every slot, so the mask falls into four blocks — a row is an embedding
+  * that reads, a column one that is read:
   *
   * {{{
   *                 source:  taken                 prediction
@@ -119,11 +129,14 @@ object DocumentEncoderBlock:
   *   target: prediction     before its own slot   itself
   * }}}
   *
-  * A taken embedding carries the record as far as itself; a prediction embedding reads exactly
-  * what is taken before its own slot, so that what it may answer with is what is left over; and
-  * nothing reads a prediction embedding, which holds a guess rather than a record. The diagonal of
-  * the last block is what keeps the first prediction row, which has nothing taken before it, from
-  * being fully masked — a row of nothing but `-inf` has no softmax.
+  * A taken embedding carries the record as far as itself; a prediction embedding reads exactly what
+  * is taken before the slot it answers for, so that what it may answer with is what is left over;
+  * and nothing reads a prediction embedding, which holds a guess rather than a record.
+  *
+  * The last block is the diagonal and stays the diagonal however many tokens a slot has: the tokens
+  * of one slot must not read each other, or they would agree on an answer between themselves rather
+  * than each having to find one. It is also what keeps the first prediction row, which has nothing
+  * taken before it, from being fully masked — a row of nothing but `-inf` has no softmax.
   */
 def jointSequenceMask[Context: Λ](context: AxisExtent[Context]): Tensor2[Context, Context, Bool] =
 
@@ -133,16 +146,23 @@ def jointSequenceMask[Context: Λ](context: AxisExtent[Context]): Tensor2[Contex
   trait PredictionSource derives Label
   trait PredictionTarget derives Label
 
-  val blockSize = context.size / 2
-  def blockShape[S1: Label, S2: Label]: Shape2[S1, S2] =
-    Shape2(Axis[S1] -> blockSize, Axis[S2] -> blockSize)
+  val slots = context.size / (1 + PredictionsPerSlot)
+  val predictions = slots * PredictionsPerSlot
+  val taken = Axis[TakenSource] -> slots
 
-  val upToItsOwnSlot = tril(Tensor(blockShape[TakenTarget, TakenSource]).fill(true))
-  val noSlot = Tensor(blockShape[TakenTarget, PredictionSource]).fill(false)
+  val upToItsOwnSlot = tril(Tensor(Shape2(Axis[TakenTarget] -> slots, taken)).fill(true))
+  val noSlot = Tensor(Shape2(Axis[TakenTarget] -> slots, Axis[PredictionSource] -> predictions)).fill(false)
 
-  val beforeItsOwnSlot = tril(Tensor(blockShape[PredictionTarget, TakenSource]).fill(true), kthDiagonal = -1)
+  // A prediction row answers for the slot it sits at, which is its position within its own token's
+  // block, so the taken embeddings it may read are the ones before that slot.
+  val answersFor = Tensor1(Axis[PredictionTarget], VType[Int32])
+    .fromArray(Array.range(0, predictions).map(_ % slots))
+  val readable = Tensor1(taken.axis, VType[Int32]).fromArray(Array.range(0, slots))
+  val shape = Shape2(Axis[PredictionTarget] -> predictions, taken)
+  val beforeItsOwnSlot = readable.broadcastTo(shape) < answersFor.broadcastTo(shape)
+
   val itselfOnly = Tensor2
-    .eye(Axis[PredictionTarget] -> blockSize, VType[Bool])
+    .eye(Axis[PredictionTarget] -> predictions, VType[Bool])
     .relabel(Axis[Prime[PredictionTarget]] -> Axis[PredictionSource])
 
   val mask = concatenate(

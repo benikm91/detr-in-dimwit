@@ -50,6 +50,28 @@ case class D2GSetup(
       * doubles the time to converge.
       */
     withPassThrough: Boolean = false,
+
+    /** How hard the two prediction tokens of a slot are jogged apart, as a fraction of the
+      * embedding's own size.
+      *
+      * They are otherwise the same token at the same position and cannot see each other, so this
+      * noise is the only thing that can make them answer with different remaining nodes — which is
+      * what the loss asks of them, and what stops the model learning to answer only with the node
+      * it finds easiest. Too small and they agree and the loss is inert; too large and it drowns
+      * the positional encoding they need in order to know which slot they answer for.
+      */
+    predictionNoise: Float = 0.15f,
+
+    /** What agreeing costs the two prediction tokens of a slot, in nats.
+      *
+      * Each token is charged only for the remaining node it chose itself, so nothing ever hands one
+      * of them a node it did not pick — this is what pushes them apart instead. It is a cost they
+      * may always choose to pay, which matters at the end of a record where two different answers
+      * can be impossible: paying it and committing has to stay cheaper than splitting the
+      * difference between two nodes, which costs about 4 ln 2 = 2.77. Below that, and above what
+      * naming a second-best node costs, is the window.
+      */
+    separation: Float = 1f,
     checkpointEvery: Int = 10_000,
     seed: Int = 42
 ):
