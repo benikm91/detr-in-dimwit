@@ -23,7 +23,7 @@ enum NodeClass(val id: Int, val pointNames: Seq[String]):
 
   def numPoints: Int = pointNames.length
 
-  def isDrawn: Boolean = this != NodeClass.NoNode
+  def isNode: Boolean = this != NodeClass.NoNode
 
 object NodeClass:
 
@@ -48,9 +48,9 @@ enum EdgeClass(val id: Int, val isSymmetric: Boolean):
 
   case Annotates extends EdgeClass(2, false)
 
-  def relates: Boolean = this != EdgeClass.NoEdge
+  def isEdge: Boolean = this != EdgeClass.NoEdge
 
-  def numLinks: Int = if relates then 2 else 0
+  def numLinks: Int = if isEdge then 2 else 0
 
 object EdgeClass:
 
@@ -177,7 +177,7 @@ object RecordBatch:
       Tensor1[Node, Float32],
       Tensor1[Node, Int32]
   ) =
-    val order = heldFirst(NodeClass.indicator(VType[Float32])(_.isDrawn).take(Axis[NodeClasses])(nodes.nodeClass), key)
+    val order = heldFirst(NodeClass.indicator(VType[Float32])(_.isNode).take(Axis[NodeClasses])(nodes.nodeClass), key)
     def reordered[V](placed: Tensor1[Node, V]) = placed.take(Axis[Node])(order)
     (
       reordered(nodes.nodeClass),
@@ -196,7 +196,7 @@ object RecordBatch:
       nodeOrder: Tensor1[Node, Int32],
       key: Key
   ): (Tensor1[Edge, Int32], Tensor1[Edge, Int32], Tensor1[Edge, Int32]) =
-    val order = heldFirst(EdgeClass.indicator(VType[Float32])(_.relates).take(Axis[EdgeClasses])(edges.edgeClass), key)
+    val order = heldFirst(EdgeClass.indicator(VType[Float32])(_.isEdge).take(Axis[EdgeClasses])(edges.edgeClass), key)
     val classes = edges.edgeClass.take(Axis[Edge])(order)
     // A relationship names the nodes it relates by their position, and a node that sat at `at`
     // before sits at `renamed(at)` now.
@@ -211,8 +211,8 @@ object RecordBatch:
     val nothing = Tensor.like(subject).fill(0)
     (
       classes,
-      where(is(_.relates), where(is(_.isSymmetric), minimum(subject, obj), subject), nothing),
-      where(is(_.relates), where(is(_.isSymmetric), maximum(subject, obj), obj), nothing)
+      where(is(_.isEdge), where(is(_.isSymmetric), minimum(subject, obj), subject), nothing),
+      where(is(_.isEdge), where(is(_.isSymmetric), maximum(subject, obj), obj), nothing)
     )
 
   /** The order that reads the positions `holds` marks first, shuffled, and the empty ones after
@@ -350,12 +350,12 @@ object RecordGraph:
   private def read(placed: Placement): RecordGraph =
     val nodeClass = placed.nodeClass.map(NodeClass.fromId)
     val edgeClass = placed.edgeClass.map(EdgeClass.fromId)
-    val nodeAt = nodeClass.indices.filter(nodeClass(_).isDrawn).zipWithIndex.toMap
+    val nodeAt = nodeClass.indices.filter(nodeClass(_).isNode).zipWithIndex.toMap
     def placedAt(at: Int) =
       Seq(Point(placed.startX(at), placed.startY(at)), Point(placed.endX(at), placed.endY(at)))
     RecordGraph(
       nodes = nodeAt.keys.toSeq.sorted.map(at => RecordNode(nodeClass(at), placedAt(at).take(nodeClass(at).numPoints))),
-      edges = edgeClass.indices.filter(edgeClass(_).relates).flatMap: at =>
+      edges = edgeClass.indices.filter(edgeClass(_).isEdge).flatMap: at =>
         for
           subject <- nodeAt.get(placed.subject(at))
           obj <- nodeAt.get(placed.obj(at))

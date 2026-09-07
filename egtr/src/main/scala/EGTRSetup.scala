@@ -17,7 +17,7 @@ case class EGTRSetup(
 
     /** Where to look for a detector to start from, or `None` to start from scratch.
       *
-      * Starting from a trained detector is what the paper does — the relations are read out of the
+      * Starting from a trained detector is what EGTR does — the relations are read out of the
       * detector's own attention, so they have little to say until the detection is roughly right.
       * It also makes the model incomparable with one trained from nothing, since it has been shown
       * the corpus twice. Which of the two is wanted depends on what the run is for, so it is said
@@ -32,7 +32,7 @@ case class EGTRSetup(
     embedding: Int = 128,
 
     /** One source projects a query into this, and a pair of queries into twice it, which is what
-      * the heads read. The paper keeps both at the detector's embedding width.
+      * the heads read. EGTR keeps both at the detector's embedding width.
       */
     sourceExtent: Int = 128,
     hiddenExtent: Int = 128,

@@ -14,6 +14,7 @@ import deepwit.attention.HeadQuery
 import deepwit.attention.HeadValue
 import deepwit.optimizer.clipGlobalNorm
 import dimwit.*
+import dimwit.Conversions.given
 import deepwit.optimizer.CosineDecay
 import deepwit.optimizer.LearningRateSchedule
 import deepwit.optimizer.LearningRateScheduler
@@ -23,6 +24,8 @@ import dimwit.optimizer.Adam
 import dimwit.optimizer.AdamState
 import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
+
+import scala.language.implicitConversions
 
 private trait Batch derives Label
 
@@ -48,15 +51,15 @@ def detrTrain(setup: DETRSetup): Unit =
     * held constant it never shrinks and the model orbits a solution instead of settling on it.
     */
   val schedule: LearningRateSchedule =
-    LinearWarmup(Tensor0(setup.learningRate), Tensor0(setup.warmupSteps))
+    LinearWarmup(setup.learningRate, setup.warmupSteps)
       .followBy(
         CosineDecay(
-          Tensor0(setup.learningRate),
-          Tensor0(setup.finalLearningRate),
-          Tensor0(setup.numIterations - setup.warmupSteps)
+          setup.learningRate,
+          setup.finalLearningRate,
+          setup.numIterations - setup.warmupSteps
         )
       )
-  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), Tensor0(setup.weightDecay)), schedule)
+  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), setup.weightDecay), schedule)
 
   val initialParams = DETR.Params.init(
     numLayers = setup.numLayers,
@@ -90,7 +93,7 @@ def detrTrain(setup: DETRSetup): Unit =
       state: TrainState
   ) =
     val (lastCost, gradients) = Autodiff.valueAndGrad(cost(imgs, objects))(state.params)
-    val clipped = gradients.clipGlobalNorm(Tensor0(setup.maxGradientNorm))
+    val clipped = gradients.clipGlobalNorm(setup.maxGradientNorm)
     val (params, optimizerState) = optimizer.update(clipped, state.params, state.optimizerState)
     val newState = TrainState(params, optimizerState, lastCost)
     summon[TensorTree[TrainState]].map(
@@ -117,7 +120,7 @@ def detrTrain(setup: DETRSetup): Unit =
     Monitor.PerformanceMonitor(setup.batchSize)
   ))
   batches
-    .scanLeft(TrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):
+    .scanLeft(TrainState(initialParams, optimizer.init(initialParams), -1f)):
       case (state, batch) =>
         jitGradientStep(batch.images, batch.target.detection, state)
     .tapEvery(10):

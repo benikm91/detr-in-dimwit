@@ -2,9 +2,13 @@ import dataset.Canvas
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
+import dataset.EdgeClass
 import dataset.NodeClass
 import dataset.Outlines
 import dataset.Record
+import dataset.RecordBatch
+import dataset.RecordEdges
+import dataset.RecordNodes
 import dataset.RecordDrawing
 import dataset.RecordGraph
 import dataset.RecordScoring
@@ -13,9 +17,12 @@ import dataset.at
 import dataset.report
 import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
+import dimwit.Conversions.given
 import dimwit.tensor.Tensor4
 import plotwit.*
 import viz.PlotTargets.websocket
+
+import scala.language.implicitConversions
 
 /** Plots what a trained model transcribes.
   *
@@ -28,7 +35,7 @@ def d2gPlot(setup: D2GSetup): Unit =
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
-  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params, setup.predictionNoise)
+  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
   val (nodes, edges) = (Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots)
   val transcriber = Transcriber(model, nodes, edges)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
@@ -64,13 +71,14 @@ private val TranscribedTogether = 32
   * the record it was rendered from, as a record rather than as a sequence. The node lines are what
   * the detector reports, on the same records and through the same reporter.
   */
-def d2gEval(setup: D2GSetup): Unit =
+def d2gEval(setup: D2GSetup, query: Int = 0): Unit =
   dimwit.initialize()
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
-  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params, setup.predictionNoise)
-  val transcriber = Transcriber(model, Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots, TranscribedTogether)
+  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
+  println(s"transcribing with query $query")
+  val transcriber = Transcriber(model, Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots, TranscribedTogether, query)
   val data = open(setup, Split.Validation)
 
   val drawings = data.samples
@@ -89,6 +97,9 @@ private trait Drawing derives Label
 
 /** Transcribes documents: the nodes of each one at a time, then the relationships between them.
   *
+  * Nothing but the document goes in, and every step reads back only what the model itself has
+  * taken, so no target record can reach what is written down.
+  *
   * A batch of drawings is transcribed in lockstep and as a single traced computation — the
   * encoder, every decoding step and both scorers together — so a batch costs one compiled call
   * rather than one dispatch per operation per step per drawing. `drawings` is how wide that batch
@@ -96,20 +107,112 @@ private trait Drawing derives Label
   * again, so that every batch is the same shape and the computation is compiled once for the
   * whole split.
   *
-  * Each step still re-reads what it has taken so far, since there is no KV cache. That makes
-  * every step cost more than it needs to, which is of no consequence here: what matters is that
-  * the only thing handed to the model is the document, so no target can leak into what is scored.
+  * In lockstep means every drawing takes its first node, then its second, and so on for as many
+  * slots as a record has. A drawing that has answered [[NodeClass.NoNode]] takes nothing more, and
+  * the slots it would have filled hold nothing — which is what a position a record does not reach
+  * holds anyway, so the record a drawing ends up with is the one it would have been given had it
+  * been transcribed on its own. Its relationships follow the same way. That is what makes a step
+  * the same piece of work whatever the drawings answer, and so something `jit` can compile once
+  * and `vmap` can spread over the batch: where a transcription stops becomes a value rather than a
+  * branch, and nothing is read back to the host until the whole batch is written down.
+  *
+  * Each step still re-reads what it has taken so far, since there is no KV cache. That makes every
+  * step cost more than it needs to, which is of no consequence here.
   */
-class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: Int = 1, seed: Int = 0)
+class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: Int = 1, query: Int = 0)
     extends (Tensor3[Width, Height, Channel, Float32] => RecordGraph):
 
-  /** Every batch is transcribed with fresh noise, since the noise is what decides which of the
-    * remaining nodes a step answers with. Started from a seed so that a run repeats.
-    */
-  private var noise = Random.Key(seed)
+  private val transcribe = jit: (documents: Tensor4[Drawing, Width, Height, Channel, Float32]) =>
+    written(documents)
 
-  private val transcribe = jit: (documents: Tensor4[Drawing, Width, Height, Channel, Float32], key: Key) =>
-    model.predictRecords(documents.vmap(Axis[Drawing])(model.encode), nodes, edges, key)
+  /** The records a batch of documents hold. */
+  private def written(documents: Tensor4[Drawing, Width, Height, Channel, Float32]): RecordBatch[Drawing, Node, Edge] =
+
+    val everyDrawing = documents.shape.extent(Axis[Drawing])
+
+    /** Nothing written yet: every slot of every drawing empty. */
+    val nothingWritten =
+      val (allNodes, allEdges) = (Shape2(everyDrawing, nodes), Shape2(everyDrawing, edges))
+      def nowhere = Tensor(allNodes, VType[Float32]).fill(0f)
+      def nothing = Tensor(allEdges, VType[Int32]).fill(0)
+      RecordBatch[Drawing, Node, Edge](
+        nodeClass = Tensor(allNodes, VType[Int32]).fill(NodeClass.NoNode.id),
+        startX = nowhere,
+        startY = nowhere,
+        endX = nowhere,
+        endY = nowhere,
+        edgeClass = Tensor(allEdges, VType[Int32]).fill(EdgeClass.NoEdge.id),
+        subject = nothing,
+        obj = nothing
+      )
+
+    /** Every drawing still writing down what it is asked for, which at the start is all of them.
+      * The nodes and the relationships are two stages, and a drawing writes both.
+      */
+    val allWriting = Tensor1(everyDrawing, VType[Bool]).fill(true)
+
+    /** What the query answers at every slot of every drawing, decided. The slots past what a
+      * drawing has written hold nothing, and a prediction reads only the slots before its own, so
+      * every answer is the one that slot would have been given on its own.
+      */
+    def answered(taken: RecordBatch[Drawing, Node, Edge]) =
+      zipvmap(Axis[Drawing])(documents, taken.nodeClass, taken.startX, taken.startY, taken.endX, taken.endY, taken.edgeClass, taken.subject, taken.obj):
+        case (document, nodeClass, startX, startY, endX, endY, edgeClass, subject, obj) =>
+          val record = Record(RecordNodes(nodeClass, startX, startY, endX, endY), RecordEdges(edgeClass, subject, obj))
+          val scored = model.logitsPerQuery(document, record)
+          val node = model.nodeScorer.decide(scored.nodes.at(query))
+          val edge = model.edgeScorer.decide(scored.edges.at(query))
+          (node.nodeClass, node.startX, node.startY, node.endX, node.endY, edge.edgeClass, edge.subject, edge.obj)
+
+    /** The slot a step fills, as a mask over the record's slots. */
+    def only[L: Label](slots: AxisExtent[L], slot: Int) =
+      Tensor1(slots.axis, VType[Bool]).fromArray(Array.tabulate(slots.size)(_ == slot))
+
+    /** One more node slot, filled by every drawing that is still writing nodes. A drawing that
+      * answers [[NodeClass.NoNode]] stops there, and the slots it would have filled stay empty.
+      */
+    def writeNode(taken: RecordBatch[Drawing, Node, Edge], writing: Tensor1[Drawing, Bool], slot: Int) =
+      val (nodeClass, startX, startY, endX, endY, _, _, _) = answered(taken)
+      val at = Axis[Node].at(slot)
+      val said = nodeClass.slice(at)
+      val fills = writing and !(said elementEquals_! NodeClass.NoNode.id)
+      val here = Shape2(everyDrawing, nodes)
+      val filling = only(nodes, slot).broadcastTo(here) and fills.broadcastTo(here)
+      def put[W](old: Tensor2[Drawing, Node, W], now: Tensor1[Drawing, W]) =
+        where(filling, now.broadcastTo(here), old)
+      val record = taken.copy(
+        nodeClass = put(taken.nodeClass, said),
+        startX = put(taken.startX, startX.slice(at)),
+        startY = put(taken.startY, startY.slice(at)),
+        endX = put(taken.endX, endX.slice(at)),
+        endY = put(taken.endY, endY.slice(at))
+      )
+      (record, fills)
+
+    /** One more relationship slot, filled the same way the nodes were. */
+    def writeEdge(taken: RecordBatch[Drawing, Node, Edge], writing: Tensor1[Drawing, Bool], slot: Int) =
+      val (_, _, _, _, _, edgeClass, subject, obj) = answered(taken)
+      val at = Axis[Edge].at(slot)
+      val said = edgeClass.slice(at)
+      val fills = writing and !(said elementEquals_! EdgeClass.NoEdge.id)
+      val here = Shape2(everyDrawing, edges)
+      val filling = only(edges, slot).broadcastTo(here) and fills.broadcastTo(here)
+      def put[W](old: Tensor2[Drawing, Edge, W], now: Tensor1[Drawing, W]) =
+        where(filling, now.broadcastTo(here), old)
+      val record = taken.copy(
+        edgeClass = put(taken.edgeClass, said),
+        subject = put(taken.subject, subject.slice(at)),
+        obj = put(taken.obj, obj.slice(at))
+      )
+      (record, fills)
+
+    val (withNodes, _) = (0 until nodes.size).foldLeft((nothingWritten, allWriting)):
+      case ((taken, writing), slot) => writeNode(taken, writing, slot)
+
+    val (withEdges, _) = (0 until edges.size).foldLeft((withNodes, allWriting)):
+      case ((taken, writing), slot) => writeEdge(taken, writing, slot)
+
+    withEdges
 
   override def apply(document: Tensor3[Width, Height, Channel, Float32]): RecordGraph =
     apply(Seq(document)).head
@@ -118,9 +221,7 @@ class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExten
     require(documents.nonEmpty, "there is nothing to transcribe")
     require(documents.size <= drawings, s"${documents.size} drawings do not fit in a batch of $drawings")
     val filled = documents.padTo(drawings, documents.last)
-    val (next, forThese) = noise.split2()
-    noise = next
-    RecordGraph.of(transcribe(stack(filled, Axis[Drawing]), forThese)).take(documents.size)
+    RecordGraph.of(transcribe(stack(filled, Axis[Drawing]))).take(documents.size)
 
 private def open(setup: D2GSetup, split: Split) =
   DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)

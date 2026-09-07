@@ -10,6 +10,7 @@ import deepwit.training.Monitor
 import deepwit.training.tapEvery
 import deepwit.optimizer.clipGlobalNorm
 import dimwit.*
+import dimwit.Conversions.given
 import deepwit.optimizer.CosineDecay
 import deepwit.optimizer.LearningRateSchedule
 import deepwit.optimizer.LearningRateScheduler
@@ -19,6 +20,8 @@ import dimwit.optimizer.Adam
 import dimwit.optimizer.AdamState
 import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
+
+import scala.language.implicitConversions
 
 /** Axis of a batch of drawings. Named for the drawings rather than the batch because the graph
   * axes are already called after the boxes they run over.
@@ -35,7 +38,7 @@ case class EGTRTrainState(
   *
   * The detector underneath is started from whatever `detectorRun` names, failing that from the
   * newest run under the setup's `detectorCheckpointRoot`, and failing that from scratch. Starting
-  * from a trained detector is what the paper does — the relations are read out of the detector's
+  * from a trained detector is what EGTR does — the relations are read out of the detector's
   * own attention, so they have little to say until the detection is roughly right, and the
   * [[EGTRLoss]] smoothing keeps them quiet until it is. The detector is not frozen: it keeps
   * training on the joint loss.
@@ -47,20 +50,19 @@ def egtrTrain(setup: EGTRSetup, detectorRun: Option[String] = None): Unit =
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
   val batches = data.objectBatches(Axis[Drawing] -> setup.batchSize)
 
-  /** Linear warmup into a cosine decay to a floor — see the detector for why the rate has to
-    * shrink. Held at a constant 3e-4 this model's detector moved 8% of its weight norm every two
-    * thousand steps and its accuracy swung by five points; decayed, it can settle.
+  /** Linear warmup into a cosine decay to a floor. A constant rate keeps taking steps the size it
+    * started with, so the model never settles.
     */
   val schedule: LearningRateSchedule =
-    LinearWarmup(Tensor0(setup.learningRate), Tensor0(setup.warmupSteps))
+    LinearWarmup(setup.learningRate, setup.warmupSteps)
       .followBy(
         CosineDecay(
-          Tensor0(setup.learningRate),
-          Tensor0(setup.finalLearningRate),
-          Tensor0(setup.numIterations - setup.warmupSteps)
+          setup.learningRate,
+          setup.finalLearningRate,
+          setup.numIterations - setup.warmupSteps
         )
       )
-  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), Tensor0(setup.weightDecay)), schedule)
+  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), setup.weightDecay), schedule)
 
   val detector = detectorRun
     .map(TensorTreeCheckpointer(_))
@@ -110,7 +112,7 @@ def egtrTrain(setup: EGTRSetup, detectorRun: Option[String] = None): Unit =
       state: EGTRTrainState
   ) =
     val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, objects, relations))(state.params)
-    val clipped = gradients.clipGlobalNorm(Tensor0(setup.maxGradientNorm))
+    val clipped = gradients.clipGlobalNorm(setup.maxGradientNorm)
     val (params, optimizerState) = optimizer.update(clipped, state.params, state.optimizerState)
     val newState = EGTRTrainState(params, optimizerState, lastCost)
     // The donated state and the batch are dead the moment the step returns, so their device
@@ -141,7 +143,7 @@ def egtrTrain(setup: EGTRSetup, detectorRun: Option[String] = None): Unit =
     Monitor.PerformanceMonitor(setup.batchSize)
   ))
   batches
-    .scanLeft(EGTRTrainState(initialParams, optimizer.init(initialParams), Tensor0(-1f))):
+    .scanLeft(EGTRTrainState(initialParams, optimizer.init(initialParams), -1f)):
       case (state, batch) =>
         jitGradientStep(batch.images, batch.target.detection, batch.target.relations, state)
     .tapEvery(10):

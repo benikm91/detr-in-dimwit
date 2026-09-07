@@ -75,15 +75,15 @@ class ObjectsSuite extends FunSuite:
         assertEquals(related(found), related(record), s"seed $seed, drawing $drawing")
       permuted.nodeClass.toArray.zipWithIndex.foreach: (drawing, at) =>
         val classes = drawing.map(NodeClass.fromId).toSeq
-        assertEquals(classes.sortBy(held => if held.isDrawn then 0 else 1), classes, s"seed $seed, drawing $at: nodes before empty positions")
+        assertEquals(classes.sortBy(held => if held.isNode then 0 else 1), classes, s"seed $seed, drawing $at: nodes before empty positions")
       permuted.edgeClass.toArray.zipWithIndex.foreach: (drawing, at) =>
         val classes = drawing.map(EdgeClass.fromId).toSeq
-        assertEquals(classes.sortBy(held => if held.relates then 0 else 1), classes, s"seed $seed, drawing $at: relationships before empty positions")
+        assertEquals(classes.sortBy(held => if held.isEdge then 0 else 1), classes, s"seed $seed, drawing $at: relationships before empty positions")
       permuted.edgeClass.toArray.lazyZip(permuted.subject.toArray).lazyZip(permuted.obj.toArray).foreach: (classes, subjects, objs) =>
         classes.lazyZip(subjects).lazyZip(objs).foreach: (held, subject, obj) =>
           val edgeClass = EdgeClass.fromId(held)
           if edgeClass.isSymmetric then assert(subject < obj, s"$edgeClass relates $subject to $obj rather than its ends in ascending order")
-          if !edgeClass.relates then assertEquals((subject, obj), (0, 0), "an empty position relates nothing")
+          if !edgeClass.isEdge then assertEquals((subject, obj), (0, 0), "an empty position relates nothing")
 
   test("a record is drawn as the picture it stands for"):
     val canvas = 32

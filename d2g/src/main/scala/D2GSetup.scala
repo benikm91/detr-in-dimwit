@@ -8,8 +8,8 @@ import dataset.Corpus
   * once and everything sized from it — the record slots, the loader, and where the run writes —
   * rather than in as many places as there are things that depend on it.
   *
-  * The defaults are the settings the l-shape runs converged under, so a new corpus starts from
-  * those and changes only what it has reason to.
+  * The defaults are the settings the l-shape runs use, so a new corpus starts from those and
+  * changes only what it has reason to.
   */
 case class D2GSetup(
     corpus: Corpus,
@@ -26,13 +26,9 @@ case class D2GSetup(
     batchSize: Int = 64,
     learningRate: Float = 3e-4f,
 
-    /** Where the cosine bottoms out rather than reaching nothing.
-      *
-      * A record is written in two stages and the relationships can only be learned once the nodes
-      * they name are right, so they are learned late — decaying the rate to zero takes the rate
-      * away exactly when that half of the model still needs it. Measured at 100k: decayed to zero,
-      * the relationships fall from 91.5% to 89.6% and whole records from 73.4% to 50.2%, while the
-      * nodes improve. A floor keeps the late half learning.
+    /** Where the cosine bottoms out rather than reaching nothing. A record is written in two
+      * stages and the relationships can only be learned once the nodes they name are right, so a
+      * floor keeps a rate for the half that is still learning at the end.
       */
     finalLearningRate: Float = 1e-4f,
     weightDecay: Float = 1e-4f,
@@ -44,34 +40,15 @@ case class D2GSetup(
       */
     warmupSteps: Int = 2_000,
 
-    /** Whether equation 4's pass-through term is included — the one that keeps a taken node's own
-      * embedding carrying it while the prediction embedding beside it becomes a different node.
-      * Off by default: measured on l-shapes it costs 3.2 points of whole records and roughly
-      * doubles the time to converge.
-      */
-    withPassThrough: Boolean = false,
-
-    /** How hard the two prediction tokens of a slot are jogged apart, as a fraction of the
-      * embedding's own size.
+    /** How many query vectors the model learns in all.
       *
-      * They are otherwise the same token at the same position and cannot see each other, so this
-      * noise is the only thing that can make them answer with different remaining nodes — which is
-      * what the loss asks of them, and what stops the model learning to answer only with the node
-      * it finds easiest. Too small and they agree and the loss is inert; too large and it drowns
-      * the positional encoding they need in order to know which slot they answer for.
+      * A slot answers with a pair of them while training, drawn afresh every step, so the pool is
+      * what the model must be able to answer with and the pair is what a step costs. Every pair is
+      * asked to name different nodes and every pair comes round, so the whole pool ends up
+      * distinct — a ranking as deep as the pool for the price of two tokens.
       */
-    predictionNoise: Float = 0.15f,
+    queryPool: Int = 6,
 
-    /** What agreeing costs the two prediction tokens of a slot, in nats.
-      *
-      * Each token is charged only for the remaining node it chose itself, so nothing ever hands one
-      * of them a node it did not pick — this is what pushes them apart instead. It is a cost they
-      * may always choose to pay, which matters at the end of a record where two different answers
-      * can be impossible: paying it and committing has to stay cheaper than splitting the
-      * difference between two nodes, which costs about 4 ln 2 = 2.77. Below that, and above what
-      * naming a second-best node costs, is the window.
-      */
-    separation: Float = 1f,
     checkpointEvery: Int = 10_000,
     seed: Int = 42
 ):

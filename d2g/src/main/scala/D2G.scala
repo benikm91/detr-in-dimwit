@@ -1,5 +1,6 @@
 import dataset.EdgeClass
 import dataset.NodeClass
+import dataset.EdgeClasses
 import dataset.NodeClasses
 import dataset.Record
 import dataset.RecordBatch
@@ -13,293 +14,142 @@ import EdgeScorer.EdgeLogits
 import NodeScorer.NodeLogits
 import dimwit.stats.Uniform
 import dimwit.*
+import dimwit.Conversions.given
 
-/** Document-to-graph transcription,
-  * [[https://arxiv.org/abs/2507.08458 A document is worth a structured record]] §3.7, on the
-  * l-shape drawings — see `README.md` for the divergences from the paper.
+import scala.language.implicitConversions
+
+/** Document-to-graph model based on remaining-node prediction.
   *
-  * The document is embedded patch by patch and attended over by the encoder. Its record is written
-  * down in two stages: the nodes it draws, and then the relationships between them. Each stage is
-  * fed what it has taken so far and answers, at every position, with one it has not taken yet;
-  * the relationships read the nodes as well as the document, since a relationship is a pair of
-  * nodes. Nothing is detected and nothing is assembled afterwards: the drawing's record,
-  * relationships and all, is what the model writes down.
+  * The document is embedded patch by patch and attended over by the encoder.
+  * The graph is predicted in two stages:
+  * 1. the nodes based on cross-attenting the document
+  * 2. the relationships based on cross-attenting the document and the nodes.
   */
-class D2G[V: IsFloating](params: D2G.Params[V], predictionNoise: Float):
+class D2G[V: IsFloating](params: D2G.Params[V]):
 
-  import D2G.EdgeScores
-  import D2G.Guesses
-  import D2G.NodeScores
+  import D2G.EdgeQueryLogits
+  import D2G.NodeQueryLogits
   import D2G.Scores
 
+  // Document encoding
   private val patches = ImageToPatchEmbedder(params.patchEmbedder)
   private val encoder = DocumentEncoder(params.encoder)
-  private val nodeDecoder = NodeDecoder(params.nodes.decoder)
-  private val edgeDecoder = EdgeDecoder(params.edges.decoder)
-  private val nodeScorer = NodeScorer(params.nodes.scorer)
-  private val nodePosition = LearnedAbsolutePositionalInjector(params.nodes.positions)
-  private val edgePosition = LearnedAbsolutePositionalInjector(params.edges.positions)
-  private val edgeScorer = EdgeScorer(params.edges.scorer)
+
+  // Graph node decoding
+  val nodeScorer = NodeScorer(params.nodes.scorer)
   private val embedNodes = NodeEmbedder(params.nodes.embedder, nodeScorer.canvas)
+  private val nodePosition = LearnedAbsolutePositionalInjector(params.nodes.positions)
+  private val nodeDecoder = NodeDecoder(params.nodes.decoder)
+
+  // Graph edge decoding
   private val embedEdges = EdgeEmbedder(params.edges.embedder)
+  private val edgePosition = LearnedAbsolutePositionalInjector(params.edges.positions)
+  private val edgeDecoder = EdgeDecoder(params.edges.decoder)
+  val edgeScorer = EdgeScorer(params.edges.scorer)
 
-  /** What the model scores, given the document and the record taken from it so far.
-    *
-    * The record is the one the drawing actually holds, so this is the teacher-forced door and
-    * belongs to training. Transcription reads [[predictRecords]], which is given no record at all.
-    */
-  def apply(document: Tensor3[Width, Height, Channel, V], taken: Record[Node, Edge], key: Key): Scores[V] =
-    predict(encode(document), taken, key)
+  private val pool = params.nodes.queries.shape(Axis[Query])
 
-  /** The document, once. Transcription reads it at every step, so it is worth keeping. */
-  def encode(document: Tensor3[Width, Height, Channel, V]): Tensor2[Patch, Embedding, V] =
-    encoder(patches(document))
+  /** What two queries of the pool answer. Queries selected randomly. */
+  def logits(document: Tensor3[Width, Height, Channel, V], taken: Record[Node, Edge], asked: Key): Scores[V] =
+    val queryIds = Random.permutation(Axis[Query] -> pool)(asked).slice(Axis[Query].at(0 until 2))
+    predict(encode(document), taken, queryIds, queryIds)
 
-  def predict(document: Tensor2[Patch, Embedding, V], taken: Record[Node, Edge], key: Key): Scores[V] =
-    val nodes = taken.nodeClass.shape.extent(Axis[Node])
-    val edges = taken.edgeClass.shape.extent(Axis[Edge])
-    val (forNodes, forEdges) = key.split2()
+  /** What every query of the pool answers, in one reading. */
+  def logitsPerQuery(document: Tensor3[Width, Height, Channel, V], taken: Record[Node, Edge]): Scores[V] =
+    val queryIds = Tensor1(Axis[Query], VType[Int32]).fromArray(Array.range(0, pool))
+    predict(encode(document), taken, queryIds, queryIds)
+
+  private def encode(document: Tensor3[Width, Height, Channel, V]): Tensor2[Patch, Embedding, V] = encoder(patches(document))
+
+  /** What each asked query answers at every slot. */
+  private def predict(
+      encodedDocument: Tensor2[Patch, Embedding, V],
+      taken: Record[Node, Edge],
+      nodeQueryIds: Tensor1[Query, Int32],
+      edgeQueryIds: Tensor1[Query, Int32]
+  ): Scores[V] =
+
     val (carriedNodes, answeredNodes) =
-      nodeDecoder.forTraining(document, nodePosition(embedNodes(taken.nodes)), nodePredictions(nodes, forNodes))
-    val (carriedEdges, answeredEdges) =
-      edgeDecoder.forTraining(document, carriedNodes, holdsNode(taken.nodes), edgePosition(embedEdges(taken.edges)), edgePredictions(edges, forEdges))
-    Scores(
-      // What a prediction slot answers with is a node, or a relationship, so what it became is
-      // read back as one.
-      nodes = NodeScores(
-        remaining = guessed(answeredNodes, nodes),
-        taken = nodeScorer(carriedNodes)
-      ),
-      edges = EdgeScores(
-        remaining = guessedEdges(answeredEdges, edges),
-        taken = edgeScorer(carriedEdges)
-      )
-    )
+      val takenNodes = nodePosition(embedNodes(taken.nodes))
+      val queryNodes = params.nodes.queries.take(Axis[Query])(nodeQueryIds) // take queries and broadcast along context
+        .vmap(Axis[Query]): query =>
+          nodePosition(query.broadcastTo(takenNodes.shape))
+      nodeDecoder.forTraining(encodedDocument, takenNodes, queryNodes)
 
-  /** The records a batch of documents hold: the nodes each drawing draws, and then the
-    * relationships between them.
-    *
-    * Nothing but the encoded documents goes in, and every step reads back only what the model
-    * itself has taken, so no target record can reach it here — which is the whole of
-    * transcription, and nothing else in this class is part of it.
-    *
-    * The drawings are written down in lockstep: every one of them takes its first node, then its
-    * second, and so on for as many slots as a record has. A drawing that has answered
-    * [[NodeClass.NoNode]] takes nothing more, and the slots it would have filled hold nothing —
-    * which is what a position a record does not reach holds anyway, so the record a drawing ends
-    * up with is the one it would have been given had it been transcribed on its own. Its
-    * relationships follow the same way.
-    *
-    * Stepping in lockstep is what makes a step the same piece of work whatever the drawings
-    * answer, and so something `jit` can compile once and `vmap` can spread over the batch: where
-    * a transcription stops becomes a value rather than a branch, and nothing is read back to the
-    * host until the whole batch is written down.
-    */
-  def predictRecords[Drawing: Label](
-      documents: Tensor3[Drawing, Patch, Embedding, V],
-      nodeSlots: AxisExtent[Node],
-      edgeSlots: AxisExtent[Edge],
-      key: Key
-  ): RecordBatch[Drawing, Node, Edge] =
+    val (nodeClass, startX, startY, endX, endY) =
+      answeredNodes.vmap(Axis[Query]): answered =>
+        val scored = nodeScorer(answered)
+        (scored.nodeClass, scored.startX, scored.startY, scored.endX, scored.endY)
 
-    val drawings = documents.shape.extent(Axis[Drawing])
+    val (_, answeredEdges) =
+      val nodeSource =
+        val nodesPresentMask = !(taken.nodes.nodeClass elementEquals_! NodeClass.NoNode.id)
+        NodeSource(carriedNodes, nodesPresentMask)
+      val takenEdges = edgePosition(embedEdges(taken.edges))
+      val queryEdges = params.edges.queries.take(Axis[Query])(edgeQueryIds) // take queries and broadcast along context
+        .vmap(Axis[Query]): query =>
+          edgePosition(query.broadcastTo(takenEdges.shape))
+      edgeDecoder.forTraining(encodedDocument, nodeSource, takenEdges, queryEdges)
 
-    /** Nothing taken yet: no nodes, no relationships, in as many drawings as there are. */
-    val nothingTaken =
-      def held[L: Label](slots: AxisExtent[L]) = Shape2(drawings, slots)
-      val (noNodes, noEdges) = (held(Axis[Node] -> 0), held(Axis[Edge] -> 0))
-      def nowhere = Tensor(noNodes, VType[Float32]).fill(0f)
-      def nothing = Tensor(noEdges, VType[Int32]).fill(0)
-      RecordBatch[Drawing, Node, Edge](
-        nodeClass = Tensor(noNodes, VType[Int32]).fill(NodeClass.NoNode.id),
-        startX = nowhere,
-        startY = nowhere,
-        endX = nowhere,
-        endY = nowhere,
-        edgeClass = Tensor(noEdges, VType[Int32]).fill(EdgeClass.NoEdge.id),
-        subject = nothing,
-        obj = nothing
-      )
+    val (edgeClass, subject, obj) =
+      answeredEdges.vmap(Axis[Query]): answered =>
+        val scored = edgeScorer(answered)
+        (scored.edgeClass, scored.subject, scored.obj)
 
-    /** Every drawing still writing down what it is asked for, which at the start is all of them.
-      * The nodes and the relationships are two stages, and a drawing writes both.
-      */
-    val allTaking = Tensor1(drawings, VType[Bool]).fill(true)
-
-    /** One more node slot, taken by every drawing that is still taking nodes. */
-    def takeNode(taken: RecordBatch[Drawing, Node, Edge], taking: Tensor1[Drawing, Bool], key: Key) =
-      val keys = key.splitToTensor(drawings)
-      val (nodeClass, startX, startY, endX, endY) =
-        zipvmap(Axis[Drawing])(documents, taken.nodeClass, taken.startX, taken.startY, taken.endX, taken.endY, keys):
-          case (document, nodeClass, startX, startY, endX, endY, key) =>
-            nextNode(document, RecordNodes(nodeClass, startX, startY, endX, endY), key.item)
-      // A drawing takes the node if it was still taking any and what it answered is a node. The
-      // one that says the nodes have ended is not taken either, so a record holds what it drew
-      // and stops there.
-      val slot = taking.appendAxis(Axis[Node])
-      val noNode = Tensor.like(nodeClass).fill(NodeClass.NoNode.id)
-      val takes = where(nodeClass.elementEquals(noNode), Tensor.like(slot).fill(false), slot)
-      def after[W](all: Tensor2[Drawing, Node, W], one: Tensor2[Drawing, Node, W]) = concatenate(all, one, Axis[Node])
-      def placed(coordinate: Tensor2[Drawing, Node, Float32]) =
-        where(takes, coordinate, Tensor.like(coordinate).fill(0f))
-      val record = taken.copy(
-        nodeClass = after(taken.nodeClass, where(takes, nodeClass, noNode)),
-        startX = after(taken.startX, placed(startX)),
-        startY = after(taken.startY, placed(startY)),
-        endX = after(taken.endX, placed(endX)),
-        endY = after(taken.endY, placed(endY))
-      )
-      (record, takes.squeeze(Axis[Node]))
-
-    val (forNodes, forEdges) = key.split2()
-    val (withNodes, _, _) = (0 until nodeSlots.size).foldLeft((nothingTaken, allTaking, forNodes)):
-      case ((taken, taking, key), _) =>
-        val (next, forStep) = key.split2()
-        val (record, takes) = takeNode(taken, taking, forStep)
-        (record, takes, next)
-
-    /** The nodes of every record as the node decoder carries them, which is what an
-      * [[EdgeDecoder]] relates, and which of the slots hold one. The prediction that door answers
-      * with is thrown away, nothing being predicted there.
-      */
-    val (related, holds) =
-      zipvmap(Axis[Drawing])(documents, withNodes.nodeClass, withNodes.startX, withNodes.startY, withNodes.endX, withNodes.endY):
-        case (document, nodeClass, startX, startY, endX, endY) =>
-          val nodes = RecordNodes(nodeClass, startX, startY, endX, endY)
-          val carried = nodeDecoder.forTranscription(document, nodePosition.injectToPrefix(embedNodes(nodes)), params.nodes.token)._1
-          (carried, holdsNode(nodes))
-
-    /** One more relationship slot, taken the same way the nodes were. */
-    def takeEdge(taken: RecordBatch[Drawing, Node, Edge], taking: Tensor1[Drawing, Bool], key: Key) =
-      val keys = key.splitToTensor(drawings)
-      val (edgeClass, subject, obj) =
-        zipvmap(Axis[Drawing])(documents, related, holds, taken.edgeClass, taken.subject, taken.obj, keys):
-          case (document, related, holds, edgeClass, subject, obj, key) =>
-            nextEdge(document, related, holds, RecordEdges(edgeClass, subject, obj), key.item)
-      val slot = taking.appendAxis(Axis[Edge])
-      val noEdge = Tensor.like(edgeClass).fill(EdgeClass.NoEdge.id)
-      val takes = where(edgeClass.elementEquals(noEdge), Tensor.like(slot).fill(false), slot)
-      def after(all: Tensor2[Drawing, Edge, Int32], one: Tensor2[Drawing, Edge, Int32]) = concatenate(all, one, Axis[Edge])
-      def named(end: Tensor2[Drawing, Edge, Int32]) = where(takes, end, Tensor.like(end).fill(0))
-      val record = taken.copy(
-        edgeClass = after(taken.edgeClass, where(takes, edgeClass, noEdge)),
-        subject = after(taken.subject, named(subject)),
-        obj = after(taken.obj, named(obj))
-      )
-      (record, takes.squeeze(Axis[Edge]))
-
-    val (withEdges, _, _) = (0 until edgeSlots.size).foldLeft((withNodes, allTaking, forEdges)):
-      case ((taken, taking, key), _) =>
-        val (next, forStep) = key.split2()
-        val (record, takes) = takeEdge(taken, taking, forStep)
-        (record, takes, next)
-
-    withEdges
-
-  /** The node one drawing answers the slot after `taken` with, having taken the nodes before it. */
-  private def nextNode(document: Tensor2[Patch, Embedding, V], taken: RecordNodes[Node], key: Key) =
-    val at = taken.nodeClass.shape(Axis[Node])
-    val context = concatenate(embedNodes(taken), params.nodes.token.prependAxis(Axis[Node]), Axis[Node])
-    val placed = nodePosition.injectToPrefix(context)
-    // One token is appended rather than two: a step writes one node down, and which of the two a
-    // trained model would have answered with is exactly what the noise decides.
-    val guessing = noised(placed.slice(Axis[Node].at(at)).prependAxis(Axis[Node]), key).squeeze(Axis[Node])
-    val (_, answered) = nodeDecoder.forTranscription(document, placed.slice(Axis[Node].at(0 until at)), guessing)
-    val next = nodeScorer.decide(nodeScorer(answered.prependAxis(Axis[Node])))
-    (next.nodeClass, next.startX, next.startY, next.endX, next.endY)
-
-  /** The relationship it answers the slot after `taken` with, between the nodes `related` carries
-    * and `holds` says are there.
-    */
-  private def nextEdge(
-      document: Tensor2[Patch, Embedding, V],
-      related: Tensor2[Node, Embedding, V],
-      holds: Tensor1[Node, Bool],
-      taken: RecordEdges[Edge],
-      key: Key
-  ) =
-    val at = taken.edgeClass.shape(Axis[Edge])
-    val context = concatenate(embedEdges(taken), params.edges.token.prependAxis(Axis[Edge]), Axis[Edge])
-    val placed = edgePosition.injectToPrefix(context)
-    val guessing = noised(placed.slice(Axis[Edge].at(at)).prependAxis(Axis[Edge]), key).squeeze(Axis[Edge])
-    val answered = edgeDecoder.forTranscription(document, related, holds, placed.slice(Axis[Edge].at(0 until at)), guessing)
-    val next = edgeScorer.decide(edgeScorer(answered.prependAxis(Axis[Edge])))
-    (next.edgeClass, next.subject, next.obj)
-
-  /** Which node slots hold a node: the positions past the record are there to make every record
-    * the same shape, and relate nothing. Both doors ask, since both hand nodes to an
-    * [[EdgeDecoder]].
-    */
-  private def holdsNode(nodes: RecordNodes[Node]): Tensor1[Node, Bool] =
-    val drawn = NodeClass.indicator(VType[Float32])(_.isDrawn).take(Axis[NodeClasses])(nodes.nodeClass)
-    drawn > Tensor.like(drawn).fill(0f)
-
-  /** The `<P>` tokens of every node slot: [[PredictionsPerSlot]] of them, carrying the same token
-    * and the same positional encoding and differing only by the noise each is given.
-    *
-    * They are laid out one whole block of slots per token, so the slot a prediction answers for is
-    * its position within its block — which is what [[jointSequenceMask]] reads them by.
-    */
-  private def nodePredictions(nodes: AxisExtent[Node], key: Key): Tensor2[NodePrediction, Embedding, V] =
-    val tokens = params.nodes.token.broadcastTo(Shape2(nodes, params.nodes.token.shape.extent(Axis[Embedding])))
-    val placed = nodePosition(tokens)
-    val (one, other) = key.split2()
-    concatenate(noised(placed, one), noised(placed, other), Axis[Node]).relabel(Axis[Node] -> Axis[NodePrediction])
-
-  /** The same, at every relationship slot. */
-  private def edgePredictions(edges: AxisExtent[Edge], key: Key): Tensor2[EdgePrediction, Embedding, V] =
-    val tokens = params.edges.token.broadcastTo(Shape2(edges, params.edges.token.shape.extent(Axis[Embedding])))
-    val placed = edgePosition(tokens)
-    val (one, other) = key.split2()
-    concatenate(noised(placed, one), noised(placed, other), Axis[Edge]).relabel(Axis[Edge] -> Axis[EdgePrediction])
-
-  /** A prediction token, jogged.
-    *
-    * The tokens of a slot are otherwise identical and cannot see each other, so the noise is the
-    * only thing that can make them answer differently — and answering differently is what the loss
-    * asks of them. It is scaled by the embedding's own size rather than given as a flat amount, so
-    * that what `predictionNoise` means does not drift as the token is learned or change with the
-    * width of the model.
-    */
-  private def noised[L: Label](embeddings: Tensor2[L, Embedding, V], key: Key): Tensor2[L, Embedding, V] =
-    val size = (embeddings * embeddings).mean(Axis[Embedding]).sqrt.broadcastTo(embeddings.shape)
-    val jog = Uniform(Tensor.like(embeddings).fill(-1f), Tensor.like(embeddings).fill(1f)).sample(key)
-    embeddings + jog * size * Tensor.like(embeddings).fill(predictionNoise)
-
-  /** What each of a slot's prediction tokens answered, scored. */
-  private def guessed(answered: Tensor2[NodePrediction, Embedding, V], nodes: AxisExtent[Node]): Guesses[NodeLogits[V]] =
-    def block(at: Int) =
-      nodeScorer(answered.slice(Axis[NodePrediction].at(at * nodes.size until (at + 1) * nodes.size)).relabel(Axis[NodePrediction] -> Axis[Node]))
-    Guesses(block(0), block(1))
-
-  /** The same for the relationships. */
-  private def guessedEdges(answered: Tensor2[EdgePrediction, Embedding, V], edges: AxisExtent[Edge]): Guesses[EdgeLogits[V]] =
-    def block(at: Int) =
-      edgeScorer(answered.slice(Axis[EdgePrediction].at(at * edges.size until (at + 1) * edges.size)).relabel(Axis[EdgePrediction] -> Axis[Edge]))
-    Guesses(block(0), block(1))
+    Scores(NodeQueryLogits(nodeClass, startX, startY, endX, endY), EdgeQueryLogits(edgeClass, subject, obj))
 
 object D2G:
 
-  /** What the model scores per node slot: the remaining node its prediction embedding answers
-    * with, and the taken node its node embedding passed through.
-    */
-  case class NodeScores[V](remaining: Guesses[NodeLogits[V]], taken: NodeLogits[V])
+  /** What every asked query answers at every slot of a record. */
+  case class Scores[V](nodes: NodeQueryLogits[V], edges: EdgeQueryLogits[V])
 
-  /** The same per relationship slot. */
-  case class EdgeScores[V](remaining: Guesses[EdgeLogits[V]], taken: EdgeLogits[V])
+  case class NodeQueryLogits[V](
+      nodeClass: Tensor3[Query, Node, NodeClasses, V],
+      startX: Tensor3[Query, Node, Pixel, V],
+      startY: Tensor3[Query, Node, Pixel, V],
+      endX: Tensor3[Query, Node, Pixel, V],
+      endY: Tensor3[Query, Node, Pixel, V]
+  ):
 
-  /** What the prediction tokens of one slot answered.
-    *
-    * They read the same position, started as the same token and never saw each other, so they are
-    * two draws of one policy rather than a first and a second choice. Nothing may treat either as
-    * the primary one — that is the whole point of them.
-    */
-  case class Guesses[A](one: A, other: A):
-    def map[B](f: A => B): Guesses[B] = Guesses(f(one), f(other))
-    def toSeq: Seq[A] = Seq(one, other)
+    /** What one of them answered, at every slot. */
+    def at(query: Int): NodeLogits[V] = NodeLogits(
+      nodeClass.slice(Axis[Query].at(query)),
+      startX.slice(Axis[Query].at(query)),
+      startY.slice(Axis[Query].at(query)),
+      endX.slice(Axis[Query].at(query)),
+      endY.slice(Axis[Query].at(query))
+    )
 
-  /** What the model scores for a document: both halves of the record it would write down. */
-  case class Scores[V](nodes: NodeScores[V], edges: EdgeScores[V])
+  object NodeQueryLogits:
+
+    def of[V](answered: Seq[NodeLogits[V]]): NodeQueryLogits[V] = NodeQueryLogits(
+      nodeClass = stack(answered.map(_.nodeClass), Axis[Query]),
+      startX = stack(answered.map(_.startX), Axis[Query]),
+      startY = stack(answered.map(_.startY), Axis[Query]),
+      endX = stack(answered.map(_.endX), Axis[Query]),
+      endY = stack(answered.map(_.endY), Axis[Query])
+    )
+
+  case class EdgeQueryLogits[V](
+      edgeClass: Tensor3[Query, Edge, EdgeClasses, V],
+      subject: Tensor3[Query, Edge, LinkedNode, V],
+      obj: Tensor3[Query, Edge, LinkedNode, V]
+  ):
+
+    /** What one of them answered, at every slot. */
+    def at(query: Int): EdgeLogits[V] = EdgeLogits(
+      edgeClass.slice(Axis[Query].at(query)),
+      subject.slice(Axis[Query].at(query)),
+      obj.slice(Axis[Query].at(query))
+    )
+
+  object EdgeQueryLogits:
+
+    def of[V](answered: Seq[EdgeLogits[V]]): EdgeQueryLogits[V] = EdgeQueryLogits(
+      edgeClass = stack(answered.map(_.edgeClass), Axis[Query]),
+      subject = stack(answered.map(_.subject), Axis[Query]),
+      obj = stack(answered.map(_.obj), Axis[Query])
+    )
 
   /** Everything the nodes of a record are written down with: what reads them, what embeds them,
     * what scores them, the `<P>` token every prediction embedding starts as, and where each slot
@@ -309,7 +159,7 @@ object D2G:
       decoder: NodeDecoder.Params[Embedding, Embedding, V],
       embedder: NodeEmbedder.Params[V],
       scorer: NodeScorer.Params[V],
-      token: Tensor1[Embedding, V],
+      queries: Tensor2[Query, Embedding, V],
       positions: LearnedAbsolutePositionalInjector.Params[Node, Embedding, V]
   )
 
@@ -323,7 +173,7 @@ object D2G:
       decoder: EdgeDecoder.Params[Embedding, Embedding, V],
       embedder: EdgeEmbedder.Params[V],
       scorer: EdgeScorer.Params[V],
-      token: Tensor1[Embedding, V],
+      queries: Tensor2[Query, Embedding, V],
       positions: LearnedAbsolutePositionalInjector.Params[Edge, Embedding, V]
   )
 
@@ -348,6 +198,7 @@ object D2G:
       *               record of the data draws, so that the last prediction embedding has somewhere
       *               to say the nodes have ended.
       * @param edges  The same for the relationships between them.
+      * @param queries How many query vectors a slot may be asked with — the pool.
       * @param canvas The width of the drawing, which is how many pixels a coordinate chooses from.
       */
     def init(
@@ -356,6 +207,7 @@ object D2G:
         embedding: Int,
         nodes: Int,
         edges: Int,
+        queries: Int,
         patchSize: Int,
         canvas: Int,
         key: Key
@@ -412,7 +264,7 @@ object D2G:
             endX = AffineLayer.Params.init(embeddingExtent, pixelExtent, endXHeadKey),
             endY = AffineLayer.Params.init(embeddingExtent, pixelExtent, endYHeadKey)
           ),
-          token = Init.xavierUniformVector(embeddingExtent, nodeTokenKey),
+          queries = Init.xavierUniform(Axis[Query] -> queries, embeddingExtent, nodeTokenKey),
           positions = LearnedAbsolutePositionalInjector.Params.lecunNormal(nodeExtent, embeddingExtent, nodePositionKey)
         ),
         edges = EdgeParams(
@@ -428,7 +280,7 @@ object D2G:
             subject = AffineLayer.Params.init(embeddingExtent, linkedExtent, subjectHeadKey),
             obj = AffineLayer.Params.init(embeddingExtent, linkedExtent, objHeadKey)
           ),
-          token = Init.xavierUniformVector(embeddingExtent, edgeTokenKey),
+          queries = Init.xavierUniform(Axis[Query] -> queries, embeddingExtent, edgeTokenKey),
           positions = LearnedAbsolutePositionalInjector.Params.lecunNormal(edgeExtent, embeddingExtent, edgePositionKey)
         )
       )

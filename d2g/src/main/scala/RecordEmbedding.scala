@@ -6,6 +6,9 @@ import dataset.RecordEdges
 import dataset.RecordNodes
 import deepwit.base.AffineLayer
 import dimwit.*
+import dimwit.Conversions.given
+
+import scala.language.implicitConversions
 
 /** Reads a record's nodes into one embedding each: the class and the points it is placed by
   * embedded on their own, concatenated and projected into the space the decoder works in.
@@ -112,7 +115,7 @@ class NodeScorer[V: IsFloating](params: NodeScorer.Params[V])
     def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).take(Axis[NodeClasses])(nodeClass)
     def placed(scores: Tensor2[Node, Pixel, V], carried: Tensor1[Node, Float32]) =
       Pixels.coordinates(scores.argmax(Axis[Pixel]), canvas) * carried
-    val (drawn, runsOn) = (carries(_.isDrawn), carries(_.numPoints > 1))
+    val (drawn, runsOn) = (carries(_.isNode), carries(_.numPoints > 1))
     RecordNodes(
       nodeClass = nodeClass,
       startX = placed(logits.startX, drawn),
@@ -166,10 +169,10 @@ class EdgeScorer[V: IsFloating](params: EdgeScorer.Params[V])
     */
   def decide(logits: EdgeLogits[V]): RecordEdges[Edge] =
     val edgeClass = logits.edgeClass.argmax(Axis[EdgeClasses])
-    val relates = EdgeClass.indicator(VType[Float32])(_.relates).take(Axis[EdgeClasses])(edgeClass)
+    val relates = !(edgeClass elementEquals_! EdgeClass.NoEdge.id)
     def named(scores: Tensor2[Edge, LinkedNode, V]) =
       val end = scores.argmax(Axis[LinkedNode])
-      where(relates > Tensor.like(relates).fill(0f), end, Tensor.like(end).fill(0))
+      where(relates, end, Tensor.like(end).fill(0))
     RecordEdges(edgeClass = edgeClass, subject = named(logits.subject), obj = named(logits.obj))
 
 object EdgeScorer:

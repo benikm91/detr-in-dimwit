@@ -8,7 +8,7 @@ import dimwit.Conversions.given
 
 import scala.language.implicitConversions
 
-/** The set prediction loss of the DETR paper.
+/** The set prediction loss of [[https://arxiv.org/abs/2005.12872 DETR]].
   *
   * Predictions and targets are matched one to one on the same costs that are then optimized.
   * Target slots holding [[ObjectClass.NoObject]] are padding: they cost the same against every
@@ -88,7 +88,7 @@ class HungarianLoss[V: IsFloating](
     */
   def score(prediction: DETR.Prediction[V], target: ObjectDetection[V]): Tensor0[V] =
     val isObject = objectMask(target.label)
-    val numObjects = maximum(isObject.sum, Tensor0(vtype)(1f))
+    val numObjects = maximum(isObject.sum, 1f)
 
     val classification = zipvmap(Axis[BoundingBox])(target.label, prediction.classLogits):
       case (objectClass, logits) => CategoricalCrossEntropy.fromLogits(objectClass, logits)
