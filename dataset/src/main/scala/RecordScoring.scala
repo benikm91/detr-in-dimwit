@@ -96,6 +96,16 @@ object RecordScoring:
       line("relationships right", _.relationshipsFound, _.relationshipsPredicted)
     report(prefix, "records exactly right", scored.count(_.isExact), scored.length)
 
+/** The header of a learning curve, and one row of it per checkpoint scored. */
+val CurveHeader = "model,step,tolerance,nodes_found,nodes_right,records_exact"
+
+def curveRow(model: String, step: Int, tolerance: Float, scored: Seq[RecordScoring.Scored]): String =
+  def percent(correct: Int, total: Int) = f"${100f * correct / total}%.2f"
+  s"$model,$step,${tolerance.toInt}," +
+    s"${percent(scored.map(_.nodesFound).sum, scored.map(_.nodes).sum)}," +
+    s"${percent(scored.map(_.nodesFound).sum, scored.map(_.nodesPredicted).sum)}," +
+    s"${percent(scored.count(_.isExact), scored.length)}"
+
 /** One line of a score report: `<prefix>  <what>  <correct> / <total>  <percentage>`. */
 def report(prefix: String, what: String, correct: Int, total: Int): Unit =
   println(f"$prefix%5s  $what%-26s $correct%6d / $total%-6d ${100f * correct / total}%5.1f%%")

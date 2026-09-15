@@ -28,6 +28,7 @@ enum ObjectClass(val id: Int):
   case NoObject extends ObjectClass(0)
   case PartLine extends ObjectClass(1)
   case Text extends ObjectClass(2)
+  case Circle extends ObjectClass(3)
 
 object ObjectClass:
 
@@ -37,6 +38,7 @@ object ObjectClass:
   def of(nodeClass: NodeClass): ObjectClass = nodeClass match
     case NodeClass.Line       => PartLine
     case NodeClass.Annotation => Text
+    case NodeClass.Circle     => Circle
     case _                    => NoObject
 
 /** The objects in an image: a [[Box]] per node, labelled with an [[ObjectClass.id]]. */
@@ -112,20 +114,28 @@ object Objects:
     val slots = record.nodeClass.shape.extent(Axis[Node])
     import record.{startX, startY, endX, endY}
     val isLine = holds(record.nodeClass, NodeClass.Line.id)
+    val isCircle = holds(record.nodeClass, NodeClass.Circle.id)
     val isAnnotation = holds(record.nodeClass, NodeClass.Annotation.id)
-    val drawn = isLine.asFloat(VType[Float32]) + isAnnotation.asFloat(VType[Float32])
+    val drawn = isLine.asFloat(VType[Float32]) + isCircle.asFloat(VType[Float32]) + isAnnotation.asFloat(VType[Float32])
     val annotationSize = Tensor1(slots).fill(AnnotationSize)
     def span(from: Tensor1[Node, Float32], to: Tensor1[Node, Float32]) =
       maximum((to - from).abs, Tensor1(slots).fill(MinimumSize))
     def labelled(objectClass: ObjectClass) = Tensor1(slots, VType[Int32]).fill(objectClass.id)
+    // A line and a circle are both placed by two points, so both are boxed between them. What
+    // tells the boxes apart is the height: a circle is as tall as the diameter its points span.
+    val betweenPoints = isLine or isCircle
     Detection(
       box = Box(
-        centerX = where(isLine, (startX + endX) *! 0.5f, startX) * drawn,
-        centerY = where(isLine, (startY + endY) *! 0.5f, startY) * drawn,
-        width = where(isLine, span(startX, endX), annotationSize) * drawn,
-        height = where(isLine, span(startY, endY), annotationSize) * drawn
+        centerX = where(betweenPoints, (startX + endX) *! 0.5f, startX) * drawn,
+        centerY = where(betweenPoints, (startY + endY) *! 0.5f, startY) * drawn,
+        width = where(betweenPoints, span(startX, endX), annotationSize) * drawn,
+        height = where(isCircle, span(startX, endX), where(isLine, span(startY, endY), annotationSize)) * drawn
       ),
-      label = where(isLine, labelled(ObjectClass.PartLine), where(isAnnotation, labelled(ObjectClass.Text), labelled(ObjectClass.NoObject)))
+      label = where(
+        isLine,
+        labelled(ObjectClass.PartLine),
+        where(isCircle, labelled(ObjectClass.Circle), where(isAnnotation, labelled(ObjectClass.Text), labelled(ObjectClass.NoObject)))
+      )
     )
 
   private def adjacency[Node: Label, Edge: Label](record: Record[Node, Edge]): Tensor3[Node, Prime[Node], RelationClasses, Float32] =

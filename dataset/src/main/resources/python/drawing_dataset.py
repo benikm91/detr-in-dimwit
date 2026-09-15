@@ -25,7 +25,7 @@ def drawings(repo_id, split):
     return np.load(_file(repo_id, split, "images.npy"), mmap_mode="r")
 
 
-def records(repo_id, split, nodes, edges, no_node, line, annotation, no_edge, connected, annotates):
+def records(repo_id, split, nodes, edges, no_node, line, annotation, circle, no_edge, connected, annotates):
     """``(node_class, start_x, start_y, end_x, end_y, edge_class, subject, obj)`` of every drawing,
     padded to ``nodes`` drawn nodes and ``edges`` relationships.
 
@@ -33,7 +33,7 @@ def records(repo_id, split, nodes, edges, no_node, line, annotation, no_edge, co
     ends nowhere and leaves that at zero.
     """
     with open(_file(repo_id, split, "labels.jsonl"), encoding="utf-8") as programs:
-        parsed = [_record_of(_actions(program), line, annotation, connected, annotates) for program in programs]
+        parsed = [_record_of(_actions(program), line, annotation, circle, connected, annotates) for program in programs]
 
     node_class = np.full((len(parsed), nodes), no_node, dtype=np.int32)
     start_x, start_y = (np.zeros((len(parsed), nodes), dtype=np.float32) for _ in range(2))
@@ -57,7 +57,7 @@ def records(repo_id, split, nodes, edges, no_node, line, annotation, no_edge, co
     return node_class, start_x, start_y, end_x, end_y, edge_class, subject, obj
 
 
-def _record_of(actions, line, annotation, connected, annotates):
+def _record_of(actions, line, annotation, circle, connected, annotates):
     """The ``(class, xs, ys)`` nodes and ``(class, subject, object)`` relationships of one program."""
     nodes, related, lines = [], [], []
     for action in actions:
@@ -69,6 +69,11 @@ def _record_of(actions, line, annotation, connected, annotates):
             (x1, y1), (x2, y2) = sorted(action["coordinates_params"], key=lambda point: point[along])
             lines.append(len(nodes))
             nodes.append((line, (x1, x2), (y1, y2)))
+        elif action["type"] == "Circle":
+            # The two ends of the horizontal diameter, leftmost first, which is how a record holds
+            # a circle and how the corpus already writes it.
+            (x1, y1), (x2, y2) = action["coordinates_params"]
+            nodes.append((circle, (x1, x2), (y1, y2)))
         elif action["type"] == "AnnotationTextRefId":
             ((x, y),) = action["coordinates_params"]
             nodes.append((annotation, (x,), (y,)))

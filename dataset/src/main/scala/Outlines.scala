@@ -15,7 +15,7 @@ object Outlines:
   private val Blank = 255f
 
   /** Outline grey level per [[ObjectClass.id]]; an unused slot stays blank. */
-  private def shades = Tensor1(Axis[Shade]).fromArray(Array(Blank, 110f, 170f))
+  private def shades = Tensor1(Axis[Shade]).fromArray(Array(Blank, 110f, 170f, 140f))
 
   /** The image as the 8 bit grey levels [[plotwit]] plots. */
   def greyLevels[W: Label, H: Label, C: Label, V: IsFloating](image: Tensor3[W, H, C, V]): Tensor2[W, H, UInt8] =

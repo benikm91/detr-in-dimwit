@@ -39,6 +39,12 @@ enum Corpus(val repoId: String, val maxNodes: Int, val maxEdges: Int):
   /** A general rectilinear part of six to eighteen lines, and up to that many annotations. */
   case Rectilinear6to18 extends Corpus("benikm91/rectilinear-6to18", 22, 22)
 
+  /** Five to sixteen lines and circles of a CAD sketch, drawn from
+    * [[https://sketchgraphs.cs.princeton.edu SketchGraphs]]. The sketches are kept for what they
+    * draw, not for how they are constrained, so no relationship is held between them.
+    */
+  case SketchGraph extends Corpus("benikm91/sketch-graph", 16, 0)
+
 /** DimWit wrapper around the drawing datasets, backed by ScalaPy.
   *
   * [[DrawingDataset.samples]] and [[DrawingDataset.batches]] hand out the [[Record]] every drawing
@@ -82,6 +88,7 @@ object DrawingDataset:
       NodeClass.NoNode.id,
       NodeClass.Line.id,
       NodeClass.Annotation.id,
+      NodeClass.Circle.id,
       EdgeClass.NoEdge.id,
       EdgeClass.Connected.id,
       EdgeClass.Annotates.id

@@ -44,6 +44,20 @@ class ObjectsSuite extends FunSuite:
     assertEqualsFloat(box.width.toArray(2), 12f / Canvas, 1e-6f)
     assert(box.width.toArray.drop(3).forall(_ == 0f), "a relationship is not drawn")
 
+  test("a circle is boxed around the diameter its points span, and read back as a circle"):
+    val circled = RecordGraph(Seq(RecordNode(NodeClass.Circle, Seq(Point(0.2f, 0.5f), Point(0.6f, 0.5f)))), Seq.empty)
+    val box = Objects.of(circled.record(nodes, edges)).detection.box
+    assertEqualsFloat(box.centerX.toArray(0), 0.4f, 1e-6f)
+    assertEqualsFloat(box.centerY.toArray(0), 0.5f, 1e-6f)
+    assertEqualsFloat(box.width.toArray(0), 0.4f, 1e-6f)
+    assertEqualsFloat(box.height.toArray(0), 0.4f, 1e-6f)
+
+    val readBack = RecordGraph.of(Objects.of(circled.record(nodes, edges)).detection).nodes
+    assertEquals(readBack.map(_.nodeClass), Seq(NodeClass.Circle))
+    readBack.head.points.zip(circled.nodes.head.points).foreach: (found, wanted) =>
+      assertEqualsFloat(found.x, wanted.x, 1e-6f)
+      assertEqualsFloat(found.y, wanted.y, 1e-6f)
+
   test("a symmetric relationship is drawn both ways round, a directed one is not"):
     val relations = Objects.of(record.record(nodes, edges)).relations.toArray
     assertEquals(relations(0)(1)(RelationClass.Connected.id), 1f)

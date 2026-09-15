@@ -2,8 +2,9 @@
 
 A record has no drawing of its own -- it is what a drawing encodes -- so a
 transcription can only be looked at by drawing it: every line as the segment
-between its end points, every annotation as a marker on its point, and every
-relationship as a dashed connector between the two nodes it relates. The result
+between its end points, every circle around the diameter its points span, every
+annotation as a marker on its point, and every relationship as a dashed
+connector between the two nodes it relates. The result
 is drawn over the drawing the record was read from, so that the two can be
 compared pixel by pixel.
 """
@@ -12,12 +13,13 @@ import numpy as np
 
 #: Colours the parts of a record are drawn in, as ``(red, green, blue)``.
 LINE = (20, 60, 190)
+CIRCLE = (20, 130, 200)
 ANNOTATION = (230, 140, 20)
 CONNECTED = (20, 160, 110)
 ANNOTATES = (170, 70, 200)
 
 
-def render(drawing, node_class, start_x, start_y, end_x, end_y, edge_class, subject, obj, line, annotation, connected, annotates):
+def render(drawing, node_class, start_x, start_y, end_x, end_y, edge_class, subject, obj, line, annotation, circle, connected, annotates):
     """``(width, height, 3)`` uint8 pixels of the record drawn over ``drawing``, which is a
     ``(width, height)`` grey level image of what it was read from."""
     drawing = np.asarray(drawing, dtype=np.uint8)
@@ -28,8 +30,9 @@ def render(drawing, node_class, start_x, start_y, end_x, end_y, edge_class, subj
     subject, obj = np.asarray(subject, dtype=int), np.asarray(obj, dtype=int)
 
     def anchor(node):
-        """Where a relationship reaches a node: the middle of a line, the point of an annotation."""
-        if node_class[node] == line:
+        """Where a relationship reaches a node: the middle of a line or a circle, the point of an
+        annotation."""
+        if node_class[node] in (line, circle):
             return ((start_x[node] + end_x[node]) / 2, (start_y[node] + end_y[node]) / 2)
         return (start_x[node], start_y[node])
 
@@ -42,6 +45,8 @@ def render(drawing, node_class, start_x, start_y, end_x, end_y, edge_class, subj
     for at, held in enumerate(node_class):
         if held == line:
             _segment(image, (start_x[at], start_y[at]), (end_x[at], end_y[at]), LINE)
+        elif held == circle:
+            _ring(image, (start_x[at], start_y[at]), (end_x[at], end_y[at]), CIRCLE)
         elif held == annotation:
             _dot(image, start_x[at], start_y[at], ANNOTATION, radius=2)
 
@@ -59,6 +64,21 @@ def _segment(image, start, end, colour, dashed=False):
     for step, (x, y) in enumerate(zip(np.linspace(x0, x1, steps), np.linspace(y0, y1, steps))):
         if not dashed or (step // 8) % 2 == 0:
             _dot(image, x, y, colour)
+
+
+def _ring(image, left, right, colour):
+    """A circle, from the two ends of the horizontal diameter that place it.
+
+    Two steps per pixel of its circumference, for the reason a segment takes two per pixel of its
+    span: at one step a curve leaves gaps between them.
+    """
+    canvas = image.shape[0]
+    (left_x, y), (right_x, _) = left, right
+    radius = (right_x - left_x) / 2
+    centre_x = left_x + radius
+    steps = 2 * int(np.ceil(2 * np.pi * radius * canvas)) + 1
+    for angle in np.linspace(0, 2 * np.pi, steps):
+        _dot(image, centre_x + radius * np.cos(angle), y + radius * np.sin(angle), colour)
 
 
 def _dot(image, x, y, colour, radius=0):

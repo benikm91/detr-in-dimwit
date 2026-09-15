@@ -30,6 +30,7 @@ object RecordDrawing:
           placed.obj.toSeq.toPythonCopy,
           NodeClass.Line.id,
           NodeClass.Annotation.id,
+          NodeClass.Circle.id,
           EdgeClass.Connected.id,
           EdgeClass.Annotates.id
         )

@@ -21,6 +21,9 @@ enum NodeClass(val id: Int, val pointNames: Seq[String]):
   case Line extends NodeClass(1, Seq("start", "end"))
   case Annotation extends NodeClass(2, Seq("centre"))
 
+  /** Placed by the two ends of its horizontal diameter, which give its centre and its radius. */
+  case Circle extends NodeClass(3, Seq("left", "right"))
+
   def numPoints: Int = pointNames.length
 
   def isNode: Boolean = this != NodeClass.NoNode
@@ -66,8 +69,8 @@ final case class Point(x: Float, y: Float)
 /** The nodes a drawing draws, laid out along the `Node` axis.
   *
   * A node is placed by where it starts and, if its class runs somewhere, by where it ends — a
-  * line by both, an annotation by its start alone. The positions a record does not reach hold
-  * [[NodeClass.NoNode]] and are placed nowhere.
+  * line by both, a circle by the ends of its diameter, an annotation by its start alone. The
+  * positions a record does not reach hold [[NodeClass.NoNode]] and are placed nowhere.
   */
 final case class RecordNodes[Node](
     nodeClass: Tensor1[Node, Int32],
@@ -365,7 +368,8 @@ object RecordGraph:
   /** The nodes a detection holds, and nothing else — a detector predicts no relationships.
     *
     * A line is axis aligned, so the long side of its box is the line and the short side is what
-    * [[Objects.of]] widened it to; an annotation is the centre of its box.
+    * [[Objects.of]] widened it to; a circle spans its box, which is square; an annotation is the
+    * centre of its box.
     */
   def of[Node: Label](detection: Detection[Node, Float32]): RecordGraph =
     val objectClass = detection.label.toArray.map(ObjectClass.fromId)
@@ -381,6 +385,8 @@ object RecordGraph:
             RecordNode(NodeClass.Line, Seq(Point(centerX(at) - halfWidth, centerY(at)), Point(centerX(at) + halfWidth, centerY(at))))
           case ObjectClass.PartLine =>
             RecordNode(NodeClass.Line, Seq(Point(centerX(at), centerY(at) - halfHeight), Point(centerX(at), centerY(at) + halfHeight)))
+          case ObjectClass.Circle =>
+            RecordNode(NodeClass.Circle, Seq(Point(centerX(at) - halfWidth, centerY(at)), Point(centerX(at) + halfWidth, centerY(at))))
           case _ =>
             RecordNode(NodeClass.Annotation, Seq(Point(centerX(at), centerY(at))))
       ,
