@@ -31,19 +31,25 @@ private trait Drawings derives Label
   * this codebase is sized from, and the one number that must not be guessed. Both are measured
   * over the training split, which is the wider of the two.
   */
-enum Corpus(val repoId: String, val maxNodes: Int, val maxEdges: Int):
+enum Corpus(val name: String, val repoId: String, val maxNodes: Int, val maxEdges: Int):
 
   /** Six lines forming an L, and up to six annotations of them. */
-  case LShape extends Corpus("benikm91/l-shape", 12, 12)
+  case LShape extends Corpus("l-shape", "benikm91/l-shape", 12, 12)
 
   /** A general rectilinear part of six to eighteen lines, and up to that many annotations. */
-  case Rectilinear6to18 extends Corpus("benikm91/rectilinear-6to18", 22, 22)
+  case Rectilinear6to18 extends Corpus("rectilinear", "benikm91/rectilinear-6to18", 22, 22)
 
   /** Five to sixteen lines and circles of a CAD sketch, drawn from
     * [[https://sketchgraphs.cs.princeton.edu SketchGraphs]]. The sketches are kept for what they
     * draw, not for how they are constrained, so no relationship is held between them.
     */
-  case SketchGraph extends Corpus("benikm91/sketch-graph", 16, 0)
+  case SketchGraph extends Corpus("sketch", "benikm91/sketch-graph", 16, 0)
+
+object Corpus:
+
+  /** The corpus a run names on its command line. */
+  def named(name: String): Corpus =
+    values.find(_.name == name).getOrElse(sys.error(s"no corpus named '$name': ${values.map(_.name).mkString(", ")}"))
 
 /** DimWit wrapper around the drawing datasets, backed by ScalaPy.
   *

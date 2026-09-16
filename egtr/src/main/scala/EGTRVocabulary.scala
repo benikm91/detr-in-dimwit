@@ -1,3 +1,14 @@
+package egtr
+
+import detr.*
+import detr.model.*
+import detr.train.*
+import detr.eval.*
+import detr.config.*
+import egtr.model.*
+import egtr.train.*
+import egtr.eval.*
+import egtr.config.*
 import dimwit.*
 
 /** The axis of the object of a relation.

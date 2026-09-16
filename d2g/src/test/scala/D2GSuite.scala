@@ -1,3 +1,9 @@
+package d2g
+
+import d2g.model.*
+import d2g.train.*
+import d2g.eval.*
+import d2g.config.*
 import dataset.EdgeClass
 import dataset.EdgeClasses
 import dataset.NodeClass

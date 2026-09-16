@@ -1,3 +1,9 @@
+package detr.train
+
+import detr.*
+import detr.model.*
+import detr.eval.*
+import detr.config.*
 import dimwit.*
 import munit.FunSuite
 

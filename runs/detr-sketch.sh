@@ -8,29 +8,29 @@
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/detr-sketch_%j.out
 #SBATCH --error=/cluster/home/%u/.logs/slurm/%j/detr-sketch_%j.err
 #
-# Trains the detector on a corpus and scores it, on however many GPUs the job was given.
+# Trains the detector on a corpus, scores every checkpoint, and leaves the metrics as one CSV.
 #
-#   INPUT_DIR=/cluster/scratch/$USER/corpora \
-#   OUTPUT_DIR=/cluster/scratch/$USER/runs \
+#   CACHE_DIR=/cluster/scratch/$USER/corpora \
+#   OUTPUT_DIR=/cluster/scratch/$USER/metrics \
 #     sbatch runs/detr-sketch.sh
 #
-# The instance this runs on is wiped when the job ends, so both directories have to outlive it:
-# INPUT_DIR is what the next run does not have to download again, and OUTPUT_DIR is what is left
-# of this one. Everything under them is the code's own doing — a corpus makes itself a folder to
-# cache in, and a run makes itself a folder named for when it started.
+# CACHE_DIR is where the corpora land, so that the next job does not download them again.
+# OUTPUT_DIR is where `detr-<corpus>-<size>.csv` ends up: what is left of the job once the
+# instance is wiped. CHECKPOINT_DIR is where the checkpoints go meanwhile, which need not
+# outlive the job.
 
 set -euo pipefail
 
-: "${INPUT_DIR:?set INPUT_DIR to a directory that outlives the run, where the corpora are cached}"
-: "${OUTPUT_DIR:?set OUTPUT_DIR to a directory that outlives the run, where runs are kept}"
+: "${CACHE_DIR:?set CACHE_DIR to a directory that outlives the job, where the corpora are cached}"
+: "${OUTPUT_DIR:?set OUTPUT_DIR to a directory that outlives the job, where the metrics are written}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch}"
 
-# Which setup to run: the mains are `detr${SETUP}Train` and `detr${SETUP}Eval`, and CORPUS is what
-# `dataset/prepare.sh` calls the corpus that setup reads.
-SETUP="${SETUP:-Sketches}"
-CORPUS="${CORPUS:-sketches}"
+# Which corpus to train on and how big a model — the names `Corpus` and `DETR.Size` know.
+CORPUS="${CORPUS:-sketch}"
+SIZE="${SIZE:-s}"
 
-mkdir -p "$INPUT_DIR" "$OUTPUT_DIR"
-echo "running $SETUP: corpora in $INPUT_DIR, runs in $OUTPUT_DIR"
+mkdir -p "$CACHE_DIR" "$OUTPUT_DIR" "$CHECKPOINT_DIR"
+echo "running detr on $CORPUS at size $SIZE: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
 
 module load sarus/1.6.4
 
@@ -38,16 +38,22 @@ IMAGE="benikm91/dimwit-gpu:snapshot"
 sarus pull "$IMAGE"
 
 srun sarus run \
-  --mount=type=bind,source="$INPUT_DIR",destination=/input \
+  --mount=type=bind,source="$CACHE_DIR",destination=/cache \
   --mount=type=bind,source="$OUTPUT_DIR",destination=/output \
+  --mount=type=bind,source="$CHECKPOINT_DIR",destination=/checkpoints \
   "$IMAGE" \
   bash -c '
     set -euo pipefail
-    setup="$1"
-    corpus="$2"
+    corpus="$1"
+    size="$2"
 
     export TMPDIR=/tmp
-    export INPUT_DIR=/input
+
+    # The corpora download themselves from the Hub on first use; this is where they land, so
+    # that the next job finds them instead of fetching them again.
+    export HF_HUB_CACHE=/cache/huggingface-cache
+    # Where a run keeps its checkpoints, and where scoring them writes the CSV.
+    export CHECKPOINT_DIR=/checkpoints
     export OUTPUT_DIR=/output
 
     # DimWit and DeepWit from source. The sharding the training script splits its batch over is on
@@ -71,10 +77,9 @@ srun sarus run \
     cd ..
 
     cd detr-in-dimwit
-    ./dataset/prepare.sh "$corpus"
-    sbt "detr/runMain detr${setup}Train"
-    sbt "detr/runMain detr${setup}Eval"
-  ' detr-sketch "$SETUP" "$CORPUS"
+    sbt "detr/runMain detrTrain $corpus $size"
+    sbt "detr/runMain detrEval $corpus $size"
+  ' detr-sketch "$CORPUS" "$SIZE"
 
-echo "run finished, newest run in $OUTPUT_DIR:"
-ls -lat "$OUTPUT_DIR" | head -3
+echo "job finished, metrics in $OUTPUT_DIR:"
+ls -la "$OUTPUT_DIR"/detr-"$CORPUS"-"$SIZE".csv
