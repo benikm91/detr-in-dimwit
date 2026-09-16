@@ -37,12 +37,14 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   import D2G.NodeQueryLogits
   import D2G.Scores
 
+  val nodeScorer = NodeScorer(params.nodes.scorer)
+  val edgeScorer = EdgeScorer(params.edges.scorer)
+
   // Document encoding
   private val patches = ImageToPatchEmbedder(params.patchEmbedder)
   private val encoder = DocumentEncoder(params.encoder)
 
   // Graph node decoding
-  val nodeScorer = NodeScorer(params.nodes.scorer)
   private val embedNodes = NodeEmbedder(params.nodes.embedder, nodeScorer.canvas)
   private val nodePosition = LearnedAbsolutePositionalInjector(params.nodes.positions)
   private val nodeDecoder = NodeDecoder(params.nodes.decoder)
@@ -51,21 +53,20 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   private val embedEdges = EdgeEmbedder(params.edges.embedder)
   private val edgePosition = LearnedAbsolutePositionalInjector(params.edges.positions)
   private val edgeDecoder = EdgeDecoder(params.edges.decoder)
-  val edgeScorer = EdgeScorer(params.edges.scorer)
 
   private val pool = params.nodes.queries.shape(Axis[Query])
 
   /** What two queries of the pool answer. Queries selected randomly. */
   def logits(document: Tensor3[Width, Height, Channel, V], taken: Record[Node, Edge], asked: Key): Scores[V] =
-    val queryIds = Random.permutation(Axis[Query] -> pool)(asked).slice(Axis[Query].at(0 until 2))
-    predict(encode(document), taken, queryIds, queryIds)
+    val randomQueryIds = Random.permutation(Axis[Query] -> pool)(asked).slice(Axis[Query].at(0 until 2))
+    val documentEmbeddings = encoder(patches(document))
+    predict(documentEmbeddings, taken, randomQueryIds, randomQueryIds)
 
   /** What every query of the pool answers, in one reading. */
   def logitsPerQuery(document: Tensor3[Width, Height, Channel, V], taken: Record[Node, Edge]): Scores[V] =
-    val queryIds = Tensor1(Axis[Query], VType[Int32]).fromArray(Array.range(0, pool))
-    predict(encode(document), taken, queryIds, queryIds)
-
-  private def encode(document: Tensor3[Width, Height, Channel, V]): Tensor2[Patch, Embedding, V] = encoder(patches(document))
+    val allQueryIds = Tensor1(Axis[Query], VType[Int32]).fromArray(Array.range(0, pool))
+    val documentEmbeddings = encoder(patches(document))
+    predict(documentEmbeddings, taken, allQueryIds, allQueryIds)
 
   /** What each asked query answers at every slot. */
   private def predict(
@@ -106,9 +107,9 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
 
 object D2G:
 
-  /** What every asked query answers at every slot of a record. */
   case class Scores[V](nodes: NodeQueryLogits[V], edges: EdgeQueryLogits[V])
 
+  /** [[NodeLogits]] at every query slot. */
   case class NodeQueryLogits[V](
       nodeClass: Tensor3[Query, Node, NodeClasses, V],
       startX: Tensor3[Query, Node, Pixel, V],
@@ -116,8 +117,6 @@ object D2G:
       endX: Tensor3[Query, Node, Pixel, V],
       endY: Tensor3[Query, Node, Pixel, V]
   ):
-
-    /** What one of them answered, at every slot. */
     def at(query: Int): NodeLogits[V] = NodeLogits(
       nodeClass.slice(Axis[Query].at(query)),
       startX.slice(Axis[Query].at(query)),
@@ -136,13 +135,12 @@ object D2G:
       endY = stack(answered.map(_.endY), Axis[Query])
     )
 
+  /** [[EdgeLogits]] at every query slot. */
   case class EdgeQueryLogits[V](
       edgeClass: Tensor3[Query, Edge, EdgeClasses, V],
       subject: Tensor3[Query, Edge, LinkedNode, V],
       obj: Tensor3[Query, Edge, LinkedNode, V]
   ):
-
-    /** What one of them answered, at every slot. */
     def at(query: Int): EdgeLogits[V] = EdgeLogits(
       edgeClass.slice(Axis[Query].at(query)),
       subject.slice(Axis[Query].at(query)),
@@ -157,48 +155,33 @@ object D2G:
       obj = stack(answered.map(_.obj), Axis[Query])
     )
 
-  /** Everything the nodes of a record are written down with: what reads them, what embeds them,
-    * what scores them, the `<P>` token every prediction embedding starts as, and where each slot
-    * sits.
-    */
-  case class NodeParams[V](
-      decoder: NodeDecoder.Params[Embedding, Embedding, V],
-      embedder: NodeEmbedder.Params[V],
-      scorer: NodeScorer.Params[V],
-      queries: Tensor2[Query, Embedding, V],
-      positions: LearnedAbsolutePositionalInjector.Params[Node, Embedding, V]
-  )
-
-  object NodeParams:
-
-    given tensorTree: TensorTree[NodeParams[Float32]] = TensorTree.derived
-    given tree: TreeOf[NodeParams[Float32], Float32] = TreeOf.derived
-
-  /** The same for the relationships between them. */
-  case class EdgeParams[V](
-      decoder: EdgeDecoder.Params[Embedding, Embedding, V],
-      embedder: EdgeEmbedder.Params[V],
-      scorer: EdgeScorer.Params[V],
-      queries: Tensor2[Query, Embedding, V],
-      positions: LearnedAbsolutePositionalInjector.Params[Edge, Embedding, V]
-  )
-
-  object EdgeParams:
-
-    given tensorTree: TensorTree[EdgeParams[Float32]] = TensorTree.derived
-    given tree: TreeOf[EdgeParams[Float32], Float32] = TreeOf.derived
-
   case class Params[V](
       patchEmbedder: ImageToPatchEmbedder.Params[Width, Height, Channel, Embedding, V],
       encoder: DocumentEncoder.Params[Embedding, V],
-      nodes: NodeParams[V],
-      edges: EdgeParams[V]
+      nodes: Params.NodeParams[V],
+      edges: Params.EdgeParams[V]
   )
 
   object Params:
 
     given tensorTree: TensorTree[Params[Float32]] = TensorTree.derived
     given tree: TreeOf[Params[Float32], Float32] = TreeOf.derived
+
+    case class NodeParams[V](
+        decoder: NodeDecoder.Params[Embedding, Embedding, V],
+        embedder: NodeEmbedder.Params[V],
+        scorer: NodeScorer.Params[V],
+        queries: Tensor2[Query, Embedding, V],
+        positions: LearnedAbsolutePositionalInjector.Params[Node, Embedding, V]
+    )
+
+    case class EdgeParams[V](
+        decoder: EdgeDecoder.Params[Embedding, Embedding, V],
+        embedder: EdgeEmbedder.Params[V],
+        scorer: EdgeScorer.Params[V],
+        queries: Tensor2[Query, Embedding, V],
+        positions: LearnedAbsolutePositionalInjector.Params[Edge, Embedding, V]
+    )
 
     /** @param nodes  How many nodes of a record the model can hold. One more than the most any
       *               record of the data draws, so that the last prediction embedding has somewhere

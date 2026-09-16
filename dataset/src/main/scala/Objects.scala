@@ -32,6 +32,9 @@ enum ObjectClass(val id: Int):
 
 object ObjectClass:
 
+  extension (objectClass: ObjectClass)
+    def isObject: Boolean = objectClass != ObjectClass.NoObject
+
   def fromId(id: Int): ObjectClass =
     values.find(_.id == id).getOrElse(throw IllegalArgumentException(s"unknown object class id: $id"))
 

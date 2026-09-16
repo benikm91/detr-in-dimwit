@@ -2,7 +2,7 @@ import scala.concurrent.duration.DurationInt
 import lmcoursier.definitions.CachePolicy
 
 ThisBuild / version := "0.2-SNAPSHOT"
-ThisBuild / scalaVersion := "3.8.1"
+ThisBuild / scalaVersion := "3.9.0"
 ThisBuild / fork := true
 ThisBuild / envVars ++= sys.env
 ThisBuild / resolvers += Resolver.defaultLocal

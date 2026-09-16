@@ -70,16 +70,15 @@ class EGTR[V: IsFloating](params: EGTR.Params[V]) extends (Tensor3[Width, Height
       Axis[RelatedBox] -> queries.size,
       Axis[RelationClasses] -> RelationClass.values.length
     )
-    val isObject = Tensor1(Axis[ObjectClasses], VType[V])
-      .fromArray(ObjectClass.values.map(objectClass => if objectClass == ObjectClass.NoObject then 0f else 1f))
-    val confidence = (probability * isObject.broadcastTo(probability.shape)).max(Axis[ObjectClasses])
+    val isObjectMask = Tensor1(Axis[ObjectClasses], VType[V]).fromArray(ObjectClass.values.map(objectClass => if objectClass.isObject then 1f else 0f))
+    val confidence = (probability *! isObjectMask).max(Axis[ObjectClasses])
     SceneGraph(
       objects = Detection(prediction.detection.box, probability.argmax(Axis[ObjectClasses])),
-      relations = sigmoid(prediction.graph.relationLogits)
-        * confidence.broadcastTo(triplets)
-        * confidence.relabelTo(Axis[RelatedBox]).broadcastTo(triplets)
-        * sigmoid(prediction.graph.connectivityLogits).broadcastTo(triplets)
-        * (1f -! Tensor2.eye(queries, VType[V])).broadcastTo(triplets)
+      relations = sigmoid(prediction.graph.relationLogits) *!
+        sigmoid(prediction.graph.connectivityLogits) *!
+        confidence *!
+        confidence.relabelTo(Axis[RelatedBox]) *!
+        (1f -! Tensor2(queries).eye(VType[V]))
     )
 
 object EGTR:
