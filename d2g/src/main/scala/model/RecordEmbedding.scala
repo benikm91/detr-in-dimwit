@@ -16,11 +16,8 @@ import dimwit.Conversions.given
 
 import scala.language.implicitConversions
 
-/** Reads a record's nodes into one embedding each: the class and the points it is placed by
-  * embedded on their own, concatenated and projected into the space the decoder works in.
-  */
-class NodeEmbedder[V: IsFloating](params: NodeEmbedder.Params[V], canvas: Int)
-    extends (RecordNodes[Node] => Tensor2[Node, Embedding, V]):
+/** Transforms a record node into a single embedding vector. */
+class NodeEmbedder[V: IsFloating](params: NodeEmbedder.Params[V], canvas: Int) extends (RecordNodes[Node] => Tensor2[Node, Embedding, V]):
 
   private val project = AffineLayer(params.projection)
 
@@ -54,11 +51,8 @@ object NodeEmbedder:
     given tensorTree: TensorTree[Params[Float32]] = TensorTree.derived
     given tree: TreeOf[Params[Float32], Float32] = TreeOf.derived
 
-/** Reads a record's relationships into one embedding each: the class and the nodes it relates
-  * embedded on their own, concatenated and projected into the space the decoder works in.
-  */
-class EdgeEmbedder[V: IsFloating](params: EdgeEmbedder.Params[V])
-    extends (RecordEdges[Edge] => Tensor2[Edge, Embedding, V]):
+/** Transforms a record edge into a single embedding vector. */
+class EdgeEmbedder[V: IsFloating](params: EdgeEmbedder.Params[V]) extends (RecordEdges[Edge] => Tensor2[Edge, Embedding, V]):
 
   private val project = AffineLayer(params.projection)
 
@@ -88,9 +82,8 @@ object EdgeEmbedder:
     given tensorTree: TensorTree[Params[Float32]] = TensorTree.derived
     given tree: TreeOf[Params[Float32], Float32] = TreeOf.derived
 
-/** Reads an embedding per position back into a record's nodes, and settles them. */
-class NodeScorer[V: IsFloating](params: NodeScorer.Params[V])
-    extends (Tensor2[Node, Embedding, V] => NodeScorer.NodeLogits[V]):
+/** Transforms an embedding back into a record node (logits). */
+class NodeScorer[V: IsFloating](params: NodeScorer.Params[V]) extends (Tensor2[Node, Embedding, V] => NodeScorer.NodeLogits[V]):
 
   import NodeScorer.NodeLogits
 
@@ -153,9 +146,8 @@ object NodeScorer:
     given tensorTree: TensorTree[Params[Float32]] = TensorTree.derived
     given tree: TreeOf[Params[Float32], Float32] = TreeOf.derived
 
-/** Reads an embedding per position back into a record's relationships, and settles them. */
-class EdgeScorer[V: IsFloating](params: EdgeScorer.Params[V])
-    extends (Tensor2[Edge, Embedding, V] => EdgeScorer.EdgeLogits[V]):
+/** Transforms an embedding back into a record edge (logits). */
+class EdgeScorer[V: IsFloating](params: EdgeScorer.Params[V]) extends (Tensor2[Edge, Embedding, V] => EdgeScorer.EdgeLogits[V]):
 
   import EdgeScorer.EdgeLogits
 

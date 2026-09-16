@@ -64,7 +64,7 @@ object EdgeClass:
     Tensor1(Axis[EdgeClasses], vtype).fromArray(values.map(edgeClass => if holds(edgeClass) then 1f else 0f))
 
 /** A point of the canvas, normalized to it. */
-final case class Point(x: Float, y: Float)
+case class Point(x: Float, y: Float)
 
 /** The nodes a drawing draws, laid out along the `Node` axis.
   *
@@ -72,7 +72,7 @@ final case class Point(x: Float, y: Float)
   * line by both, a circle by the ends of its diameter, an annotation by its start alone. The
   * positions a record does not reach hold [[NodeClass.NoNode]] and are placed nowhere.
   */
-final case class RecordNodes[Node](
+case class RecordNodes[Node](
     nodeClass: Tensor1[Node, Int32],
     startX: Tensor1[Node, Float32],
     startY: Tensor1[Node, Float32],
@@ -85,14 +85,14 @@ final case class RecordNodes[Node](
   * `subject` and `obj` name the nodes a relationship relates, by their position along the `Node`
   * axis. The positions a record does not reach hold [[EdgeClass.NoEdge]] and relate nothing.
   */
-final case class RecordEdges[Edge](
+case class RecordEdges[Edge](
     edgeClass: Tensor1[Edge, Int32],
     subject: Tensor1[Edge, Int32],
     obj: Tensor1[Edge, Int32]
 )
 
 /** What a drawing encodes: the nodes it draws, and the relationships between them. */
-final case class Record[Node, Edge](nodes: RecordNodes[Node], edges: RecordEdges[Edge]):
+case class Record[Node, Edge](nodes: RecordNodes[Node], edges: RecordEdges[Edge]):
 
   export nodes.{nodeClass, startX, startY, endX, endY}
   export edges.{edgeClass, subject, obj}
@@ -112,7 +112,7 @@ object Record:
     Record(RecordNodes(nodeClass, startX, startY, endX, endY), RecordEdges(edgeClass, subject, obj))
 
 /** [[Record]] for a batch of drawings along the axis `S`. */
-final case class RecordBatch[S, Node, Edge](
+case class RecordBatch[S, Node, Edge](
     nodeClass: Tensor2[S, Node, Int32],
     startX: Tensor2[S, Node, Float32],
     startY: Tensor2[S, Node, Float32],
@@ -241,17 +241,17 @@ object RecordBatch:
     )
 
 /** One drawn node of a record. */
-final case class RecordNode(nodeClass: NodeClass, points: Seq[Point])
+case class RecordNode(nodeClass: NodeClass, points: Seq[Point])
 
 /** One relationship of a record, by the index of the [[RecordNode]]s it links. */
-final case class RecordEdge(edgeClass: EdgeClass, subject: Int, obj: Int)
+case class RecordEdge(edgeClass: EdgeClass, subject: Int, obj: Int)
 
 /** A record with nothing in it in any particular order, which is what a record is.
   *
   * Laying it out in order gives it one, reading it back takes the order away again, and that is
   * what makes two records comparable however they were written down.
   */
-final case class RecordGraph(nodes: Seq[RecordNode], edges: Seq[RecordEdge]):
+case class RecordGraph(nodes: Seq[RecordNode], edges: Seq[RecordEdge]):
 
   def size: Int = nodes.length + edges.length
 

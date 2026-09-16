@@ -37,9 +37,6 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   import D2G.NodeQueryLogits
   import D2G.Scores
 
-  val nodeScorer = NodeScorer(params.nodes.scorer)
-  val edgeScorer = EdgeScorer(params.edges.scorer)
-
   // Document encoding
   private val patches = ImageToPatchEmbedder(params.patchEmbedder)
   private val encoder = DocumentEncoder(params.encoder)
@@ -48,11 +45,13 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   private val embedNodes = NodeEmbedder(params.nodes.embedder, nodeScorer.canvas)
   private val nodePosition = LearnedAbsolutePositionalInjector(params.nodes.positions)
   private val nodeDecoder = NodeDecoder(params.nodes.decoder)
+  val nodeScorer = NodeScorer(params.nodes.scorer)
 
   // Graph edge decoding
   private val embedEdges = EdgeEmbedder(params.edges.embedder)
   private val edgePosition = LearnedAbsolutePositionalInjector(params.edges.positions)
   private val edgeDecoder = EdgeDecoder(params.edges.decoder)
+  val edgeScorer = EdgeScorer(params.edges.scorer)
 
   private val pool = params.nodes.queries.shape(Axis[Query])
 
@@ -273,16 +272,3 @@ object D2G:
           positions = LearnedAbsolutePositionalInjector.Params.lecunNormal(edgeExtent, embeddingExtent, edgePositionKey)
         )
       )
-
-  /** How big a model a run asks for, which is the one thing about the model a run gets to choose.
-    * Everything else is fixed, so that two runs of the same size are the same model.
-    */
-  enum Size(val name: String, val embedding: Int, val numLayers: Int, val numHeads: Int):
-    case XS extends Size("xs", 128, 3, 4)
-    case S extends Size("s", 256, 3, 8)
-
-  object Size:
-
-    /** The size a run names on its command line. */
-    def named(name: String): Size =
-      values.find(_.name == name).getOrElse(sys.error(s"no size named '$name': ${values.map(_.name).mkString(", ")}"))

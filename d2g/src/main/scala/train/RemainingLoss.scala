@@ -66,9 +66,7 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int)
 class RemainingEdgeLoss[V: IsFloating](vtype: VType[V])
     extends ((D2G.EdgeQueryLogits[V], RecordEdges[Edge]) => Tensor0[V]):
 
-  /** Axis of the record's relationships seen as candidates to answer with rather than as
-    * positions.
-    */
+  /** Axis of the record's relationships seen as candidates to answer with rather than as positions. */
   private type Candidate = Prime[Edge]
 
   override def apply(answered: D2G.EdgeQueryLogits[V], target: RecordEdges[Edge]): Tensor0[V] =

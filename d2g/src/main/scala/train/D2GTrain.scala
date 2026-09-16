@@ -29,12 +29,6 @@ import dimwit.tensor.Tensor4
 
 import scala.language.implicitConversions
 
-/** Axis of a batch of drawings. */
-private trait Batch derives Label
-
-/** Axis of a model's parameters, flattened into one vector so that they can be counted. */
-private trait Parameter derives Label
-
 case class D2GTrainState(
     params: D2G.Params[Float32],
     optimizerState: LearningRateSchedulerState[D2G.Params[Float32], AdamState],
@@ -52,9 +46,10 @@ case class D2GTrainState(
   * a change to how training works cannot reach one corpus and miss another.
   */
 def trainTranscriber(setup: D2GSetup): Unit =
-  dimwit.initialize()
   println(s"training $setup")
 
+  dimwit.initialize()
+  trait Batch derives Label // A (mini) batch for training
   val nodes = Axis[Node] -> setup.nodeSlots
   val edges = Axis[Edge] -> setup.edgeSlots
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
@@ -85,6 +80,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
     key = initKey
   )
 
+  trait Parameter derives Label
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 

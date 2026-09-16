@@ -10,39 +10,22 @@ trait Width derives Label
 trait Height derives Label
 trait Channel derives Label
 
-/** Axis of the record's drawn nodes, which is also what a relationship links them by. */
-trait Node derives Label
+trait Node derives Label // A record node
+trait Edge derives Label // A record edge
 
-/** Axis of the record's relationships. */
-trait Edge derives Label
+type Patch = Width |*| Height // 1D patch sequence represent 2D image grid
 
-/** Axis of the document flattened into the encoder's sequence of patches. */
-type Patch = Width |*| Height
+trait Pixel derives Label // A pixel coordinate in the image
 
-/** Axis over the pixel a coordinate is predicted as. Coordinates are discrete here, which is all
-  * the precision a drawing has anyway.
-  */
-trait Pixel derives Label
+trait LinkedNode derives Label // The node a relationship links to
 
-/** Axis over the node a link is predicted to name. */
-trait LinkedNode derives Label
+trait Embedding derives Label // The (learned) latent vector spaces inside the model
 
+trait NodePart derives Label // The parts a node embedding is composed of
 
-/** Axis of the space the decoder works in. */
-trait Embedding derives Label
+trait EdgePart derives Label // The parts a edge embedding is composed of
 
-/** Axis of the pieces a node embedding is put together from: its class and the points it is
-  * placed by.
-  */
-trait NodePart derives Label
-
-/** Axis of the pieces a relationship embedding is put together from: its class and the nodes it
-  * links.
-  */
-trait EdgePart derives Label
-
-/** Axis of the space one such piece is embedded in. */
-trait PartEmbedding derives Label
+trait PartEmbedding derives Label // An embedding of a [[NodePart]] or a [[EdgePart]]
 
 /** Coordinates are discrete here: a coordinate is the pixel it falls on. */
 object Pixels:
