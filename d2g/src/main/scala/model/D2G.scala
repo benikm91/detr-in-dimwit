@@ -55,17 +55,20 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
 
   private val pool = params.nodes.queries.shape(Axis[Query])
 
+  /** The document as the decoders read it. Transcription asks about the same document at every
+    * slot, so it encodes once and asks with the result.
+    */
+  def encodeDocument(document: Tensor3[Width, Height, Channel, V]): Tensor2[Patch, Embedding, V] = encoder(patches(document))
+
   /** What two queries of the pool answer. Queries selected randomly. */
   def logits(document: Tensor3[Width, Height, Channel, V], taken: Record[Node, Edge], asked: Key): Scores[V] =
     val randomQueryIds = Random.permutation(Axis[Query] -> pool)(asked).slice(Axis[Query].at(0 until 2))
-    val documentEmbeddings = encoder(patches(document))
-    predict(documentEmbeddings, taken, randomQueryIds, randomQueryIds)
+    predict(encodeDocument(document), taken, randomQueryIds, randomQueryIds)
 
   /** What every query of the pool answers, in one reading. */
-  def logitsPerQuery(document: Tensor3[Width, Height, Channel, V], taken: Record[Node, Edge]): Scores[V] =
+  def logitsPerQuery(encoded: Tensor2[Patch, Embedding, V], taken: Record[Node, Edge]): Scores[V] =
     val allQueryIds = Tensor1(Axis[Query], VType[Int32]).fromArray(Array.range(0, pool))
-    val documentEmbeddings = encoder(patches(document))
-    predict(documentEmbeddings, taken, allQueryIds, allQueryIds)
+    predict(encoded, taken, allQueryIds, allQueryIds)
 
   /** What each asked query answers at every slot. */
   private def predict(

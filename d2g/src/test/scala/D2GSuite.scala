@@ -215,7 +215,7 @@ class D2GSuite extends FunSuite:
       assertEquals(guess.subject.shape.dimensions.toSeq, Seq(edges.size, nodes.size))
 
   test("the whole pool answers at once, along the query axis"):
-    val scored = model.logitsPerQuery(document, record.record(nodes, edges))
+    val scored = model.logitsPerQuery(model.encodeDocument(document), record.record(nodes, edges))
     assertEquals(scored.nodes.nodeClass.shape.dimensions.toSeq, Seq(askedAtOnce, nodes.size, NodeClass.values.length))
     assertEquals(scored.edges.edgeClass.shape.dimensions.toSeq, Seq(askedAtOnce, edges.size, EdgeClass.values.length))
 

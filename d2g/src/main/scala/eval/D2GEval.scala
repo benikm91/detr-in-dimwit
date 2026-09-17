@@ -134,8 +134,10 @@ class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExten
       * drawing has written hold nothing, and a prediction reads only the slots before its own, so
       * every answer is the one that slot would have been given on its own.
       */
+    val encoded = documents.vmap(Axis[Drawing])(model.encodeDocument)
+
     def answered(taken: RecordBatch[Drawing, Node, Edge]) =
-      zipvmap(Axis[Drawing])(documents, taken.nodeClass, taken.startX, taken.startY, taken.endX, taken.endY, taken.edgeClass, taken.subject, taken.obj):
+      zipvmap(Axis[Drawing])(encoded, taken.nodeClass, taken.startX, taken.startY, taken.endX, taken.endY, taken.edgeClass, taken.subject, taken.obj):
         case (document, nodeClass, startX, startY, endX, endY, edgeClass, subject, obj) =>
           val record = Record(RecordNodes(nodeClass, startX, startY, endX, endY), RecordEdges(edgeClass, subject, obj))
           val scored = model.logitsPerQuery(document, record)

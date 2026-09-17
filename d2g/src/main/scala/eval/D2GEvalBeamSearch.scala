@@ -67,13 +67,16 @@ def scoreTranscriber(setup: D2GSetup, size: String, width: Int): Unit =
     /** What every query of the pool answers at a slot, and what each answer is worth — one reading
       * for the whole pool, since the queries never read each other.
       */
+    val encode = jit: (images: Tensor4[Carried, Width, Height, Channel, Float32]) =>
+      images.vmap(Axis[Carried])(model.encodeDocument)
+
     val ask = jit: (
-        images: Tensor4[Carried, Width, Height, Channel, Float32],
+        encoded: Tensor3[Carried, Patch, Embedding, Float32],
         taken: RecordBatch[Carried, Node, Edge]
     ) =>
-      zipvmap(Axis[Carried])(images, taken.nodeClass, taken.startX, taken.startY, taken.endX, taken.endY, taken.edgeClass, taken.subject, taken.obj):
-        case (image, nc, sx, sy, ec2, ey, ec, su, ob) =>
-          val scored = model.logitsPerQuery(image, Record(dataset.RecordNodes(nc, sx, sy, ec2, ey), dataset.RecordEdges(ec, su, ob)))
+      zipvmap(Axis[Carried])(encoded, taken.nodeClass, taken.startX, taken.startY, taken.endX, taken.endY, taken.edgeClass, taken.subject, taken.obj):
+        case (document, nc, sx, sy, ec2, ey, ec, su, ob) =>
+          val scored = model.logitsPerQuery(document, Record(dataset.RecordNodes(nc, sx, sy, ec2, ey), dataset.RecordEdges(ec, su, ob)))
           val (nodeClass, startX, startY, endX, endY, nodeScore) =
             zipvmap(Axis[Query])(scored.nodes.nodeClass, scored.nodes.startX, scored.nodes.startY, scored.nodes.endX, scored.nodes.endY):
               case (nodeClass, startX, startY, endX, endY) =>
@@ -87,7 +90,7 @@ def scoreTranscriber(setup: D2GSetup, size: String, width: Int): Unit =
       .grouped(SearchedTogether)
       .filter(_.size == SearchedTogether)
       .map: batch =>
-        searched(batch.map(_.image), nodes, edges, carried, width, setup.queryPool, ask).zip(batch.map(sample => RecordGraph.of(sample.target)))
+        searched(batch.map(_.image), nodes, edges, carried, width, setup.queryPool, encode, ask).zip(batch.map(sample => RecordGraph.of(sample.target)))
       .flatMap(found => found.map((written, target) => (target, written)))
       .toSeq
 
@@ -108,7 +111,8 @@ private def searched(
     carried: AxisExtent[Carried],
     width: Int,
     pool: Int,
-    ask: (Tensor4[Carried, Width, Height, Channel, Float32], RecordBatch[Carried, Node, Edge]) => (
+    encode: Tensor4[Carried, Width, Height, Channel, Float32] => Tensor3[Carried, Patch, Embedding, Float32],
+    ask: (Tensor3[Carried, Patch, Embedding, Float32], RecordBatch[Carried, Node, Edge]) => (
         Tensor3[Carried, Query, Node, Int32],
         Tensor3[Carried, Query, Node, Float32],
         Tensor3[Carried, Query, Node, Float32],
@@ -122,14 +126,15 @@ private def searched(
     )
 ): Seq[RecordGraph] =
   var beams = documents.map(_ => Seq(Beam(RecordGraph(Seq.empty, Seq.empty), 0f, false, false)))
-  val images = stack(documents.flatMap(document => Seq.fill(width)(document)), carried.axis)
+  // Every beam of a drawing reads the same document, encoded once for all of them and every slot.
+  val encoded = encode(stack(documents.flatMap(document => Seq.fill(width)(document)), carried.axis))
 
   /** What the queries answer for every partial record, read back to the host once per step — a
     * slice at a time would be thousands of transfers for one step.
     */
   def asked(): (NodeAnswers, EdgeAnswers) =
     val laid = beams.flatMap(drawing => drawing.padTo(width, drawing.last).map(_.record))
-    val said = ask(images, RecordBatch.of(laid, carried.axis, nodes, edges))
+    val said = ask(encoded, RecordBatch.of(laid, carried.axis, nodes, edges))
     (
       NodeAnswers(said._1.toArray, said._2.toArray, said._3.toArray, said._4.toArray, said._5.toArray, said._6.toArray),
       EdgeAnswers(said._7.toArray, said._8.toArray, said._9.toArray, said._10.toArray)
