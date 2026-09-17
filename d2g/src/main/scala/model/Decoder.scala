@@ -66,8 +66,7 @@ def jointSequenceMask[Context: Λ](queries: Int)(context: AxisExtent[Context]): 
   val shape = Shape2(Axis[PredictionTarget] -> predictions, taken)
   val beforeItsOwnSlot = readable.broadcastTo(shape) < answersFor.broadcastTo(shape)
 
-  val itselfOnly = Tensor2(Axis[PredictionTarget] -> predictions).eye(VType[Bool])
-    .relabel(Axis[Prime[PredictionTarget]] -> Axis[PredictionSource])
+  val itselfOnly = Tensor2(Axis[PredictionTarget] -> predictions, Axis[PredictionSource] -> predictions).eye(VType[Bool])
 
   val mask = concatenate(
     concatenate(upToItsOwnSlot, noSlot),

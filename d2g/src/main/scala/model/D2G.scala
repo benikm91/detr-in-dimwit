@@ -42,7 +42,7 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   private val encoder = DocumentEncoder(params.encoder)
 
   // Graph node decoding
-  private val embedNodes = NodeEmbedder(params.nodes.embedder, nodeScorer.canvas)
+  private val embedNodes = NodeEmbedder(params.nodes.embedder)
   private val nodePosition = LearnedAbsolutePositionalInjector(params.nodes.positions)
   private val nodeDecoder = NodeDecoder(params.nodes.decoder)
   val nodeScorer = NodeScorer(params.nodes.scorer)
@@ -174,6 +174,13 @@ object D2G:
         positions: LearnedAbsolutePositionalInjector.Params[Node, Embedding, V]
     )
 
+    // Each half derives its own tree: derived for the whole at once, the derivation outgrows the
+    // 64 KB the JVM allows one method.
+    object NodeParams:
+
+      given tensorTree: TensorTree[NodeParams[Float32]] = TensorTree.derived
+      given tree: TreeOf[NodeParams[Float32], Float32] = TreeOf.derived
+
     case class EdgeParams[V](
         decoder: EdgeDecoder.Params[Embedding, Embedding, V],
         embedder: EdgeEmbedder.Params[V],
@@ -181,6 +188,11 @@ object D2G:
         queries: Tensor2[Query, Embedding, V],
         positions: LearnedAbsolutePositionalInjector.Params[Edge, Embedding, V]
     )
+
+    object EdgeParams:
+
+      given tensorTree: TensorTree[EdgeParams[Float32]] = TensorTree.derived
+      given tree: TreeOf[EdgeParams[Float32], Float32] = TreeOf.derived
 
     /** @param nodes  How many nodes of a record the model can hold. One more than the most any
       *               record of the data draws, so that the last prediction embedding has somewhere

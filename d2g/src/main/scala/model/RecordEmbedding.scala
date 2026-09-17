@@ -17,9 +17,12 @@ import dimwit.Conversions.given
 import scala.language.implicitConversions
 
 /** Transforms a record node into a single embedding vector. */
-class NodeEmbedder[V: IsFloating](params: NodeEmbedder.Params[V], canvas: Int) extends (RecordNodes[Node] => Tensor2[Node, Embedding, V]):
+class NodeEmbedder[V: IsFloating](params: NodeEmbedder.Params[V]) extends (RecordNodes[Node] => Tensor2[Node, Embedding, V]):
 
   private val project = AffineLayer(params.projection)
+
+  /** How wide the canvas a coordinate is placed on is, i.e. how fine a pixel is. */
+  private val canvas: Int = params.startX.shape(Axis[Pixel])
 
   override def apply(nodes: RecordNodes[Node]): Tensor2[Node, Embedding, V] =
     def placed(table: Tensor2[Pixel, PartEmbedding, V], coordinate: Tensor1[Node, Float32]) =
