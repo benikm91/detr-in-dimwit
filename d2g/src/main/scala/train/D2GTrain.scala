@@ -47,9 +47,9 @@ case class D2GTrainState(
   * One implementation serves every corpus. What differs between them is held in the setup, so that
   * a change to how training works cannot reach one corpus and miss another.
   *
-  * Every device takes an equal share of each batch: the same step on its own slice, and the
-  * gradients summed across devices before the parameters move, so that a run on several GPUs
-  * takes the same steps as a run on one.
+  * Every device takes a batch of its own: the same step on its own drawings, and the gradients
+  * summed across devices before the parameters move. A run on several GPUs therefore takes fewer,
+  * larger steps than a run on one — the batch grows with the devices, not the step count.
   */
 def trainTranscriber(setup: D2GSetup): Unit =
   println(s"training $setup")
@@ -58,12 +58,13 @@ def trainTranscriber(setup: D2GSetup): Unit =
   trait Batch derives Label
   trait X derives MeshLabel
   val mesh = Mesh1(MeshAxis[X] -> Jax.devices.size)
-  println(s"$mesh on ${Jax.devices.head.platform}, ${setup.batchSize / mesh.sizeOf(MeshAxis[X])} drawings each per step")
+  val batchSize = setup.batchSizePerDevice * mesh.sizeOf(MeshAxis[X])
+  println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step")
 
   val nodes = Axis[Node] -> setup.nodeSlots
   val edges = Axis[Edge] -> setup.edgeSlots
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
-  val batches = data.batches(Axis[Batch] -> setup.batchSize)
+  val batches = data.batches(Axis[Batch] -> batchSize)
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 
@@ -146,7 +147,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
     Monitor.StepMonitor(),
     Monitor.LossMonitor(_.lastCost.item),
     Monitor.LearningRateMonitor(schedule),
-    Monitor.PerformanceMonitor(setup.batchSize)
+    Monitor.PerformanceMonitor(batchSize)
   ))
   val started = System.nanoTime
   batches

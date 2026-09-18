@@ -10,8 +10,7 @@
 #SBATCH --error=/cluster/home/%u/.logs/slurm/%j/d2g-sketch_%j.err
 #
 # Trains the transcriber on a corpus, scores every checkpoint, and leaves the metrics as one CSV.
-# Training splits every batch over the GPUs the job gets, so the batch size must divide by
-# `--gres=gpu:N`.
+# Every GPU the job gets trains on a batch of its own, so `--gres=gpu:N` sets the batch size.
 #
 #   source runs/corpus_lshape.env; source runs/model_s.env
 #   CACHE_DIR=/cluster/scratch/$USER/corpora \
