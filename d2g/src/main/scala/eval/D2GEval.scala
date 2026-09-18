@@ -4,8 +4,8 @@ import d2g.*
 import d2g.model.*
 import d2g.train.*
 import d2g.config.*
-import EdgeScorer.EdgeLogits
-import NodeScorer.NodeLogits
+import EdgeHead.EdgeLogits
+import NodeHead.NodeLogits
 import dataset.Canvas
 import dataset.Corpus
 import dataset.DrawingDataset
@@ -180,11 +180,11 @@ class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExten
         case (document, nodeClass, startX, startY, endX, endY, edgeClass, subject, obj) =>
           val scored = model.logitsPerQuery(document, Record(RecordNodes(nodeClass, startX, startY, endX, endY), RecordEdges(edgeClass, subject, obj))).nodes
           val (saidClass, saidStartX, saidStartY, saidEndX, saidEndY, score) =
-            zipvmap(Axis[Query])(scored.nodeClass, scored.startX, scored.startY, scored.endX, scored.endY):
+            zipvmap(Axis[PoolQuery])(scored.nodeClass, scored.startX, scored.startY, scored.endX, scored.endY):
               case (nodeClass, startX, startY, endX, endY) =>
-                answered(model.nodeScorer, NodeLogits(nodeClass, startX, startY, endX, endY))
+                answered(model.nodeHead, NodeLogits(nodeClass, startX, startY, endX, endY))
           val here = Axis[Node].at(slot)
-          val likeliest = Axis[Query].at(score.slice(here).argmax)
+          val likeliest = Axis[PoolQuery].at(score.slice(here).argmax)
           (saidClass.slice(here).slice(likeliest), saidStartX.slice(here).slice(likeliest), saidStartY.slice(here).slice(likeliest), saidEndX.slice(here).slice(likeliest), saidEndY.slice(here).slice(likeliest))
 
     /** The same for a relationship slot. */
@@ -193,10 +193,10 @@ class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExten
         case (document, nodeClass, startX, startY, endX, endY, edgeClass, subject, obj) =>
           val scored = model.logitsPerQuery(document, Record(RecordNodes(nodeClass, startX, startY, endX, endY), RecordEdges(edgeClass, subject, obj))).edges
           val (saidClass, saidSubject, saidObj, score) =
-            zipvmap(Axis[Query])(scored.edgeClass, scored.subject, scored.obj):
-              case (edgeClass, subject, obj) => answered(model.edgeScorer, EdgeLogits(edgeClass, subject, obj))
+            zipvmap(Axis[PoolQuery])(scored.edgeClass, scored.subject, scored.obj):
+              case (edgeClass, subject, obj) => answered(model.edgeHead, EdgeLogits(edgeClass, subject, obj))
           val here = Axis[Edge].at(slot)
-          val likeliest = Axis[Query].at(score.slice(here).argmax)
+          val likeliest = Axis[PoolQuery].at(score.slice(here).argmax)
           (saidClass.slice(here).slice(likeliest), saidSubject.slice(here).slice(likeliest), saidObj.slice(here).slice(likeliest))
 
     /** The slot a step fills, as a mask over the record's slots. */
@@ -258,7 +258,7 @@ private def open(setup: D2GSetup, split: Split) =
   DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
 
 /** What one query answered with at every node slot, and the log probability of that answer. */
-private def answered(scorer: NodeScorer[Float32], logits: NodeLogits[Float32]) =
+private def answered(scorer: NodeHead[Float32], logits: NodeLogits[Float32]) =
   val decided = scorer.decide(logits)
   val carriesEnd = NodeClass.indicator(VType[Float32])(_.numPoints > 1).take(Axis[NodeClasses])(decided.nodeClass)
   val score = chosen(logits.nodeClass) + chosen(logits.startX) + chosen(logits.startY) +
@@ -266,7 +266,7 @@ private def answered(scorer: NodeScorer[Float32], logits: NodeLogits[Float32]) =
   (decided.nodeClass, decided.startX, decided.startY, decided.endX, decided.endY, score)
 
 /** The same for a relationship. */
-private def answered(scorer: EdgeScorer[Float32], logits: EdgeLogits[Float32]) =
+private def answered(scorer: EdgeHead[Float32], logits: EdgeLogits[Float32]) =
   val decided = scorer.decide(logits)
   (decided.edgeClass, decided.subject, decided.obj, chosen(logits.edgeClass) + chosen(logits.subject) + chosen(logits.obj))
 

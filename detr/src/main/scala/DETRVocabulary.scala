@@ -7,9 +7,7 @@ import detr.config.*
 import dataset.Detection
 import dimwit.*
 
-trait Width derives Label
-trait Height derives Label
-trait Channel derives Label
+export documentEncoder.{Width, Height, Channel, Patch}
 
 /** Axis of the detected objects, i.e. of DETR's object queries. */
 trait BoundingBox derives Label

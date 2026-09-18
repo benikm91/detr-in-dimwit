@@ -20,27 +20,24 @@ trait PatchFeature derives Label
   * @param channel The axis of the single drawing channel.
   * @param params The learnable parameters.
   */
-class ImageToPatchEmbedder[Width: Λ, Height: Λ, Channel: Λ, PatchEmbedding: Λ, V: IsFloating](
-    width: Axis[Width],
-    height: Axis[Height],
-    channel: Axis[Channel],
+class ImageToPatchEmbedder[PatchEmbedding: Λ, V: IsFloating](
     params: ImageToPatchEmbedder.Params[PatchEmbedding, V]
-) extends (Tensor3[Width, Height, Channel, V] => Tensor2[Width |*| Height, PatchEmbedding, V]):
+) extends (Tensor3[Width, Height, Channel, V] => Tensor2[Patch, PatchEmbedding, V]):
 
   import ImageToPatchEmbedder.patchSize
 
   private val embed = AffineLayer(params.embed)
 
-  override def apply(img: Tensor3[Width, Height, Channel, V]): Tensor2[Width |*| Height, PatchEmbedding, V] =
+  override def apply(img: Tensor3[Width, Height, Channel, V]): Tensor2[Patch, PatchEmbedding, V] =
     trait PatchX derives Label
     trait PatchY derives Label
     val patches = img
-      .unflatten(width, Shape(Axis[PatchX] -> img.shape(width) / patchSize, width -> patchSize))
-      .unflatten(height, Shape(Axis[PatchY] -> img.shape(height) / patchSize, height -> patchSize))
+      .unflatten(Axis[Width], Shape(Axis[PatchX] -> img.shape(Axis[Width]) / patchSize, Axis[Width] -> patchSize))
+      .unflatten(Axis[Height], Shape(Axis[PatchY] -> img.shape(Axis[Height]) / patchSize, Axis[Height] -> patchSize))
     val grid = patches
       .vmap(Axis[PatchX])(_.vmap(Axis[PatchY])(p => embed(p.flatten.relabelTo(Axis[PatchFeature]))))
     (grid + sinusoidal2D(grid.shape)).flatten((Axis[PatchX], Axis[PatchY]))
-      .relabel(Axis[PatchX |*| PatchY] -> Axis[Width |*| Height])
+      .relabel(Axis[PatchX |*| PatchY] -> Axis[Patch])
 
 object ImageToPatchEmbedder:
 

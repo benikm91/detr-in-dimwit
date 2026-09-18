@@ -30,10 +30,9 @@ class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height
   import DETR.BoxCoordinate
   import DETR.Decoded
   import DETR.Embedding
-  import DETR.Patch
   import DETR.Prediction
 
-  private val encodeDocument = DocumentEncoder(Axis[Width], Axis[Height], Axis[Channel], params.encoder)
+  private val encodeDocument = DocumentEncoder(params.encoder)
   private val decoder = DETRDecoder(Axis[Patch], Axis[BoundingBox], params.decoder)
   private val classify = AffineLayer(params.classification)
   private val boxHidden1 = AffineLayer(params.boxHidden1)
@@ -79,9 +78,6 @@ object DETR:
   trait Embedding derives Label
   trait BoxHidden derives Label
   trait BoxCoordinate derives Label
-
-  /** The image flattened into the encoder's sequence of patches. */
-  type Patch = Width |*| Height
 
   /** What the model scores: a [[Box]] and the class scores of every query. */
   case class Prediction[V](

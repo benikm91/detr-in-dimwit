@@ -9,27 +9,29 @@ import deepwit.transformer.TransformerBlock
 import dimwit.*
 import dimwit.Label as Λ
 
+trait Width derives Label
+trait Height derives Label
+trait Channel derives Label
+trait Patch derives Label
+
 /** A vision transformer over the document: its patches embedded, then full self-attention among them.
   *
   * @param width The axis of the document width; the document must cut into whole patches.
   * @param height The axis of the document height; likewise.
   * @param channel The axis of the single drawing channel.
   */
-class DocumentEncoder[Width: Λ, Height: Λ, Channel: Λ, Embedding: Λ, V: IsFloating](
-    width: Axis[Width],
-    height: Axis[Height],
-    channel: Axis[Channel],
+class DocumentEncoder[Embedding: Λ, V: IsFloating](
     params: DocumentEncoder.Params[Embedding, V]
-) extends (Tensor3[Width, Height, Channel, V] => Tensor2[Width |*| Height, Embedding, V]):
+) extends (Tensor3[Width, Height, Channel, V] => Tensor2[Patch, Embedding, V]):
 
-  private val patches = ImageToPatchEmbedder(width, height, channel, params.patchEmbedder)
-  private val blocks = params.blocks.map(DocumentEncoderBlock(Axis[Width |*| Height], _))
+  private val patches = ImageToPatchEmbedder(params.patchEmbedder)
+  private val blocks = params.blocks.map(DocumentEncoderBlock(_))
   private val finalNorm = LayerNorm(params.finalNorm)
 
-  override def apply(document: Tensor3[Width, Height, Channel, V]): Tensor2[Width |*| Height, Embedding, V] =
+  override def apply(document: Tensor3[Width, Height, Channel, V]): Tensor2[Patch, Embedding, V] =
     blocks
       .foldLeft(patches(document))((encoded, block) => block(encoded))
-      .vmap(Axis[Width |*| Height])(finalNorm)
+      .vmap(Axis[Patch])(finalNorm)
 
 object DocumentEncoder:
 
@@ -53,15 +55,15 @@ object DocumentEncoder:
       )
 
 /** Single [[TransformerBlock]] in [[DocumentEncoder]]: the patches attend onto themselves, then along the embedding. */
-class DocumentEncoderBlock[Patch: Λ, Embedding: Λ, V: IsFloating](patch: Axis[Patch], params: DocumentEncoderBlock.Params[Embedding, V]) extends TransformerBlock[Patch, Embedding, V](patch):
+class DocumentEncoderBlock[Embedding: Λ, V: IsFloating](params: DocumentEncoderBlock.Params[Embedding, V]) extends TransformerBlock[Patch, Embedding, V](Axis[Patch]):
 
-  private val selfAttention = MultiHeadFullSelfAttention(patch, params.selfAttention)
+  private val selfAttention = MultiHeadFullSelfAttention(Axis[Patch], params.selfAttention)
   private val selfAttentionPreNorm = LayerNorm(params.selfAttentionNorm)
   private val mlp = MLPEmbeddingMixer(params.mlp)
   private val mlpPreNorm = LayerNorm(params.mlpNorm)
 
   override protected def contextMixer(patches: Tensor2[Patch, Embedding, V]): Tensor2[Patch, Embedding, V] =
-    selfAttention(patches.vmap(patch)(selfAttentionPreNorm))
+    selfAttention(patches.vmap(Axis[Patch])(selfAttentionPreNorm))
 
   override protected def embeddingMixer(embedding: Tensor1[Embedding, V]): Tensor1[Embedding, V] =
     mlp(mlpPreNorm(embedding))

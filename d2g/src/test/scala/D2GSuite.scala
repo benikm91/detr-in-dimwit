@@ -16,8 +16,8 @@ import dataset.RecordGraph
 import dataset.RecordNode
 import dataset.RecordNodes
 import dataset.RecordScoring
-import EdgeScorer.EdgeLogits
-import NodeScorer.NodeLogits
+import EdgeHead.EdgeLogits
+import NodeHead.NodeLogits
 import dimwit.*
 import dimwit.optimizer.Adam
 import munit.FunSuite
@@ -100,7 +100,7 @@ class RecordSuite extends FunSuite:
     val decoder = EdgeDecoder(EdgeDecoder.Params.xavierUniformDepthScaled(numBlocks = 1, numHeads = 2, embedding, embedding, mixed, Random.Key(3)))
     val document = Init.xavierUniform(patches, embedding, Random.Key(4))
     val taken = Init.xavierUniform(edges, embedding, Random.Key(5))
-    val asked = stack(Seq.tabulate(askedAtOnce)(query => Init.xavierUniform(edges, embedding, Random.Key(6 + query))), Axis[Query])
+    val asked = stack(Seq.tabulate(askedAtOnce)(query => Init.xavierUniform(edges, embedding, Random.Key(6 + query))), Axis[PoolQuery])
     val nodes = Init.xavierUniform(padded, embedding, Random.Key(7))
 
     def answered(nodes: Tensor2[Node, Embedding, Float32], holdsNode: Seq[Boolean]) =

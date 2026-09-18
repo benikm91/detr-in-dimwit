@@ -21,64 +21,14 @@ import dimwit.Label as Λ
 
 import scala.language.implicitConversions
 
-trait Query derives Label // Queries of the underlying query pool.
+/** Queries from the query pool to learn different remaining nodes/edges. */
+trait PoolQuery derives Label
 
-/** Which embeddings of a joined training sequence each of them may attend to.
-  *
-  * The sequence is the embeddings of what is taken so far followed by one prediction embedding per
-  * slot per query asked — a pair of queries while training, the whole pool while transcribing — so
-  * the mask falls into four blocks: a row is an embedding that reads, a column one that is read:
-  *
-  * {{{
-  *                 source:  taken                 prediction
-  *   target: taken          up to its own slot    nothing
-  *   target: prediction     before its own slot   itself
-  * }}}
-  *
-  * A taken embedding carries the record as far as itself; a prediction embedding reads exactly what
-  * is taken before the slot it answers for, so that what it may answer with is what is left over;
-  * and nothing reads a prediction embedding, which holds a guess rather than a record.
-  *
-  * The last block is the diagonal and stays the diagonal however many tokens a slot has: the tokens
-  * of one slot must not read each other, or they would agree on an answer between themselves rather
-  * than each having to find one. It is also what keeps the first prediction row, which has nothing
-  * taken before it, from being fully masked — a row of nothing but `-inf` has no softmax.
-  */
-def jointSequenceMask[Context: Λ](queries: Int)(context: AxisExtent[Context]): Tensor2[Context, Context, Bool] =
+/** Every [[PoolQuery]]'s answer for every [[Node]] slot. */
+type NodePrediction = PoolQuery |*| Node
 
-  trait TakenSource derives Label
-  trait TakenTarget derives Label
-  trait PredictionSource derives Label
-  trait PredictionTarget derives Label
-
-  val slots = context.size / (1 + queries)
-  val predictions = slots * queries
-  val taken = Axis[TakenSource] -> slots
-
-  val upToItsOwnSlot = tril(Tensor(Shape2(Axis[TakenTarget] -> slots, taken)).fill(true))
-  val noSlot = Tensor(Shape2(Axis[TakenTarget] -> slots, Axis[PredictionSource] -> predictions)).fill(false)
-
-  // A prediction row answers for the slot it sits at, which is its position within its own token's
-  // block, so the taken embeddings it may read are the ones before that slot.
-  val answersFor = Tensor1(Axis[PredictionTarget], VType[Int32])
-    .fromArray(Array.range(0, predictions).map(_ % slots))
-  val readable = Tensor1(taken.axis, VType[Int32]).fromArray(Array.range(0, slots))
-  val shape = Shape2(Axis[PredictionTarget] -> predictions, taken)
-  val beforeItsOwnSlot = readable.broadcastTo(shape) < answersFor.broadcastTo(shape)
-
-  val itselfOnly = Tensor2(Axis[PredictionTarget] -> predictions, Axis[PredictionSource] -> predictions).eye(VType[Bool])
-
-  val mask = concatenate(
-    concatenate(upToItsOwnSlot, noSlot),
-    concatenate(beforeItsOwnSlot, itselfOnly)
-  )
-  mask.relabelAll((Axis[Context], Axis[Context]))
-
-/** Axis of the node prediction embeddings a decoder attends over: every query's answer for every
-  * node slot, laid out one whole block of slots per query. It is [[Query]] and [[Node]] flattened,
-  * because attention reads one sequence — outside a decoder the two are separate axes.
-  */
-trait NodePrediction derives Label
+/** Every [[PoolQuery]]'s answer for every [[Edge]] slot. */
+type EdgePrediction = PoolQuery |*| Edge
 
 /** The decoder of the record's nodes.
   *
@@ -103,10 +53,10 @@ class NodeDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
   def forTraining(
       document: Tensor2[Patch, PatchEmbedding, V],
       nodes: Tensor2[Node, Embedding, V],
-      asked: Tensor3[Query, Node, Embedding, V]
-  ): (Tensor2[Node, Embedding, V], Tensor3[Query, Node, Embedding, V]) =
-    val perQuery = Shape2(asked.shape.extent(Axis[Query]), asked.shape.extent(Axis[Node]))
-    val predictions = asked.flatten((Axis[Query], Axis[Node])).relabelAll((Axis[NodePrediction], Axis[Embedding]))
+      asked: Tensor3[PoolQuery, Node, Embedding, V]
+  ): (Tensor2[Node, Embedding, V], Tensor3[PoolQuery, Node, Embedding, V]) =
+    val perQuery = Shape2(asked.shape.extent(Axis[PoolQuery]), asked.shape.extent(Axis[Node]))
+    val predictions = asked.flatten((Axis[PoolQuery], Axis[Node]))
     val (carried, answered) = blocks.foldLeft((nodes, predictions)):
       case ((nodes, predictions), block) => block.forTraining(document, nodes, predictions)
     (
@@ -193,9 +143,6 @@ object NodeDecoderBlock:
         mlpNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
       )
 
-/** The same for the relationships: [[Query]] and [[Edge]] flattened, one block of slots per query. */
-trait EdgePrediction derives Label
-
 /** What an [[EdgeDecoder]] attends onto: the nodes as a [[NodeDecoder]] carries them, and which of
   * the slots hold a node at all. The positions past a record are there to make every record the
   * same shape and relate nothing, so the two always travel together.
@@ -222,10 +169,10 @@ class EdgeDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
       document: Tensor2[Patch, PatchEmbedding, V],
       nodes: NodeSource[Embedding, V],
       edges: Tensor2[Edge, Embedding, V],
-      asked: Tensor3[Query, Edge, Embedding, V]
-  ): (Tensor2[Edge, Embedding, V], Tensor3[Query, Edge, Embedding, V]) =
-    val perQuery = Shape2(asked.shape.extent(Axis[Query]), asked.shape.extent(Axis[Edge]))
-    val predictions = asked.flatten((Axis[Query], Axis[Edge])).relabelAll((Axis[EdgePrediction], Axis[Embedding]))
+      asked: Tensor3[PoolQuery, Edge, Embedding, V]
+  ): (Tensor2[Edge, Embedding, V], Tensor3[PoolQuery, Edge, Embedding, V]) =
+    val perQuery = Shape2(asked.shape.extent(Axis[PoolQuery]), asked.shape.extent(Axis[Edge]))
+    val predictions = asked.flatten((Axis[PoolQuery], Axis[Edge]))
     val (carried, answered) = blocks.foldLeft((edges, predictions)):
       case ((edges, predictions), block) => block.forTraining(document, nodes, edges, predictions)
     (
@@ -328,3 +275,41 @@ object EdgeDecoderBlock:
         mlp = MLPEmbeddingMixer.Params.init(embeddingExtent, embeddingMixedExtent, mlpKey, vtype),
         mlpNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
       )
+
+/** Attention mask for a joined sequence: "taken" embeddings, then one "prediction" per slot per query.
+  * Rows read, columns are read:
+  * {{{
+  *                 source:  taken                 prediction
+  *   target: taken          up to its own slot    nothing
+  *   target: prediction     before its own slot   itself
+  * }}}
+  */
+private def jointSequenceMask[Context: Λ](queries: Int)(context: AxisExtent[Context]): Tensor2[Context, Context, Bool] =
+
+  trait TakenSource derives Label
+  trait TakenTarget derives Label
+  trait PredictionSource derives Label
+  trait PredictionTarget derives Label
+
+  val slots = context.size / (1 + queries)
+  val predictions = slots * queries
+  val taken = Axis[TakenSource] -> slots
+
+  val upToItsOwnSlot = tril(Tensor(Shape2(Axis[TakenTarget] -> slots, taken)).fill(true))
+  val noSlot = Tensor(Shape2(Axis[TakenTarget] -> slots, Axis[PredictionSource] -> predictions)).fill(false)
+
+  // A prediction row answers for the slot it sits at, which is its position within its own token's
+  // block, so the taken embeddings it may read are the ones before that slot.
+  val answersFor = Tensor1(Axis[PredictionTarget], VType[Int32])
+    .fromArray(Array.range(0, predictions).map(_ % slots))
+  val readable = Tensor1(taken.axis, VType[Int32]).fromArray(Array.range(0, slots))
+  val shape = Shape2(Axis[PredictionTarget] -> predictions, taken)
+  val beforeItsOwnSlot = readable.broadcastTo(shape) < answersFor.broadcastTo(shape)
+
+  val itselfOnly = Tensor2(Axis[PredictionTarget] -> predictions, Axis[PredictionSource] -> predictions).eye(VType[Bool])
+
+  val mask = concatenate(
+    concatenate(upToItsOwnSlot, noSlot),
+    concatenate(beforeItsOwnSlot, itselfOnly)
+  )
+  mask.relabelAll((Axis[Context], Axis[Context]))

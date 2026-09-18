@@ -10,8 +10,8 @@ import dataset.NodeClass
 import dataset.NodeClasses
 import dataset.RecordEdges
 import dataset.RecordNodes
-import EdgeScorer.EdgeLogits
-import NodeScorer.NodeLogits
+import EdgeHead.EdgeLogits
+import NodeHead.NodeLogits
 import dimwit.*
 import dimwit.Conversions.given
 
@@ -30,7 +30,7 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int)
   private type Candidate = Prime[Node]
 
   override def apply(answered: D2G.NodeQueryLogits[V], target: RecordNodes[Node]): Tensor0[V] =
-    require(answered.nodeClass.shape(Axis[Query]) == 2, "the loss pairs two answers")
+    require(answered.nodeClass.shape(Axis[PoolQuery]) == 2, "the loss pairs two answers")
     val (a, b) = (answered.at(0), answered.at(1))
     val nodes = target.nodeClass.shape.extent(Axis[Node])
     val pairs = Shape2(nodes, Axis[Candidate] -> nodes.size)
@@ -70,7 +70,7 @@ class RemainingEdgeLoss[V: IsFloating](vtype: VType[V])
   private type Candidate = Prime[Edge]
 
   override def apply(answered: D2G.EdgeQueryLogits[V], target: RecordEdges[Edge]): Tensor0[V] =
-    require(answered.edgeClass.shape(Axis[Query]) == 2, "the loss pairs two answers")
+    require(answered.edgeClass.shape(Axis[PoolQuery]) == 2, "the loss pairs two answers")
     val (a, b) = (answered.at(0), answered.at(1))
     val edges = target.edgeClass.shape.extent(Axis[Edge])
     val pairs = Shape2(edges, Axis[Candidate] -> edges.size)
