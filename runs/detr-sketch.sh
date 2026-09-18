@@ -2,18 +2,20 @@
 #SBATCH --job-name=detr-sketch
 #SBATCH --partition=gpu_top_ia
 #SBATCH --account=cai_cv
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:2
 #SBATCH --exclude=sanjose,irvine
-#SBATCH --time=4:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/detr-sketch_%j.out
 #SBATCH --error=/cluster/home/%u/.logs/slurm/%j/detr-sketch_%j.err
 #
 # Trains the detector on a corpus, scores every checkpoint, and leaves the metrics as one CSV.
 #
+#   source runs/corpus_lshape.env; source runs/model_s.env
 #   CACHE_DIR=/cluster/scratch/$USER/corpora \
 #   OUTPUT_DIR=/cluster/scratch/$USER/metrics \
 #     sbatch runs/detr-sketch.sh
 #
+# The `.env` files in `runs/` set CORPUS and SIZE; `sbatch` hands the environment on to the job.
 # CACHE_DIR is where the corpora land, so that the next job does not download them again.
 # OUTPUT_DIR is where `detr-<corpus>-<size>.csv` ends up: what is left of the job once the
 # instance is wiped. CHECKPOINT_DIR is where the checkpoints go meanwhile, which need not
@@ -61,7 +63,7 @@ srun sarus run \
     cd /usr/src
     git clone https://github.com/dimwit-dev/dimwit
     git clone https://github.com/dimwit-dev/deepwit
-    git clone https://github.com/dimwit-dev/dimwit-sharding
+    git clone https://github.com/benikm91/dimwit-sharding
     git clone https://github.com/benikm91/detr-in-dimwit
 
     cd dimwit
