@@ -18,6 +18,7 @@ import dataset.Runs
 import dimwit.*
 import dimwit.Conversions.given
 import dimwit.jax.Jax
+import dimwit.sharding.*
 import deepwit.optimizer.CosineDecay
 import deepwit.optimizer.LearningRateSchedule
 import deepwit.optimizer.LearningRateScheduler
@@ -54,12 +55,10 @@ def trainTranscriber(setup: D2GSetup): Unit =
   println(s"training $setup")
 
   dimwit.initialize()
-  trait Batch derives Label // A (mini) batch for training
-  trait X derives Label // The devices in a row, the batch split over them
-  val devices = Jax.devices
-  require(setup.batchSize % devices.size == 0, s"a batch of ${setup.batchSize} does not split evenly over ${devices.size} devices")
-  val overDevices = NamedSharding(Mesh(Shape(Axis[X] -> devices.size), devices), Axes[Tuple1[X]])
-  println(s"${devices.size} ${devices.head.platform} device(s), ${setup.batchSize / devices.size} drawings each per step")
+  trait Batch derives Label
+  trait X derives MeshLabel
+  val mesh = Mesh1(MeshAxis[X] -> Jax.devices.size)
+  println(s"$mesh on ${Jax.devices.head.platform}, ${setup.batchSize / mesh.sizeOf(MeshAxis[X])} drawings each per step")
 
   val nodes = Axis[Node] -> setup.nodeSlots
   val edges = Axis[Edge] -> setup.edgeSlots
@@ -98,29 +97,50 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas)
   val edgeLoss = RemainingEdgeLoss(VType[Float32])
 
-  def cost(
-      images: Tensor4[Batch, Width, Height, Channel, Float32],
-      records: RecordBatch[Batch, Node, Edge],
+  /** The mean loss over the drawings of a batch, whatever axis `S` they lie along. */
+  def cost[S: Label](
+      images: Tensor4[S, Width, Height, Channel, Float32],
+      records: RecordBatch[S, Node, Edge],
       asked: Key
   )(params: D2G.Params[Float32]): Tensor0[Float32] =
     val model = D2G(params)
-    zipvmap(Axis[Batch])(images, records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.edgeClass, records.subject, records.obj):
+    zipvmap(Axis[S])(images, records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.edgeClass, records.subject, records.obj):
       case (image, nodeClass, startX, startY, endX, endY, edgeClass, subject, obj) =>
         val target = Record(nodeClass, startX, startY, endX, endY, edgeClass, subject, obj)
         val scored = model.logits(image, target, asked)
         nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target.edges)
     .mean
 
-  def gradientStep(
-      images: Tensor4[Batch, Width, Height, Channel, Float32],
-      records: RecordBatch[Batch, Node, Edge],
+  def gradientStep[S: Label](
+      images: Tensor4[S, Width, Height, Channel, Float32],
+      records: RecordBatch[S, Node, Edge],
       state: D2GTrainState
   ) =
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
     val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, records.permuted(forThisStep, nodes, edges), forQueries))(state.params)
     val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)
     D2GTrainState(params, optimizerState, nextLinearization, lastCost)
-  val jitGradientStep = jitDonatingUnsafe(gradientStep)
+  val jitGradientStep = jitDonatingUnsafe(gradientStep[Batch |@| X])
+
+  /** The batch with every device holding its share of the drawings; the step sees one axis. */
+  def shard(
+      batch: dataset.Batch[Batch, Width, Height, Channel, RecordBatch[Batch, Node, Edge]]
+  ): (Tensor4[Batch |@| X, Width, Height, Channel, Float32], RecordBatch[Batch |@| X, Node, Edge]) =
+    val over = Axis[Batch] -> MeshAxis[X]
+    val records = batch.target
+    (
+      batch.images.shard(mesh, over),
+      RecordBatch(
+        nodeClass = records.nodeClass.shard(mesh, over),
+        startX = records.startX.shard(mesh, over),
+        startY = records.startY.shard(mesh, over),
+        endX = records.endX.shard(mesh, over),
+        endY = records.endY.shard(mesh, over),
+        edgeClass = records.edgeClass.shard(mesh, over),
+        subject = records.subject.shard(mesh, over),
+        obj = records.obj.shard(mesh, over)
+      )
+    )
 
   val checkpointer = TensorTreeCheckpointer.newIn(setup.checkpointRoot)
   val monitor = Monitor.ConcatMonitor[D2GTrainState](List(
@@ -133,8 +153,8 @@ def trainTranscriber(setup: D2GSetup): Unit =
   batches
     .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, -1f)):
       case (state, batch) =>
-        val spread = batch.toSharding(overDevices)
-        jitGradientStep(spread.images, spread.target, state)
+        val (images, records) = shard(batch)
+        jitGradientStep(images, records, state)
     .tapEvery(100):
       case (state, step) => println(monitor.report(step, state))
     .tapEvery(setup.checkpointEvery):

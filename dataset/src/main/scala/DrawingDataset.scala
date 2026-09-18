@@ -4,7 +4,6 @@ import dimwit.*
 import dimwit.Conversions.given
 import dimwit.jax.Jax
 import dimwit.python.PyBridge.liftPyTensor
-import dimwit.sharding.Sharding
 import dimwit.tensor.Tensor4
 import me.shadaj.scalapy.py
 
@@ -20,10 +19,6 @@ final case class Sample[W, H, C, Target](image: Tensor3[W, H, C, Float32], targe
 /** A batch of drawings and what is to be predicted in them. */
 final case class Batch[S, W, H, C, Target](images: Tensor4[S, W, H, C, Float32], target: Target):
   def map[T](f: Target => T): Batch[S, W, H, C, T] = Batch(images, f(target))
-
-  /** The batch spread over devices, images and target alike. */
-  def toSharding(sharding: Sharding)(using tree: TensorTree[Target]): Batch[S, W, H, C, Target] =
-    Batch(images.toSharding(sharding), tree.map(target, [T <: Tuple, V] => (labels: Labels[T]) ?=> (t: Tensor[T, V]) => t.toSharding(sharding)))
 
 /** Axis of the drawings of a split. */
 private trait Drawings derives Label

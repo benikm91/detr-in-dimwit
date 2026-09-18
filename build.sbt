@@ -11,6 +11,7 @@ ThisBuild / csrConfiguration := csrConfiguration.value
   .withCachePolicies(Vector(CachePolicy.LocalOnly))
 
 lazy val dimwit = "ch.contrafactus" %% "dimwit-core" % "0.2-SNAPSHOT" changing ()
+lazy val dimwitSharding = "ch.contrafactus" %% "dimwit-sharding" % "0.1.0-SNAPSHOT" changing ()
 lazy val scalapy = "dev.scalapy" %% "scalapy-core" % "0.5.3"
 lazy val munit = "org.scalameta" %% "munit" % "1.0.0" % Test
 
@@ -37,6 +38,7 @@ lazy val dataset = project
 lazy val modelSettings = Seq(
   libraryDependencies ++= Seq(
     dimwit,
+    dimwitSharding,
     scalapy,
     munit,
     "ch.contrafactus" %% "plotwit-core" % "0.2-SNAPSHOT" changing (),
