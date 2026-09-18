@@ -1,4 +1,5 @@
 #!/bin/bash
+#SBATCH --export=ALL,SARUS_HOME=TRUE
 #SBATCH --job-name=detr-sketch
 #SBATCH --partition=gpu_top_ia
 #SBATCH --account=cai_cv
@@ -83,9 +84,7 @@ srun sarus run \
     # The Python side comes from the project itself: what its pyproject.toml declares (JAX, the Hub
     # client the corpora come through), installed from its lock file into .venv by uv. The
     # interpreter is one uv installs too: ScalaPy embeds Python through libpython, which the
-    # image's own interpreter does not ship. Both land on /cache so the next job has them.
-    export UV_PYTHON_INSTALL_DIR=/cache/uv/python
-    export UV_CACHE_DIR=/cache/uv/cache
+    # interpreter of the image does not ship. Both land on /cache so the next job has them.
     uv sync --frozen
     export DIMWIT_PYTHON_PATH="$PWD/.venv/bin/python"
     export DIMWIT_SKIP_SYNC=true
