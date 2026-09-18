@@ -3,7 +3,7 @@
 #SBATCH --job-name=detr-sketch
 #SBATCH --partition=gpu
 #SBATCH --account=cai_cv
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:a100:2
 #SBATCH --exclude=sanjose,irvine
 #SBATCH --time=4:00:00
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/detr-sketch_%j.out

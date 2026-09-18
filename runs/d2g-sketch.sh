@@ -3,7 +3,7 @@
 #SBATCH --job-name=d2g-sketch
 #SBATCH --partition=gpu
 #SBATCH --account=cai_cv
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:a100:2
 #SBATCH --exclude=sanjose,irvine
 #SBATCH --time=4:00:00
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/d2g-sketch_%j.out
@@ -82,13 +82,9 @@ sarus run \
     cd ..
 
     cd detr-in-dimwit
-    uv sync
-    DIMWIT_PYTHON_PATH=/usr/src/detr-in-dimwit/.venv/bin/python
-
 
     # The image points DimWit at its own Python. Ours comes from pyproject.toml instead: DimWit runs uv sync and uses the venv that gives.
     unset DIMWIT_SKIP_SYNC DIMWIT_PYTHON_PATH DIMWIT_PYTHON_LIBRARY
-    unset DIMWIT_PYTHON_LIBRARY
 
     sbt "d2g/runMain d2gTrain $corpus $size"
     sbt "d2g/runMain d2gEval $corpus $size"
