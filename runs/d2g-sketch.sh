@@ -1,21 +1,23 @@
 #!/bin/bash
-#SBATCH --job-name=detr-sketch
+#SBATCH --job-name=d2g-sketch
 #SBATCH --partition=gpu_top_ia
 #SBATCH --account=cai_cv
 #SBATCH --gres=gpu:4
 #SBATCH --exclude=sanjose,irvine
 #SBATCH --time=4:00:00
-#SBATCH --output=/cluster/home/%u/.logs/slurm/%j/detr-sketch_%j.out
-#SBATCH --error=/cluster/home/%u/.logs/slurm/%j/detr-sketch_%j.err
+#SBATCH --output=/cluster/home/%u/.logs/slurm/%j/d2g-sketch_%j.out
+#SBATCH --error=/cluster/home/%u/.logs/slurm/%j/d2g-sketch_%j.err
 #
-# Trains the detector on a corpus, scores every checkpoint, and leaves the metrics as one CSV.
+# Trains the transcriber on a corpus, scores every checkpoint, and leaves the metrics as one CSV.
+# Training splits every batch over the GPUs the job gets, so the batch size must divide by
+# `--gres=gpu:N`.
 #
 #   CACHE_DIR=/cluster/scratch/$USER/corpora \
 #   OUTPUT_DIR=/cluster/scratch/$USER/metrics \
-#     sbatch runs/detr-sketch.sh
+#     sbatch runs/d2g-sketch.sh
 #
 # CACHE_DIR is where the corpora land, so that the next job does not download them again.
-# OUTPUT_DIR is where `detr-<corpus>-<size>.csv` ends up: what is left of the job once the
+# OUTPUT_DIR is where `d2g-<corpus>-<size>.csv` ends up: what is left of the job once the
 # instance is wiped. CHECKPOINT_DIR is where the checkpoints go meanwhile, which need not
 # outlive the job.
 
@@ -25,12 +27,12 @@ set -euo pipefail
 : "${OUTPUT_DIR:?set OUTPUT_DIR to a directory that outlives the job, where the metrics are written}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch}"
 
-# Which corpus to train on and how big a model — the names `Corpus` and `DETR.Size` know.
+# Which corpus to train on and how big a model — the names `Corpus` and `D2GModelConfiguration` know.
 CORPUS="${CORPUS:-sketch}"
 SIZE="${SIZE:-s}"
 
 mkdir -p "$CACHE_DIR" "$OUTPUT_DIR" "$CHECKPOINT_DIR"
-echo "running detr on $CORPUS at size $SIZE: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
+echo "running d2g on $CORPUS at size $SIZE: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
 
 module load sarus/1.6.4
 
@@ -77,9 +79,9 @@ srun sarus run \
     cd ..
 
     cd detr-in-dimwit
-    sbt "detr/runMain detrTrain $corpus $size"
-    sbt "detr/runMain detrEval $corpus $size"
-  ' detr-sketch "$CORPUS" "$SIZE"
+    sbt "d2g/runMain d2gTrain $corpus $size"
+    sbt "d2g/runMain d2gEval $corpus $size"
+  ' d2g-sketch "$CORPUS" "$SIZE"
 
 echo "job finished, metrics in $OUTPUT_DIR:"
-ls -la "$OUTPUT_DIR"/detr-"$CORPUS"-"$SIZE".csv
+ls -la "$OUTPUT_DIR"/d2g-"$CORPUS"-"$SIZE".csv

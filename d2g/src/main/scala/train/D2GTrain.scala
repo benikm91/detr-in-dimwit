@@ -17,6 +17,7 @@ import deepwit.training.tapEvery
 import dataset.Runs
 import dimwit.*
 import dimwit.Conversions.given
+import dimwit.jax.Jax
 import deepwit.optimizer.CosineDecay
 import deepwit.optimizer.LearningRateSchedule
 import deepwit.optimizer.LearningRateScheduler
@@ -44,12 +45,22 @@ case class D2GTrainState(
   *
   * One implementation serves every corpus. What differs between them is held in the setup, so that
   * a change to how training works cannot reach one corpus and miss another.
+  *
+  * Every device takes an equal share of each batch: the same step on its own slice, and the
+  * gradients summed across devices before the parameters move, so that a run on several GPUs
+  * takes the same steps as a run on one.
   */
 def trainTranscriber(setup: D2GSetup): Unit =
   println(s"training $setup")
 
   dimwit.initialize()
   trait Batch derives Label // A (mini) batch for training
+  trait X derives Label // The devices in a row, the batch split over them
+  val devices = Jax.devices
+  require(setup.batchSize % devices.size == 0, s"a batch of ${setup.batchSize} does not split evenly over ${devices.size} devices")
+  val overDevices = NamedSharding(Mesh(Shape(Axis[X] -> devices.size), devices), Axes[Tuple1[X]])
+  println(s"${devices.size} ${devices.head.platform} device(s), ${setup.batchSize / devices.size} drawings each per step")
+
   val nodes = Axis[Node] -> setup.nodeSlots
   val edges = Axis[Edge] -> setup.edgeSlots
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
@@ -121,7 +132,9 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val started = System.nanoTime
   batches
     .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, -1f)):
-      case (state, batch) => jitGradientStep(batch.images, batch.target, state)
+      case (state, batch) =>
+        val spread = batch.toSharding(overDevices)
+        jitGradientStep(spread.images, spread.target, state)
     .tapEvery(100):
       case (state, step) => println(monitor.report(step, state))
     .tapEvery(setup.checkpointEvery):
