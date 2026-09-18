@@ -10,7 +10,7 @@ import dataset.ObjectClass
 import deepwit.activation.relu
 import deepwit.activation.sigmoid
 import deepwit.base.AffineLayer
-import common.ImageToPatchEmbedder
+import documentEncoder.DocumentEncoder
 import deepwit.normalization.LayerNorm
 import deepwit.attention.MultiHeadAttention
 import deepwit.init.Init
@@ -33,8 +33,7 @@ class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height
   import DETR.Patch
   import DETR.Prediction
 
-  private val patches = ImageToPatchEmbedder(Axis[Width], Axis[Height], Axis[Channel], params.patchEmbedder)
-  private val encoder = DETREncoder(Axis[Patch], params.encoder)
+  private val encodeDocument = DocumentEncoder(Axis[Width], Axis[Height], Axis[Channel], params.encoder)
   private val decoder = DETRDecoder(Axis[Patch], Axis[BoundingBox], params.decoder)
   private val classify = AffineLayer(params.classification)
   private val boxHidden1 = AffineLayer(params.boxHidden1)
@@ -48,7 +47,7 @@ class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height
 
   /** What the model scores before deciding: a box and unnormalized class scores per query. */
   def logits(image: Tensor3[Width, Height, Channel, V]): Prediction[V] =
-    predict(decoder(encoder(patches(image)), params.objectQueries))
+    predict(decoder(encodeDocument(image), params.objectQueries))
 
   /** What [[logits]] reads, together with the decoder by-products a relation extractor reads.
     *
@@ -56,7 +55,7 @@ class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height
     * decoder block, which a detection alone has no use for.
     */
   def decode(image: Tensor3[Width, Height, Channel, V]): Decoded[V] =
-    val (selfAttention, objects) = decoder.applyWithSelfAttentionIntermediates(encoder(patches(image)), params.objectQueries)
+    val (selfAttention, objects) = decoder.applyWithSelfAttentionIntermediates(encodeDocument(image), params.objectQueries)
     Decoded(objects, selfAttention)
 
   /** The class and box heads, on one embedding per query. */
@@ -103,8 +102,7 @@ object DETR:
   )
 
   case class Params[V](
-      patchEmbedder: ImageToPatchEmbedder.Params[Embedding, V],
-      encoder: DETREncoder.Params[Embedding, V],
+      encoder: DocumentEncoder.Params[Embedding, V],
       decoder: DETRDecoder.Params[Embedding, Embedding, V],
       objectQueries: Tensor2[BoundingBox, Embedding, V],
       classification: AffineLayer.Params[Embedding, ObjectClasses, V],
@@ -125,7 +123,7 @@ object DETR:
         numQueries: Int,
         key: Key
     ) =
-      val (patchKey, encoderKey, decoderKey, queryKey, headsKey) = key.splitToTuple(5)
+      val (encoderKey, decoderKey, queryKey, headsKey) = key.splitToTuple(4)
       val (classKey, box1Key, box2Key, box3Key) = headsKey.splitToTuple(4)
       val boundingBoxExtent = Axis[BoundingBox] -> numQueries
       val embeddingExtent = Axis[DETR.Embedding] -> embedding
@@ -133,12 +131,11 @@ object DETR:
       val boxHiddenExtent = Axis[BoxHidden] -> embedding
       val boxHiddenExtent2 = Axis[Prime[BoxHidden]] -> embedding
       Params(
-        patchEmbedder = ImageToPatchEmbedder.Params.xavierUniform(embeddingExtent, patchKey),
-        encoder = DETREncoder.Params.xavierUniformDepthScaled(
+        encoder = DocumentEncoder.Params.xavierUniformDepthScaled(
           numLayers,
           numHeads,
           embeddingExtent,
-          embeddingMixedExtent,
+          Axis[DocumentEncoder.EmbeddingMixed] -> embeddingMixedExtent.size,
           encoderKey
         ),
         decoder = DETRDecoder.Params.xavierUniformDepthScaled(

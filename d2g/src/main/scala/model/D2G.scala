@@ -13,6 +13,7 @@ import dataset.RecordBatch
 import dataset.RecordEdges
 import dataset.RecordNodes
 import deepwit.base.AffineLayer
+import documentEncoder.DocumentEncoder
 import deepwit.embedder.LearnedAbsolutePositionalInjector
 import deepwit.init.Init
 import EdgeScorer.EdgeLogits
@@ -36,7 +37,7 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   import D2G.NodeQueryLogits
   import D2G.Scores
 
-  val encodeDocument = DocumentEncoder(params.encoder)
+  val encodeDocument = DocumentEncoder(Axis[Width], Axis[Height], Axis[Channel], params.encoder)
 
   private val embedNodes = NodeEmbedder(params.nodes.embedder)
   private val nodePosition = LearnedAbsolutePositionalInjector(params.nodes.positions)
@@ -230,7 +231,7 @@ object D2G:
       val (nodePositionKey, edgePositionKey) = positionKey.splitToTuple(2)
 
       Params(
-        encoder = DocumentEncoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingMixedExtent, encoderKey),
+        encoder = DocumentEncoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, Axis[DocumentEncoder.EmbeddingMixed] -> embeddingMixedExtent.size, encoderKey),
         nodes = NodeParams(
           decoder = NodeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, nodeDecoderKey),
           embedder = NodeEmbedder.Params(

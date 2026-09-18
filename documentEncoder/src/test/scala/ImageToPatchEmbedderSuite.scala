@@ -1,4 +1,4 @@
-package common
+package documentEncoder
 
 import deepwit.cnn.AffineConv2DLayer
 import deepwit.embedder.PositionalEncoding.sinusoidal2D

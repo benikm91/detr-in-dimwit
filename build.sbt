@@ -18,7 +18,7 @@ lazy val munit = "org.scalameta" %% "munit" % "1.0.0" % Test
 
 lazy val root = project
   .in(file("."))
-  .aggregate(dataset, common, detr, egtr, d2g)
+  .aggregate(dataset, documentEncoder, detr, egtr, d2g)
   .settings(
     name := "detr-root",
     publish / skip := true
@@ -36,11 +36,10 @@ lazy val dataset = project
     )
   )
 
-// Model parts the three models share and that are too specific to belong in DeepWit.
-lazy val common = project
-  .in(file("common"))
+lazy val documentEncoder = project
+  .in(file("documentEncoder"))
   .settings(
-    name := "common",
+    name := "documentEncoder",
     libraryDependencies ++= Seq(dimwit, deepwit, munit)
   )
 
@@ -62,21 +61,18 @@ lazy val modelSettings = Seq(
 
 lazy val detr = project
   .in(file("detr"))
-  .dependsOn(dataset, common)
+  .dependsOn(dataset, documentEncoder)
   .settings(name := "detr")
   .settings(modelSettings)
 
-// EGTR builds its scene graph on the detector, so it depends on detr — never the other way round.
 lazy val egtr = project
   .in(file("egtr"))
-  .dependsOn(detr)
+  .dependsOn(detr) // EGTR builds its scene graph on the detector, so it depends on detr.
   .settings(name := "egtr")
   .settings(modelSettings)
 
-// Document-to-graph transcription is a different answer to the same task, not a layer on top of
-// the detector, so it shares only the dataset with detr and egtr.
 lazy val d2g = project
   .in(file("d2g"))
-  .dependsOn(dataset, common)
+  .dependsOn(dataset, documentEncoder)
   .settings(name := "d2g")
   .settings(modelSettings)

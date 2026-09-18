@@ -1,4 +1,4 @@
-package common
+package documentEncoder
 
 import dimwit.*
 import deepwit.base.AffineLayer
