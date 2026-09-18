@@ -59,7 +59,10 @@ def trainTranscriber(setup: D2GSetup): Unit =
   trait X derives MeshLabel
   val mesh = Mesh1(MeshAxis[X] -> Jax.devices.size)
   val batchSize = setup.batchSizePerDevice * mesh.sizeOf(MeshAxis[X])
-  println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step")
+  val numSteps = setup.numSamples / batchSize
+  val warmupSteps = setup.warmupSamples / batchSize
+  val checkpointEvery = setup.checkpointEverySamples / batchSize
+  println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numSteps steps")
 
   val nodes = Axis[Node] -> setup.nodeSlots
   val edges = Axis[Edge] -> setup.edgeSlots
@@ -69,14 +72,8 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 
   val schedule: LearningRateSchedule =
-    LinearWarmup(setup.learningRate, setup.warmupSteps)
-      .followBy(
-        CosineDecay(
-          setup.learningRate,
-          setup.finalLearningRate,
-          setup.numIterations - setup.warmupSteps
-        )
-      )
+    LinearWarmup(setup.learningRate, warmupSteps)
+      .followBy(CosineDecay(setup.learningRate, setup.finalLearningRate, numSteps - warmupSteps))
   val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), setup.weightDecay), schedule)
 
   val initialParams = D2G.Params.init(
@@ -157,10 +154,10 @@ def trainTranscriber(setup: D2GSetup): Unit =
         jitGradientStep(images, records, state)
     .tapEvery(100):
       case (state, step) => println(monitor.report(step, state))
-    .tapEvery(setup.checkpointEvery):
+    .tapEvery(checkpointEvery):
       case (state, step) =>
         checkpointer.save(state, step)
         println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
-    .drop(setup.numIterations)
+    .drop(numSteps)
     .next()
   Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)
