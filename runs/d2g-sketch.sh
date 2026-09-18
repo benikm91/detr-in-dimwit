@@ -81,6 +81,15 @@ srun sarus run \
     cd ..
 
     cd detr-in-dimwit
+
+    # The Python side comes from the project itself: what its pyproject.toml declares (JAX, the Hub
+    # client the corpora come through), installed from its lock file into .venv by uv on the system
+    # interpreter. DimWit is pointed at that interpreter and does not sync on its own.
+    uv sync --frozen --no-managed-python
+    export DIMWIT_PYTHON_PATH="$PWD/.venv/bin/python"
+    export DIMWIT_SKIP_SYNC=true
+    unset DIMWIT_PYTHON_LIBRARY
+
     sbt "d2g/runMain d2gTrain $corpus $size"
     sbt "d2g/runMain d2gEval $corpus $size"
   ' d2g-sketch "$CORPUS" "$SIZE"
