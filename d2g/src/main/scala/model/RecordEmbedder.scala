@@ -11,6 +11,7 @@ import dataset.NodeClasses
 import dataset.RecordEdges
 import dataset.RecordNodes
 import deepwit.base.AffineLayer
+import deepwit.embedder.VocabularyEmbedder
 import dimwit.*
 import dimwit.Conversions.given
 
@@ -23,34 +24,34 @@ trait PartEmbedding derives Label // An embedding of a [[NodePart]] or a [[EdgeP
 /** Transforms a record node into a single embedding vector. */
 class NodeEmbedder[V: IsFloating](params: NodeEmbedder.Params[V]) extends (RecordNodes[Node] => Tensor2[Node, Embedding, V]):
 
+  private val nodeClass = VocabularyEmbedder(params.nodeClass)
+
+  // Coordinate vocabulary could be shared, yet we keep them separate just in case, preferring guaranteed capacity over slight speed gains.
+  private val startX = VocabularyEmbedder(params.startX)
+  private val startY = VocabularyEmbedder(params.startY)
+  private val endX = VocabularyEmbedder(params.endX)
+  private val endY = VocabularyEmbedder(params.endY)
+
   private val project = AffineLayer(params.projection)
 
   /** How wide the canvas a coordinate is placed on is, i.e. how fine a pixel is. */
-  private val canvas: Int = params.startX.shape(Axis[Pixel])
+  private val canvas: Int = params.startX.vocabularyEmbeddings.shape(Axis[Pixel])
 
   override def apply(nodes: RecordNodes[Node]): Tensor2[Node, Embedding, V] =
-    def placed(table: Tensor2[Pixel, PartEmbedding, V], coordinate: Tensor1[Node, Float32]) =
-      table.take(Axis[Pixel])(Pixels.of(coordinate, canvas))
-    val parts = Seq(
-      params.nodeClass.take(Axis[NodeClasses])(nodes.nodeClass),
-      placed(params.startX, nodes.startX),
-      placed(params.startY, nodes.startY),
-      placed(params.endX, nodes.endX),
-      placed(params.endY, nodes.endY)
-    )
-    stack(parts, Axis[NodePart])
-      .swap(Axis[NodePart], Axis[Node])
-      .flatten((Axis[NodePart], Axis[PartEmbedding]))
-      .vmap(Axis[Node])(project)
+    def pixels(coordinate: Tensor1[Node, Float32]) = Pixels.of(coordinate, canvas)
+    zipvmap(Axis[Node])(nodes.nodeClass, pixels(nodes.startX), pixels(nodes.startY), pixels(nodes.endX), pixels(nodes.endY)):
+      case (cls, sx, sy, ex, ey) =>
+        val parts = Seq(nodeClass(cls), startX(sx), startY(sy), endX(ex), endY(ey))
+        project(stack(parts, Axis[NodePart]).flatten((Axis[NodePart], Axis[PartEmbedding])))
 
 object NodeEmbedder:
 
   case class Params[V](
-      nodeClass: Tensor2[NodeClasses, PartEmbedding, V],
-      startX: Tensor2[Pixel, PartEmbedding, V],
-      startY: Tensor2[Pixel, PartEmbedding, V],
-      endX: Tensor2[Pixel, PartEmbedding, V],
-      endY: Tensor2[Pixel, PartEmbedding, V],
+      nodeClass: VocabularyEmbedder.Params[NodeClasses, PartEmbedding, V],
+      startX: VocabularyEmbedder.Params[Pixel, PartEmbedding, V],
+      startY: VocabularyEmbedder.Params[Pixel, PartEmbedding, V],
+      endX: VocabularyEmbedder.Params[Pixel, PartEmbedding, V],
+      endY: VocabularyEmbedder.Params[Pixel, PartEmbedding, V],
       projection: AffineLayer.Params[NodePart |*| PartEmbedding, Embedding, V]
   )
 
@@ -61,27 +62,23 @@ object NodeEmbedder:
 /** Transforms a record edge into a single embedding vector. */
 class EdgeEmbedder[V: IsFloating](params: EdgeEmbedder.Params[V]) extends (RecordEdges[Edge] => Tensor2[Edge, Embedding, V]):
 
+  private val edgeClass = VocabularyEmbedder(params.edgeClass)
+  private val subject = VocabularyEmbedder(params.subject)
+  private val obj = VocabularyEmbedder(params.obj)
   private val project = AffineLayer(params.projection)
 
   override def apply(edges: RecordEdges[Edge]): Tensor2[Edge, Embedding, V] =
-    def named(table: Tensor2[LinkedNode, PartEmbedding, V], end: Tensor1[Edge, Int32]) =
-      table.take(Axis[LinkedNode])(end)
-    val parts = Seq(
-      params.edgeClass.take(Axis[EdgeClasses])(edges.edgeClass),
-      named(params.subject, edges.subject),
-      named(params.obj, edges.obj)
-    )
-    stack(parts, Axis[EdgePart])
-      .swap(Axis[EdgePart], Axis[Edge])
-      .flatten((Axis[EdgePart], Axis[PartEmbedding]))
-      .vmap(Axis[Edge])(project)
+    zipvmap(Axis[Edge])(edges.edgeClass, edges.subject, edges.obj):
+      case (cls, subj, ob) =>
+        val parts = Seq(edgeClass(cls), subject(subj), obj(ob))
+        project(stack(parts, Axis[EdgePart]).flatten((Axis[EdgePart], Axis[PartEmbedding])))
 
 object EdgeEmbedder:
 
   case class Params[V](
-      edgeClass: Tensor2[EdgeClasses, PartEmbedding, V],
-      subject: Tensor2[LinkedNode, PartEmbedding, V],
-      obj: Tensor2[LinkedNode, PartEmbedding, V],
+      edgeClass: VocabularyEmbedder.Params[EdgeClasses, PartEmbedding, V],
+      subject: VocabularyEmbedder.Params[LinkedNode, PartEmbedding, V],
+      obj: VocabularyEmbedder.Params[LinkedNode, PartEmbedding, V],
       projection: AffineLayer.Params[EdgePart |*| PartEmbedding, Embedding, V]
   )
 

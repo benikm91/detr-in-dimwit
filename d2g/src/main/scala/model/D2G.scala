@@ -15,6 +15,7 @@ import dataset.RecordNodes
 import deepwit.base.AffineLayer
 import documentEncoder.DocumentEncoder
 import deepwit.embedder.LearnedAbsolutePositionalInjector
+import deepwit.embedder.VocabularyEmbedder
 import deepwit.init.Init
 import EdgeHead.EdgeLogits
 import NodeHead.NodeLogits
@@ -233,11 +234,11 @@ object D2G:
         nodes = NodeParams(
           decoder = NodeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, nodeDecoderKey),
           embedder = NodeEmbedder.Params(
-            nodeClass = Init.xavierUniform(nodeClassExtent, partExtent, nodeClassKey),
-            startX = Init.xavierUniform(pixelExtent, partExtent, startXKey),
-            startY = Init.xavierUniform(pixelExtent, partExtent, startYKey),
-            endX = Init.xavierUniform(pixelExtent, partExtent, endXKey),
-            endY = Init.xavierUniform(pixelExtent, partExtent, endYKey),
+            nodeClass = VocabularyEmbedder.Params.init(nodeClassExtent, partExtent, nodeClassKey),
+            startX = VocabularyEmbedder.Params.init(pixelExtent, partExtent, startXKey),
+            startY = VocabularyEmbedder.Params.init(pixelExtent, partExtent, startYKey),
+            endX = VocabularyEmbedder.Params.init(pixelExtent, partExtent, endXKey),
+            endY = VocabularyEmbedder.Params.init(pixelExtent, partExtent, endYKey),
             projection = AffineLayer.Params.init(nodePartExtent, embeddingExtent, nodeProjectionKey)
           ),
           head = NodeHead.Params(
@@ -253,9 +254,9 @@ object D2G:
         edges = EdgeParams(
           decoder = EdgeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, edgeDecoderKey),
           embedder = EdgeEmbedder.Params(
-            edgeClass = Init.xavierUniform(edgeClassExtent, partExtent, edgeClassKey),
-            subject = Init.xavierUniform(linkedExtent, partExtent, subjectKey),
-            obj = Init.xavierUniform(linkedExtent, partExtent, objKey),
+            edgeClass = VocabularyEmbedder.Params.init(edgeClassExtent, partExtent, edgeClassKey),
+            subject = VocabularyEmbedder.Params.init(linkedExtent, partExtent, subjectKey),
+            obj = VocabularyEmbedder.Params.init(linkedExtent, partExtent, objKey),
             projection = AffineLayer.Params.init(edgePartExtent, embeddingExtent, edgeProjectionKey)
           ),
           head = EdgeHead.Params(

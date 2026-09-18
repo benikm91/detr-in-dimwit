@@ -21,20 +21,21 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Node,
 
   import NodeHead.NodeLogits
 
-  private val classify = AffineLayer(params.nodeClass)
+  private val nodeClass = AffineLayer(params.nodeClass)
+  private val startX = AffineLayer(params.startX)
+  private val startY = AffineLayer(params.startY)
+  private val endX = AffineLayer(params.endX)
+  private val endY = AffineLayer(params.endY)
 
-  /** How wide the canvas a coordinate is scored on is, i.e. how fine a pixel is. */
   val canvas: Int = params.startX.bias.shape(Axis[Pixel])
 
   override def apply(embeddings: Tensor2[Node, Embedding, V]): NodeLogits[V] =
-    def placed(coordinate: AffineLayer.Params[Embedding, Pixel, V]) =
-      embeddings.vmap(Axis[Node])(AffineLayer(coordinate))
     NodeLogits(
-      nodeClass = embeddings.vmap(Axis[Node])(classify),
-      startX = placed(params.startX),
-      startY = placed(params.startY),
-      endX = placed(params.endX),
-      endY = placed(params.endY)
+      nodeClass = embeddings.vmap(Axis[Node])(nodeClass),
+      startX = embeddings.vmap(Axis[Node])(startX),
+      startY = embeddings.vmap(Axis[Node])(startY),
+      endX = embeddings.vmap(Axis[Node])(endX),
+      endY = embeddings.vmap(Axis[Node])(endY)
     )
 
   /** The scores settled. Settling on [[NodeClass.NoNode]] is where the nodes of a record stop.
@@ -85,15 +86,15 @@ class EdgeHead[V: IsFloating](params: EdgeHead.Params[V]) extends (Tensor2[Edge,
 
   import EdgeHead.EdgeLogits
 
-  private val classify = AffineLayer(params.edgeClass)
+  private val edgeClass = AffineLayer(params.edgeClass)
+  private val subject = AffineLayer(params.subject)
+  private val obj = AffineLayer(params.obj)
 
   override def apply(embeddings: Tensor2[Edge, Embedding, V]): EdgeLogits[V] =
-    def named(end: AffineLayer.Params[Embedding, LinkedNode, V]) =
-      embeddings.vmap(Axis[Edge])(AffineLayer(end))
     EdgeLogits(
-      edgeClass = embeddings.vmap(Axis[Edge])(classify),
-      subject = named(params.subject),
-      obj = named(params.obj)
+      edgeClass = embeddings.vmap(Axis[Edge])(edgeClass),
+      subject = embeddings.vmap(Axis[Edge])(subject),
+      obj = embeddings.vmap(Axis[Edge])(obj)
     )
 
   /** The scores settled. Settling on [[EdgeClass.NoEdge]] is where the relationships of a record
