@@ -81,9 +81,12 @@ srun sarus run \
     cd detr-in-dimwit
 
     # The Python side comes from the project itself: what its pyproject.toml declares (JAX, the Hub
-    # client the corpora come through), installed from its lock file into .venv by uv on the system
-    # interpreter. DimWit is pointed at that interpreter and does not sync on its own.
-    uv sync --frozen --no-managed-python
+    # client the corpora come through), installed from its lock file into .venv by uv. The
+    # interpreter is one uv installs too: ScalaPy embeds Python through libpython, which the
+    # image's own interpreter does not ship. Both land on /cache so the next job has them.
+    export UV_PYTHON_INSTALL_DIR=/cache/uv/python
+    export UV_CACHE_DIR=/cache/uv/cache
+    uv sync --frozen
     export DIMWIT_PYTHON_PATH="$PWD/.venv/bin/python"
     export DIMWIT_SKIP_SYNC=true
     unset DIMWIT_PYTHON_LIBRARY
