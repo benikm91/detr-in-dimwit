@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --export=ALL,SARUS_HOME=TRUE
 #SBATCH --job-name=detr-sketch
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu_top_ia
 #SBATCH --account=cai_cv
-#SBATCH --gres=gpu:a100:2
+#SBATCH --gres=gpu:a100sxm:2
 #SBATCH --exclude=sanjose,irvine
 #SBATCH --time=4:00:00
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/detr-sketch_%j.out
