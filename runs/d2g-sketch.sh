@@ -1,6 +1,7 @@
 #!/bin/bash
+#SBATCH --export=ALL,SARUS_HOME=TRUE
 #SBATCH --job-name=d2g-sketch
-#SBATCH --partition=gpu_top_ia
+#SBATCH --partition=gpu
 #SBATCH --account=cai_cv
 #SBATCH --gres=gpu:2
 #SBATCH --exclude=sanjose,irvine
@@ -41,7 +42,7 @@ module load sarus/1.6.4
 IMAGE="benikm91/dimwit-gpu:snapshot"
 sarus pull "$IMAGE"
 
-srun sarus run \
+sarus run \
   --mount=type=bind,source="$CACHE_DIR",destination=/cache \
   --mount=type=bind,source="$OUTPUT_DIR",destination=/output \
   --mount=type=bind,source="$CHECKPOINT_DIR",destination=/checkpoints \
@@ -81,14 +82,12 @@ srun sarus run \
     cd ..
 
     cd detr-in-dimwit
+    uv sync
+    DIMWIT_PYTHON_PATH=/usr/src/detr-in-dimwit/.venv/bin/python
 
-    # The Python side comes from the project itself: what its pyproject.toml declares (JAX, the Hub
-    # client the corpora come through), installed from its lock file into .venv by uv. The
-    # interpreter is one uv installs too: ScalaPy embeds Python through libpython, which the
-    # interpreter of the image does not ship. Both land on /cache so the next job has them.
-    uv sync --frozen
-    export DIMWIT_PYTHON_PATH="$PWD/.venv/bin/python"
-    export DIMWIT_SKIP_SYNC=true
+
+    # The image points DimWit at its own Python. Ours comes from pyproject.toml instead: DimWit runs uv sync and uses the venv that gives.
+    unset DIMWIT_SKIP_SYNC DIMWIT_PYTHON_PATH DIMWIT_PYTHON_LIBRARY
     unset DIMWIT_PYTHON_LIBRARY
 
     sbt "d2g/runMain d2gTrain $corpus $size"

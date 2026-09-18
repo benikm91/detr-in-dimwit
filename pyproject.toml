@@ -11,3 +11,6 @@ dependencies = [
     # hf-xet makes the ~8.6 GB train split download noticeably faster.
     "huggingface-hub[hf-xet]>=0.36",
 ]
+
+[tool.uv]
+python-preference = "only-managed"
