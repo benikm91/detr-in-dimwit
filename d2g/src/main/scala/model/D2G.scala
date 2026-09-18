@@ -13,7 +13,6 @@ import dataset.RecordBatch
 import dataset.RecordEdges
 import dataset.RecordNodes
 import deepwit.base.AffineLayer
-import common.ImageToPatchEmbedder
 import deepwit.embedder.LearnedAbsolutePositionalInjector
 import deepwit.init.Init
 import EdgeScorer.EdgeLogits
@@ -26,10 +25,10 @@ import scala.language.implicitConversions
 
 /** Document-to-graph model based on remaining-node prediction.
   *
-  * The document is embedded patch by patch and attended over by the encoder.
-  * The graph is predicted in two stages:
-  * 1. the nodes based on cross-attenting the document
-  * 2. the relationships based on cross-attenting the document and the nodes.
+  * 1. The document (or: image) is embedded by a vision transformer to a sequence of patch embeddings.
+  * 2. The graph is predicted in two stages:
+  *   a. the nodes based on cross-attenting the document (1)
+  *   b. the relationships based on cross-attenting the document (1) and the nodes (2a).
   */
 class D2G[V: IsFloating](params: D2G.Params[V]):
 
@@ -37,28 +36,19 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   import D2G.NodeQueryLogits
   import D2G.Scores
 
-  // Document encoding
-  private val patches = ImageToPatchEmbedder(Axis[Width], Axis[Height], Axis[Channel], params.patchEmbedder)
-  private val encoder = DocumentEncoder(params.encoder)
+  val encodeDocument = DocumentEncoder(params.encoder)
 
-  // Graph node decoding
   private val embedNodes = NodeEmbedder(params.nodes.embedder)
   private val nodePosition = LearnedAbsolutePositionalInjector(params.nodes.positions)
   private val nodeDecoder = NodeDecoder(params.nodes.decoder)
   val nodeScorer = NodeScorer(params.nodes.scorer)
 
-  // Graph edge decoding
   private val embedEdges = EdgeEmbedder(params.edges.embedder)
   private val edgePosition = LearnedAbsolutePositionalInjector(params.edges.positions)
   private val edgeDecoder = EdgeDecoder(params.edges.decoder)
   val edgeScorer = EdgeScorer(params.edges.scorer)
 
   private val pool = params.nodes.queries.shape(Axis[Query])
-
-  /** The document as the decoders read it. Transcription asks about the same document at every
-    * slot, so it encodes once and asks with the result.
-    */
-  def encodeDocument(document: Tensor3[Width, Height, Channel, V]): Tensor2[Patch, Embedding, V] = encoder(patches(document))
 
   /** What two queries of the pool answer. Queries selected randomly. */
   def logits(document: Tensor3[Width, Height, Channel, V], taken: Record[Node, Edge], asked: Key): Scores[V] =
@@ -158,7 +148,6 @@ object D2G:
     )
 
   case class Params[V](
-      patchEmbedder: ImageToPatchEmbedder.Params[Embedding, V],
       encoder: DocumentEncoder.Params[Embedding, V],
       nodes: Params.NodeParams[V],
       edges: Params.EdgeParams[V]
@@ -214,7 +203,7 @@ object D2G:
         canvas: Int,
         key: Key
     ): Params[Float32] =
-      val (patchKey, encoderKey, decoderKey, embedderKey, scorerKey, tokenKey, positionKey) = key.splitToTuple(7)
+      val (encoderKey, decoderKey, embedderKey, scorerKey, tokenKey, positionKey) = key.splitToTuple(6)
 
       val embeddingExtent = Axis[Embedding] -> embedding
       val embeddingMixedExtent = Axis[EmbeddingMixed] -> embedding * 4
@@ -241,7 +230,6 @@ object D2G:
       val (nodePositionKey, edgePositionKey) = positionKey.splitToTuple(2)
 
       Params(
-        patchEmbedder = ImageToPatchEmbedder.Params.xavierUniform(embeddingExtent, patchKey),
         encoder = DocumentEncoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingMixedExtent, encoderKey),
         nodes = NodeParams(
           decoder = NodeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, nodeDecoderKey),

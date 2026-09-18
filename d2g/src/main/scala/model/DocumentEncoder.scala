@@ -15,26 +15,29 @@ import deepwit.attention.MultiHeadSelfAttention
 import deepwit.base.AffineLayer
 import deepwit.normalization.LayerNorm
 import deepwit.transformer.TransformerBlock
+import common.ImageToPatchEmbedder
 import dimwit.*
 import dimwit.Conversions.given
 import dimwit.Label as Λ
 
 import scala.language.implicitConversions
 
-/** A full self-attention encoder of the document's patches. */
-class DocumentEncoder[Embedding: Λ, V: IsFloating](params: DocumentEncoder.Params[Embedding, V]) extends (Tensor2[Patch, Embedding, V] => Tensor2[Patch, Embedding, V]):
+/** A vision transformer over the document: its patches embedded, then full self-attention among them. */
+class DocumentEncoder[Embedding: Λ, V: IsFloating](params: DocumentEncoder.Params[Embedding, V]) extends (Tensor3[Width, Height, Channel, V] => Tensor2[Patch, Embedding, V]):
 
+  private val patches = ImageToPatchEmbedder(Axis[Width], Axis[Height], Axis[Channel], params.patchEmbedder)
   private val blocks = params.blocks.map(DocumentEncoderBlock(_))
   private val finalNorm = LayerNorm(params.finalNorm)
 
-  override def apply(patches: Tensor2[Patch, Embedding, V]): Tensor2[Patch, Embedding, V] =
+  override def apply(document: Tensor3[Width, Height, Channel, V]): Tensor2[Patch, Embedding, V] =
     blocks
-      .foldLeft(patches)((encoded, block) => block(encoded))
+      .foldLeft(patches(document))((encoded, block) => block(encoded))
       .vmap(Axis[Patch])(finalNorm)
 
 object DocumentEncoder:
 
   case class Params[Embedding, V](
+      patchEmbedder: ImageToPatchEmbedder.Params[Embedding, V],
       blocks: List[DocumentEncoderBlock.Params[Embedding, V]],
       finalNorm: LayerNorm.Params[Embedding, V]
   )
@@ -42,8 +45,10 @@ object DocumentEncoder:
   object Params:
 
     def xavierUniformDepthScaled[Embedding: Λ, V: IsFloating](numBlocks: Int, numHeads: Int, embeddingExtent: AxisExtent[Embedding], embeddingMixedExtent: AxisExtent[EmbeddingMixed], key: Key, vtype: VType[V] = VType[Float32]): Params[Embedding, V] =
+      val (patchKey, blocksKey) = key.splitToTuple(2)
       Params(
-        blocks = key.split(numBlocks).map(DocumentEncoderBlock.Params.xavierUniformDepthScaled(numBlocks, numHeads, embeddingExtent, embeddingMixedExtent, _, vtype)).toList,
+        patchEmbedder = ImageToPatchEmbedder.Params.xavierUniform(embeddingExtent, patchKey, vtype),
+        blocks = blocksKey.split(numBlocks).map(DocumentEncoderBlock.Params.xavierUniformDepthScaled(numBlocks, numHeads, embeddingExtent, embeddingMixedExtent, _, vtype)).toList,
         finalNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
       )
 
