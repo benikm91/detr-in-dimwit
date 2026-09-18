@@ -4,7 +4,7 @@
 #SBATCH --account=cai_cv
 #SBATCH --gres=gpu:2
 #SBATCH --exclude=sanjose,irvine
-#SBATCH --time=12:00:00
+#SBATCH --time=4:00:00
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/d2g-sketch_%j.out
 #SBATCH --error=/cluster/home/%u/.logs/slurm/%j/d2g-sketch_%j.err
 #
