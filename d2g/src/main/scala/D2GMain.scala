@@ -17,7 +17,7 @@ import dataset.Corpus
 def d2gTrain(corpus: String, size: String): Unit = trainTranscriber(D2GSetup(Corpus.named(corpus), D2GModelConfiguration.named(size)))
 
 @main
-def d2gEval(corpus: String, size: String): Unit = scoreTranscriber(D2GSetup(Corpus.named(corpus), D2GModelConfiguration.named(size)), size, width = 1)
+def d2gEval(corpus: String, size: String): Unit = scoreTranscriber(D2GSetup(Corpus.named(corpus), D2GModelConfiguration.named(size)), size)
 
 @main
 def d2gPlot(corpus: String, size: String): Unit = plotTranscriber(D2GSetup(Corpus.named(corpus), D2GModelConfiguration.named(size)))
