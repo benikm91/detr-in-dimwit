@@ -30,7 +30,6 @@ class EGTRSuite extends FunSuite:
   override def munitTimeout: scala.concurrent.duration.Duration = scala.concurrent.duration.Duration(5, "min")
 
   private val imageSize = 32
-  private val patchSize = 16
   private val queries = 8
   private val slots = 3
   private val predicates = RelationClass.values.length
@@ -40,7 +39,6 @@ class EGTRSuite extends FunSuite:
     numHeads = 2,
     embedding = 16,
     numQueries = queries,
-    patchSize = patchSize,
     key = Random.Key(0)
   )
   private val params = EGTR.Params.init(detector, sourceExtent = 16, hiddenExtent = 16, key = Random.Key(1))

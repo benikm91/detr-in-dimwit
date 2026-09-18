@@ -12,12 +12,13 @@ ThisBuild / csrConfiguration := csrConfiguration.value
 
 lazy val dimwit = "ch.contrafactus" %% "dimwit-core" % "0.2-SNAPSHOT" changing ()
 lazy val dimwitSharding = "ch.contrafactus" %% "dimwit-sharding" % "0.1.0-SNAPSHOT" changing ()
+lazy val deepwit = "ch.contrafactus" %% "deepwit-core" % "0.2-SNAPSHOT" changing ()
 lazy val scalapy = "dev.scalapy" %% "scalapy-core" % "0.5.3"
 lazy val munit = "org.scalameta" %% "munit" % "1.0.0" % Test
 
 lazy val root = project
   .in(file("."))
-  .aggregate(dataset, detr, egtr, d2g)
+  .aggregate(dataset, common, detr, egtr, d2g)
   .settings(
     name := "detr-root",
     publish / skip := true
@@ -35,14 +36,22 @@ lazy val dataset = project
     )
   )
 
+// Model parts the three models share and that are too specific to belong in DeepWit.
+lazy val common = project
+  .in(file("common"))
+  .settings(
+    name := "common",
+    libraryDependencies ++= Seq(dimwit, deepwit, munit)
+  )
+
 lazy val modelSettings = Seq(
   libraryDependencies ++= Seq(
     dimwit,
     dimwitSharding,
+    deepwit,
     scalapy,
     munit,
-    "ch.contrafactus" %% "plotwit-core" % "0.2-SNAPSHOT" changing (),
-    "ch.contrafactus" %% "deepwit-core" % "0.2-SNAPSHOT" changing ()
+    "ch.contrafactus" %% "plotwit-core" % "0.2-SNAPSHOT" changing ()
   ),
   javaOptions ++= Seq(
     // "-XX:G1PeriodicGCInterval=1000"
@@ -53,7 +62,7 @@ lazy val modelSettings = Seq(
 
 lazy val detr = project
   .in(file("detr"))
-  .dependsOn(dataset)
+  .dependsOn(dataset, common)
   .settings(name := "detr")
   .settings(modelSettings)
 
@@ -68,6 +77,6 @@ lazy val egtr = project
 // the detector, so it shares only the dataset with detr and egtr.
 lazy val d2g = project
   .in(file("d2g"))
-  .dependsOn(dataset)
+  .dependsOn(dataset, common)
   .settings(name := "d2g")
   .settings(modelSettings)

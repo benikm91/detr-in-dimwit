@@ -13,7 +13,7 @@ import dataset.RecordBatch
 import dataset.RecordEdges
 import dataset.RecordNodes
 import deepwit.base.AffineLayer
-import deepwit.embedder.ImageToPatchEmbedder
+import common.ImageToPatchEmbedder
 import deepwit.embedder.LearnedAbsolutePositionalInjector
 import deepwit.init.Init
 import EdgeScorer.EdgeLogits
@@ -38,7 +38,7 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   import D2G.Scores
 
   // Document encoding
-  private val patches = ImageToPatchEmbedder(params.patchEmbedder)
+  private val patches = ImageToPatchEmbedder(Axis[Width], Axis[Height], Axis[Channel], params.patchEmbedder)
   private val encoder = DocumentEncoder(params.encoder)
 
   // Graph node decoding
@@ -158,7 +158,7 @@ object D2G:
     )
 
   case class Params[V](
-      patchEmbedder: ImageToPatchEmbedder.Params[Width, Height, Channel, Embedding, V],
+      patchEmbedder: ImageToPatchEmbedder.Params[Embedding, V],
       encoder: DocumentEncoder.Params[Embedding, V],
       nodes: Params.NodeParams[V],
       edges: Params.EdgeParams[V]
@@ -211,7 +211,6 @@ object D2G:
         nodes: Int,
         edges: Int,
         queries: Int,
-        patchSize: Int,
         canvas: Int,
         key: Key
     ): Params[Float32] =
@@ -242,13 +241,7 @@ object D2G:
       val (nodePositionKey, edgePositionKey) = positionKey.splitToTuple(2)
 
       Params(
-        patchEmbedder = ImageToPatchEmbedder.Params.init(
-          Axis[Width] -> patchSize,
-          Axis[Height] -> patchSize,
-          Axis[Channel] -> 1,
-          embeddingExtent,
-          patchKey
-        ),
+        patchEmbedder = ImageToPatchEmbedder.Params.xavierUniform(embeddingExtent, patchKey),
         encoder = DocumentEncoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingMixedExtent, encoderKey),
         nodes = NodeParams(
           decoder = NodeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, nodeDecoderKey),

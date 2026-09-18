@@ -187,7 +187,7 @@ class D2GSuite extends FunSuite:
   private val canvas = 32
   private val nodes = Axis[Node] -> 4
   private val edges = Axis[Edge] -> 3
-  private val params = D2G.Params.init(numLayers = 2, numHeads = 2, embedding = 32, nodes = nodes.size, edges = edges.size, queries = 2, patchSize = 16, canvas = canvas, key = Random.Key(0))
+  private val params = D2G.Params.init(numLayers = 2, numHeads = 2, embedding = 32, nodes = nodes.size, edges = edges.size, queries = 2, canvas = canvas, key = Random.Key(0))
   private val model = D2G(params)
   private val asked = Random.Key(7)
 

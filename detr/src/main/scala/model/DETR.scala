@@ -10,7 +10,7 @@ import dataset.ObjectClass
 import deepwit.activation.relu
 import deepwit.activation.sigmoid
 import deepwit.base.AffineLayer
-import deepwit.embedder.ImageToPatchEmbedder
+import common.ImageToPatchEmbedder
 import deepwit.normalization.LayerNorm
 import deepwit.attention.MultiHeadAttention
 import deepwit.init.Init
@@ -33,7 +33,7 @@ class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height
   import DETR.Patch
   import DETR.Prediction
 
-  private val patches = ImageToPatchEmbedder(params.patchEmbedder)
+  private val patches = ImageToPatchEmbedder(Axis[Width], Axis[Height], Axis[Channel], params.patchEmbedder)
   private val encoder = DETREncoder(Axis[Patch], params.encoder)
   private val decoder = DETRDecoder(Axis[Patch], Axis[BoundingBox], params.decoder)
   private val classify = AffineLayer(params.classification)
@@ -103,7 +103,7 @@ object DETR:
   )
 
   case class Params[V](
-      patchEmbedder: ImageToPatchEmbedder.Params[Width, Height, Channel, Embedding, V],
+      patchEmbedder: ImageToPatchEmbedder.Params[Embedding, V],
       encoder: DETREncoder.Params[Embedding, V],
       decoder: DETRDecoder.Params[Embedding, Embedding, V],
       objectQueries: Tensor2[BoundingBox, Embedding, V],
@@ -123,7 +123,6 @@ object DETR:
         numHeads: Int,
         embedding: Int,
         numQueries: Int,
-        patchSize: Int,
         key: Key
     ) =
       val (patchKey, encoderKey, decoderKey, queryKey, headsKey) = key.splitToTuple(5)
@@ -134,13 +133,7 @@ object DETR:
       val boxHiddenExtent = Axis[BoxHidden] -> embedding
       val boxHiddenExtent2 = Axis[Prime[BoxHidden]] -> embedding
       Params(
-        patchEmbedder = ImageToPatchEmbedder.Params.xavierUniform(
-          Axis[Width] -> patchSize,
-          Axis[Height] -> patchSize,
-          Axis[Channel] -> 1,
-          embeddingExtent,
-          patchKey
-        ),
+        patchEmbedder = ImageToPatchEmbedder.Params.xavierUniform(embeddingExtent, patchKey),
         encoder = DETREncoder.Params.xavierUniformDepthScaled(
           numLayers,
           numHeads,

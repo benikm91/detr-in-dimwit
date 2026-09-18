@@ -48,7 +48,6 @@ case class EGTRSetup(
       */
     sourceExtent: Int = 128,
     hiddenExtent: Int = 128,
-    patchSize: Int = 16,
     numIterations: Int = 200_000,
     batchSize: Int = 64,
     learningRate: Float = 3e-4f,

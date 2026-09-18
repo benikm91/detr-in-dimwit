@@ -89,7 +89,6 @@ def trainSceneGraph(setup: EGTRSetup, detectorRun: Option[String] = None): Unit 
         numHeads = setup.numHeads,
         embedding = setup.embedding,
         numQueries = setup.numQueries,
-        patchSize = setup.patchSize,
         key = Random.Key(setup.seed)
       )
 

@@ -85,7 +85,6 @@ def trainTranscriber(setup: D2GSetup): Unit =
     nodes = setup.nodeSlots,
     edges = setup.edgeSlots,
     queries = setup.queryPool,
-    patchSize = setup.patchSize,
     canvas = Canvas,
     key = initKey
   )

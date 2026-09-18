@@ -15,7 +15,6 @@ case class D2GSetup(
     numLayers: Int = 3,
     numHeads: Int = 4,
     embedding: Int = 128,
-    patchSize: Int = 16,
     queryPool: Int = 6,
 
     // Train configuration

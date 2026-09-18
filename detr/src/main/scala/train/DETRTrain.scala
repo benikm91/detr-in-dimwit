@@ -73,7 +73,6 @@ def trainDetector(setup: DETRSetup): Unit =
     numHeads = setup.numHeads,
     embedding = setup.embedding,
     numQueries = setup.numQueries,
-    patchSize = setup.patchSize,
     key = Random.Key(setup.seed)
   )
 

@@ -32,7 +32,6 @@ case class DETRSetup(
     numLayers: Int = 3,
     numHeads: Int = 4,
     embedding: Int = 128,
-    patchSize: Int = 16,
     numIterations: Int = 200_000,
     batchSize: Int = 64,
     learningRate: Float = 3e-4f,
