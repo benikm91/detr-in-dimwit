@@ -236,15 +236,8 @@ class EdgeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
     x = x + x.vmap(contextAxis)(embedding => mlp(mlpPreNorm(embedding)))
     x.deconcatenate(contextAxis, (edges.extent(Axis[Edge]), predictions.extent(Axis[EdgePrediction])))
 
-  /** Attention onto the nodes that are there, which is data rather than shape and so is built
-    * around the mask it is given rather than once.
-    *
-    * A record with no node at all only arises in transcription, when the model ends the nodes at
-    * the first slot. Every slot is read then, since a row of nothing but `-inf` has no softmax,
-    * and the model is left to answer with no relationship.
-    */
   private def nodeAttention(presentMask: Tensor1[Node, Bool], context: AxisExtent[Context]) =
-    val readable = where_!(presentMask.any, presentMask, true)
+    val readable = where_!(presentMask.any, presentMask, true) // in case no nodes are present => make all slots readable to prevent NaNs in attention
     val mask = readable.broadcastTo(Shape2(context, readable.shape.extent(Axis[Node])))
     MultiHeadCustomAttention[Node, Embedding, Context, Embedding, V](params.nodeAttention, _ => mask, AttentionScore.scaledDotProduct)
 
