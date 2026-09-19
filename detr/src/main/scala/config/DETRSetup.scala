@@ -32,8 +32,9 @@ case class DETRSetup(
     numLayers: Int = 3,
     numHeads: Int = 4,
     embedding: Int = 128,
-    numIterations: Int = 200_000,
-    batchSize: Int = 64,
+
+    numSamples: Int = 200_000 * 64,
+    batchSizePerDevice: Int = 64,
     learningRate: Float = 3e-4f,
 
     /** Where the cosine bottoms out. Aligned with the other models. */
@@ -48,8 +49,8 @@ case class DETRSetup(
     maxGradientNorm: Float = 1f,
 
     /** How long the rate climbs before it starts to fall. */
-    warmupSteps: Int = 2_000,
-    checkpointEvery: Int = 10_000,
+    warmupSamples: Int = 2_000 * 64,
+    checkpointEverySamples: Int = 10_000 * 64,
     seed: Int = 0
 ):
   require(
@@ -59,7 +60,7 @@ case class DETRSetup(
 
   override def toString: String =
     s"DETRSetup(${corpus.repoId}, layers=$numLayers, heads=$numHeads, embedding=$embedding, " +
-      s"queries=$numQueries, objects<=${corpus.maxNodes}, iterations=$numIterations, batch=$batchSize)"
+      s"queries=$numQueries, objects<=${corpus.maxNodes}, samples=$numSamples, batch=$batchSizePerDevice per device)"
 
 object DETRSetup:
 

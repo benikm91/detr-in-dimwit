@@ -12,6 +12,7 @@ import egtr.config.*
 import dataset.Box
 import dataset.Detection
 import dataset.DetectionBatch
+import dataset.ObjectBatch
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
@@ -23,6 +24,8 @@ import deepwit.optimizer.clipGlobalNorm
 import dataset.Runs
 import dimwit.*
 import dimwit.Conversions.given
+import dimwit.jax.Jax
+import dimwit.sharding.*
 import deepwit.optimizer.CosineDecay
 import deepwit.optimizer.LearningRateSchedule
 import deepwit.optimizer.LearningRateScheduler
@@ -35,10 +38,10 @@ import dimwit.tensor.Tensor4
 
 import scala.language.implicitConversions
 
-/** Axis of a batch of drawings. Named for the drawings rather than the batch because the graph
-  * axes are already called after the boxes they run over.
-  */
-private trait Drawing derives Label
+private trait Batch derives Label
+
+/** Mesh axis the batch is split over. */
+private trait X derives MeshLabel
 
 case class EGTRTrainState(
     params: EGTR.Params[Float32],
@@ -54,24 +57,34 @@ case class EGTRTrainState(
   * own attention, so they have little to say until the detection is roughly right, and the
   * [[EGTRLoss]] smoothing keeps them quiet until it is. The detector is not frozen: it keeps
   * training on the joint loss.
+  *
+  * The batch grows with the devices, not the step count: every device takes a batch of its own and
+  * the gradients are summed across them before the parameters move.
   */
 def trainSceneGraph(setup: EGTRSetup, detectorRun: Option[String] = None): Unit =
   dimwit.initialize()
   println(s"training $setup")
 
+  val mesh = Mesh1(MeshAxis[X] -> Jax.devices.size)
+  val batchSize = setup.batchSizePerDevice * mesh.sizeOf(MeshAxis[X])
+  val numSteps = setup.numSamples / batchSize
+  val warmupSteps = setup.warmupSamples / batchSize
+  val checkpointEvery = setup.checkpointEverySamples / batchSize
+  println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numSteps steps")
+
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
-  val batches = data.objectBatches(Axis[Drawing] -> setup.batchSize)
+  val batches = data.objectBatches(Axis[Batch] -> batchSize)
 
   /** Linear warmup into a cosine decay to a floor. A constant rate keeps taking steps the size it
     * started with, so the model never settles.
     */
   val schedule: LearningRateSchedule =
-    LinearWarmup(setup.learningRate, setup.warmupSteps)
+    LinearWarmup(setup.learningRate, warmupSteps)
       .followBy(
         CosineDecay(
           setup.learningRate,
           setup.finalLearningRate,
-          setup.numIterations - setup.warmupSteps
+          numSteps - warmupSteps
         )
       )
   val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), setup.weightDecay), schedule)
@@ -105,65 +118,64 @@ def trainSceneGraph(setup: EGTRSetup, detectorRun: Option[String] = None): Unit 
   val loss = EGTRLoss(VType[Float32], HungarianLoss(VType[Float32])())()
 
   def cost(
-      images: Tensor4[Drawing, Width, Height, Channel, Float32],
-      objects: DetectionBatch[Drawing, BoundingBox, Float32],
-      relations: Tensor4[Drawing, BoundingBox, RelatedBox, RelationClasses, Float32]
+      images: Tensor4[Batch |@| X, Width, Height, Channel, Float32],
+      objects: DetectionBatch[Batch |@| X, BoundingBox, Float32],
+      relations: Tensor4[Batch |@| X, BoundingBox, RelatedBox, RelationClasses, Float32]
   )(params: EGTR.Params[Float32]): Tensor0[Float32] =
     val model = EGTR(params)
-    zipvmap(Axis[Drawing])(images, objects.box.centerX, objects.box.centerY, objects.box.width, objects.box.height, objects.label, relations):
+    zipvmap(Axis[Batch |@| X])(images, objects.box.centerX, objects.box.centerY, objects.box.width, objects.box.height, objects.label, relations):
       case (image, centerX, centerY, width, height, label, edges) =>
         val target = SceneGraph(Detection(Box(centerX, centerY, width, height), label), edges)
         loss(model.logits(image), target)
     .mean
 
   def gradientStep(
-      images: Tensor4[Drawing, Width, Height, Channel, Float32],
-      objects: DetectionBatch[Drawing, BoundingBox, Float32],
-      relations: Tensor4[Drawing, BoundingBox, RelatedBox, RelationClasses, Float32],
+      images: Tensor4[Batch |@| X, Width, Height, Channel, Float32],
+      objects: DetectionBatch[Batch |@| X, BoundingBox, Float32],
+      relations: Tensor4[Batch |@| X, BoundingBox, RelatedBox, RelationClasses, Float32],
       state: EGTRTrainState
   ) =
     val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, objects, relations))(state.params)
     val clipped = gradients.clipGlobalNorm(setup.maxGradientNorm)
     val (params, optimizerState) = optimizer.update(clipped, state.params, state.optimizerState)
-    val newState = EGTRTrainState(params, optimizerState, lastCost)
-    // The donated state and the batch are dead the moment the step returns, so their device
-    // buffers go with them — as in trainDetector.
-    summon[TensorTree[EGTRTrainState]].map(
-      state,
-      [T <: Tuple, V] =>
-        (labels: Labels[T]) ?=>
-          (x: Tensor[T, V]) =>
-            if !x.isTracer then
-              dimwit.python.PyBridge.toPyTensor(x).addressable_data(0).delete()
-            x
-    )
-    if !images.isTracer then
-      dimwit.python.PyBridge.toPyTensor(images).addressable_data(0).delete()
-    if !objects.box.centerX.isTracer then
-      dimwit.python.PyBridge.toPyTensor(objects.box.centerX).addressable_data(0).delete
-    if !relations.isTracer then
-      dimwit.python.PyBridge.toPyTensor(relations).addressable_data(0).delete
-    newState
+    EGTRTrainState(params, optimizerState, lastCost)
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
+
+  /** The batch with every device holding its share of the drawings; the step sees one axis. */
+  def shard(
+      batch: dataset.Batch[Batch, Width, Height, Channel, ObjectBatch[Batch, BoundingBox]]
+  ): (
+      Tensor4[Batch |@| X, Width, Height, Channel, Float32],
+      DetectionBatch[Batch |@| X, BoundingBox, Float32],
+      Tensor4[Batch |@| X, BoundingBox, RelatedBox, RelationClasses, Float32]
+  ) =
+    val over = Axis[Batch] -> MeshAxis[X]
+    val objects = batch.target.detection
+    (
+      batch.images.shard(mesh, over),
+      DetectionBatch(objects.box.map(_.shard(mesh, over)), objects.label.shard(mesh, over)),
+      batch.target.relations.shard(mesh, over)
+    )
 
   val checkpointer = TensorTreeCheckpointer.newIn(setup.checkpointRoot)
   val monitor = Monitor.ConcatMonitor[EGTRTrainState](List(
     Monitor.StepMonitor(),
     Monitor.LossMonitor(_.lastCost.item),
     Monitor.LearningRateMonitor(schedule),
-    Monitor.PerformanceMonitor(setup.batchSize)
+    Monitor.PerformanceMonitor(batchSize)
   ))
   val started = System.nanoTime
   batches
     .scanLeft(EGTRTrainState(initialParams, optimizer.init(initialParams), -1f)):
       case (state, batch) =>
-        jitGradientStep(batch.images, batch.target.detection, batch.target.relations, state)
+        val (images, objects, relations) = shard(batch)
+        jitGradientStep(images, objects, relations, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))
-    .tapEvery(setup.checkpointEvery):
+    .tapEvery(checkpointEvery):
       case (state, step) =>
         checkpointer.save(state, step)
         println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
-    .drop(setup.numIterations)
+    .drop(numSteps)
     .next()
   Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)

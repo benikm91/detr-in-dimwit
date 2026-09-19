@@ -8,6 +8,7 @@ import dataset.Box
 import dataset.Detection
 import dataset.Box
 import dataset.DetectionBatch
+import dataset.ObjectBatch
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
@@ -22,6 +23,8 @@ import deepwit.optimizer.clipGlobalNorm
 import dataset.Runs
 import dimwit.*
 import dimwit.Conversions.given
+import dimwit.jax.Jax
+import dimwit.sharding.*
 import deepwit.optimizer.CosineDecay
 import deepwit.optimizer.LearningRateSchedule
 import deepwit.optimizer.LearningRateScheduler
@@ -36,6 +39,9 @@ import scala.language.implicitConversions
 
 private trait Batch derives Label
 
+/** Mesh axis the batch is split over. */
+private trait X derives MeshLabel
+
 /** Axis of a model's parameters, flattened into one vector so that they can be counted. */
 trait Parameter derives Label
 
@@ -45,25 +51,36 @@ case class TrainState(
     lastCost: Tensor0[Float32]
 )
 
-/** Trains a detector on the corpus its [[DETRSetup]] names. */
+/** Trains a detector on the corpus its [[DETRSetup]] names.
+  *
+  * The batch grows with the devices, not the step count: every device takes a batch of its own and
+  * the gradients are summed across them before the parameters move.
+  */
 def trainDetector(setup: DETRSetup): Unit =
   dimwit.initialize()
   println(s"training $setup")
 
+  val mesh = Mesh1(MeshAxis[X] -> Jax.devices.size)
+  val batchSize = setup.batchSizePerDevice * mesh.sizeOf(MeshAxis[X])
+  val numSteps = setup.numSamples / batchSize
+  val warmupSteps = setup.warmupSamples / batchSize
+  val checkpointEvery = setup.checkpointEverySamples / batchSize
+  println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numSteps steps")
+
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
-  val batches = data.objectBatches(Axis[Batch] -> setup.batchSize)
+  val batches = data.objectBatches(Axis[Batch] -> batchSize)
 
   /** Linear warmup into a cosine decay to a floor. Adam moves the weights by the same amount
     * whatever the gradient is, so the rate is the only thing that sets how far a step travels;
     * held constant it never shrinks and the model orbits a solution instead of settling on it.
     */
   val schedule: LearningRateSchedule =
-    LinearWarmup(setup.learningRate, setup.warmupSteps)
+    LinearWarmup(setup.learningRate, warmupSteps)
       .followBy(
         CosineDecay(
           setup.learningRate,
           setup.finalLearningRate,
-          setup.numIterations - setup.warmupSteps
+          numSteps - warmupSteps
         )
       )
   val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), setup.weightDecay), schedule)
@@ -82,11 +99,11 @@ def trainDetector(setup: DETRSetup): Unit =
   val loss = HungarianLoss(VType[Float32])()
 
   def cost(
-      imgs: Tensor4[Batch, Width, Height, Channel, Float32],
-      objects: DetectionBatch[Batch, BoundingBox, Float32]
+      imgs: Tensor4[Batch |@| X, Width, Height, Channel, Float32],
+      objects: DetectionBatch[Batch |@| X, BoundingBox, Float32]
   )(params: DETR.Params[Float32]): Tensor0[Float32] =
     val model = DETR(params)
-    zipvmap(Axis[Batch])(imgs, objects.box.centerX, objects.box.centerY, objects.box.width, objects.box.height, objects.label):
+    zipvmap(Axis[Batch |@| X])(imgs, objects.box.centerX, objects.box.centerY, objects.box.width, objects.box.height, objects.label):
       case (img, centerX, centerY, width, height, label) =>
         val y = Detection(Box(centerX, centerY, width, height), label)
         val yHat = model.logits(img)
@@ -94,48 +111,46 @@ def trainDetector(setup: DETRSetup): Unit =
     .mean
 
   def gradientStep(
-      imgs: Tensor4[Batch, Width, Height, Channel, Float32],
-      objects: DetectionBatch[Batch, BoundingBox, Float32],
+      imgs: Tensor4[Batch |@| X, Width, Height, Channel, Float32],
+      objects: DetectionBatch[Batch |@| X, BoundingBox, Float32],
       state: TrainState
   ) =
     val (lastCost, gradients) = Autodiff.valueAndGrad(cost(imgs, objects))(state.params)
     val clipped = gradients.clipGlobalNorm(setup.maxGradientNorm)
     val (params, optimizerState) = optimizer.update(clipped, state.params, state.optimizerState)
-    val newState = TrainState(params, optimizerState, lastCost)
-    summon[TensorTree[TrainState]].map(
-      state,
-      [T <: Tuple, V] =>
-        (labels: Labels[T]) ?=>
-          (x: Tensor[T, V]) =>
-            if !x.isTracer then
-              dimwit.python.PyBridge.toPyTensor(x).addressable_data(0).delete()
-            x
-    )
-    if !imgs.isTracer then
-      dimwit.python.PyBridge.toPyTensor(imgs).addressable_data(0).delete()
-    if !objects.box.centerX.isTracer then
-      dimwit.python.PyBridge.toPyTensor(objects.box.centerX).addressable_data(0).delete
-    newState
+    TrainState(params, optimizerState, lastCost)
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
+
+  /** The batch with every device holding its share of the drawings; the step sees one axis. */
+  def shard(
+      batch: dataset.Batch[Batch, Width, Height, Channel, ObjectBatch[Batch, BoundingBox]]
+  ): (Tensor4[Batch |@| X, Width, Height, Channel, Float32], DetectionBatch[Batch |@| X, BoundingBox, Float32]) =
+    val over = Axis[Batch] -> MeshAxis[X]
+    val objects = batch.target.detection
+    (
+      batch.images.shard(mesh, over),
+      DetectionBatch(objects.box.map(_.shard(mesh, over)), objects.label.shard(mesh, over))
+    )
 
   val checkpointer = TensorTreeCheckpointer.newIn(setup.checkpointRoot)
   val monitor = Monitor.ConcatMonitor[TrainState](List(
     Monitor.StepMonitor(),
     Monitor.LossMonitor(_.lastCost.item),
     Monitor.LearningRateMonitor(schedule),
-    Monitor.PerformanceMonitor(setup.batchSize)
+    Monitor.PerformanceMonitor(batchSize)
   ))
   val started = System.nanoTime
   batches
     .scanLeft(TrainState(initialParams, optimizer.init(initialParams), -1f)):
       case (state, batch) =>
-        jitGradientStep(batch.images, batch.target.detection, state)
+        val (images, objects) = shard(batch)
+        jitGradientStep(images, objects, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(step, state))
-    .tapEvery(setup.checkpointEvery):
+    .tapEvery(checkpointEvery):
       case (state, step) =>
         checkpointer.save(state, step)
         println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
-    .drop(setup.numIterations)
+    .drop(numSteps)
     .next()
   Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)

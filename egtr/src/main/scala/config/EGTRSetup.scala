@@ -48,8 +48,9 @@ case class EGTRSetup(
       */
     sourceExtent: Int = 128,
     hiddenExtent: Int = 128,
-    numIterations: Int = 200_000,
-    batchSize: Int = 64,
+
+    numSamples: Int = 200_000 * 64,
+    batchSizePerDevice: Int = 64,
     learningRate: Float = 3e-4f,
 
     /** Where the cosine bottoms out. Aligned with the other models. */
@@ -58,9 +59,9 @@ case class EGTRSetup(
     maxGradientNorm: Float = 1f,
 
     /** How long the rate climbs before it starts to fall. */
-    warmupSteps: Int = 2_000,
+    warmupSamples: Int = 2_000 * 64,
 
-    checkpointEvery: Int = 10_000,
+    checkpointEverySamples: Int = 10_000 * 64,
     seed: Int = 0
 ):
   require(
@@ -70,7 +71,7 @@ case class EGTRSetup(
 
   override def toString: String =
     s"EGTRSetup(${corpus.repoId}, layers=$numLayers, heads=$numHeads, embedding=$embedding, " +
-      s"queries=$numQueries, objects<=${corpus.maxNodes}, iterations=$numIterations, batch=$batchSize, " +
+      s"queries=$numQueries, objects<=${corpus.maxNodes}, samples=$numSamples, batch=$batchSizePerDevice per device, " +
       s"detector=${detectorCheckpointRoot.getOrElse("from scratch")})"
 
 object EGTRSetup:

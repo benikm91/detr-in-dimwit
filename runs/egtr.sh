@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --export=ALL,SARUS_HOME=TRUE
-#SBATCH --job-name=d2g
+#SBATCH --job-name=egtr
 #SBATCH --partition=gpu
 #SBATCH --account=cai_cv
 #SBATCH --gres=gpu:2
@@ -9,17 +9,17 @@
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/%x_%j.out
 #SBATCH --error=/cluster/home/%u/.logs/slurm/%j/%x_%j.err
 #
-# Trains the transcriber on a corpus, scores every checkpoint, and leaves the metrics as one CSV.
-# Every GPU the job gets trains on a batch of its own, so `--gres=gpu:N` sets the batch size.
+# Trains the scene graph model on a corpus, scores every checkpoint, and leaves the metrics as one
+# CSV. The detector underneath is trained with it, from scratch.
 #
 #   CORPUS=l-shape SIZE=s \
 #   CACHE_DIR=/cluster/scratch/$USER/corpora \
 #   OUTPUT_DIR=/cluster/scratch/$USER/metrics \
-#     sbatch runs/d2g.sh
+#     sbatch runs/egtr.sh
 #
-# `runs/queue_d2g.sh` is the usual way in; `sbatch` hands the environment on to the job.
+# `runs/queue_egtr.sh` is the usual way in; `sbatch` hands the environment on to the job.
 # CACHE_DIR is where the corpora land, so that the next job does not download them again.
-# OUTPUT_DIR is where `d2g-<corpus>-<size>.csv` ends up: what is left of the job once the
+# OUTPUT_DIR is where `egtr-<corpus>-<size>.csv` ends up: what is left of the job once the
 # instance is wiped. CHECKPOINT_DIR is where the checkpoints go meanwhile, which need not
 # outlive the job.
 
@@ -29,12 +29,12 @@ set -euo pipefail
 : "${OUTPUT_DIR:?set OUTPUT_DIR to a directory that outlives the job, where the metrics are written}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch}"
 
-# Which corpus to train on and how big a model — the names `Corpus` and `D2GModelConfiguration` know.
+# Which corpus to train on and how big a model — the names `Corpus` and `EGTR.Size` know.
 CORPUS="${CORPUS:-sketch}"
 SIZE="${SIZE:-s}"
 
 mkdir -p "$CACHE_DIR" "$OUTPUT_DIR" "$CHECKPOINT_DIR"
-echo "running d2g on $CORPUS at size $SIZE: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
+echo "running egtr on $CORPUS at size $SIZE: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
 
 module load sarus/1.6.4
 
@@ -85,9 +85,9 @@ sarus run \
     # The image points DimWit at its own Python. Ours comes from pyproject.toml instead: DimWit runs uv sync and uses the venv that gives.
     unset DIMWIT_SKIP_SYNC DIMWIT_PYTHON_PATH DIMWIT_PYTHON_LIBRARY
 
-    sbt "d2g/runMain d2gTrain $corpus $size"
-    sbt "d2g/runMain d2gEval $corpus $size"
-  ' d2g "$CORPUS" "$SIZE"
+    sbt "egtr/runMain egtrTrain $corpus $size"
+    sbt "egtr/runMain egtrEval $corpus $size"
+  ' egtr "$CORPUS" "$SIZE"
 
 echo "job finished, metrics in $OUTPUT_DIR:"
-ls -la "$OUTPUT_DIR"/d2g-"$CORPUS"-"$SIZE".csv
+ls -la "$OUTPUT_DIR"/egtr-"$CORPUS"-"$SIZE".csv
