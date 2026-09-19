@@ -15,6 +15,7 @@ import dataset.DetectionBatch
 import dataset.ObjectBatch
 import dataset.Corpus
 import dataset.DrawingDataset
+import dataset.History
 import dataset.DrawingDataset.Split
 import dataset.RelationClasses
 import deepwit.checkpointing.TensorTreeCheckpointer
@@ -47,7 +48,7 @@ private trait X derives MeshLabel
 case class EGTRTrainState(
     params: EGTR.Params[Float32],
     optimizerState: LearningRateSchedulerState[EGTR.Params[Float32], AdamState],
-    lastCost: Tensor0[Float32]
+    loss: Tensor0[Float32]
 )
 
 /** Trains a scene graph model on the corpus its [[EGTRSetup]] names.
@@ -72,6 +73,7 @@ def trainSceneGraph(setup: EGTRSetup, detectorRun: Option[String] = None): Unit 
   val warmupSteps = setup.warmupSamples / batchSize
   val cooldownSteps = setup.cooldownSamples / batchSize
   val checkpointEvery = setup.checkpointEverySamples / batchSize
+  require(numSteps % checkpointEvery == 0, s"$numSteps steps do not end on a checkpoint, which is where the cooldown ends")
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numSteps steps")
 
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
@@ -136,7 +138,7 @@ def trainSceneGraph(setup: EGTRSetup, detectorRun: Option[String] = None): Unit 
     val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, objects, relations))(state.params)
     val clipped = gradients.clipGlobalNorm(setup.maxGradientNorm)
     val (params, optimizerState) = optimizer.update(clipped, state.params, state.optimizerState)
-    EGTRTrainState(params, optimizerState, lastCost)
+    EGTRTrainState(params, optimizerState, state.loss * 0.99f + lastCost * 0.01f)
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
   /** The batch with every device holding its share of the drawings; the step sees one axis. */
@@ -156,15 +158,17 @@ def trainSceneGraph(setup: EGTRSetup, detectorRun: Option[String] = None): Unit 
     )
 
   val checkpointer = TensorTreeCheckpointer.newIn(setup.checkpointRoot)
+  val history = History()
   val monitor = Monitor.ConcatMonitor[EGTRTrainState](List(
     Monitor.StepMonitor(),
-    Monitor.LossMonitor(_.lastCost.item),
+    Monitor.LossMonitor(_.loss.item),
     Monitor.LearningRateMonitor(schedule),
     Monitor.PerformanceMonitor(batchSize)
   ))
+
   val started = System.nanoTime
   batches
-    .scanLeft(EGTRTrainState(initialParams, optimizer.init(initialParams), -1f)):
+    .scanLeft(EGTRTrainState(initialParams, optimizer.init(initialParams), 0f)):
       case (state, batch) =>
         val (images, objects, relations) = shard(batch)
         jitGradientStep(images, objects, relations, state)
@@ -173,7 +177,9 @@ def trainSceneGraph(setup: EGTRSetup, detectorRun: Option[String] = None): Unit 
     .tapEvery(checkpointEvery):
       case (state, step) =>
         checkpointer.save(state, step)
+        history.add(step, state.loss.item)
         println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
     .drop(numSteps)
     .next()
+  Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)
   Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)

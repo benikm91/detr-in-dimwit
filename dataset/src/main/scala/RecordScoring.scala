@@ -14,12 +14,14 @@ val Tolerances = Seq(0f, 2f, 4f, 8f)
 object RecordScoring:
 
   /** One drawing, scored. `isExact` is the whole record at once: every node, every relationship,
-    * nothing missing and nothing spurious.
+    * nothing missing and nothing spurious. `nodesExact` holds the nodes to that same standard on
+    * their own, which is as much as a model that answers with no relationships can be asked for.
     */
   case class Scored(
       nodes: Int,
       nodesFound: Int,
       nodesPredicted: Int,
+      nodesExact: Boolean,
       relationships: Int,
       relationshipsFound: Int,
       relationshipsPredicted: Int,
@@ -30,17 +32,16 @@ object RecordScoring:
     val matched = matching(target.nodes, found.nodes, tolerance)
     val wanted = multiset(target.edges.map(canonical))
     val present = multiset(found.edges.flatMap(resolve(matched)).map(canonical))
+    val nodesExact = matched.size == target.nodes.length && found.nodes.length == target.nodes.length
     Scored(
       nodes = target.nodes.length,
       nodesFound = matched.size,
       nodesPredicted = found.nodes.length,
+      nodesExact = nodesExact,
       relationships = target.edges.length,
       relationshipsFound = wanted.map((edge, count) => math.min(count, present.getOrElse(edge, 0))).sum,
       relationshipsPredicted = found.edges.length,
-      isExact = matched.size == target.nodes.length &&
-        found.nodes.length == target.nodes.length &&
-        found.edges.length == present.values.sum &&
-        present == wanted
+      isExact = nodesExact && found.edges.length == present.values.sum && present == wanted
     )
 
   /** Which found node stands for which target node. Greedy, which is exact here: the nodes of a
@@ -79,6 +80,8 @@ object RecordScoring:
     *   - `found` — of what the drawing holds, how much the model found. Recall.
     *   - `right` — of what the model claims, how much of it is there. Precision, and what makes
     *     predicting too much cost something rather than nothing.
+    *   - `nodes exactly right` — every node of a drawing found and none invented, which is what a
+    *     model without relationships can be compared on.
     *   - `records exactly right` — the whole record at once: every node, every relationship,
     *     nothing missing and nothing spurious.
     *
@@ -91,6 +94,7 @@ object RecordScoring:
       report(prefix, what, scored.map(correct).sum, scored.map(total).sum)
     line("nodes found", _.nodesFound, _.nodes)
     line("nodes right", _.nodesFound, _.nodesPredicted)
+    report(prefix, "nodes exactly right", scored.count(_.nodesExact), scored.length)
     if scored.exists(_.relationships > 0) then
       line("relationships found", _.relationshipsFound, _.relationships)
       line("relationships right", _.relationshipsFound, _.relationshipsPredicted)

@@ -40,6 +40,10 @@ export SIZE="${SIZE:-s}"
 mkdir -p "$CACHE_DIR" "$OUTPUT_DIR" "$CHECKPOINT_DIR"
 echo "running d2g $STAGE on $CORPUS at size $SIZE: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
 
+# Which run this job is, for looking its id up later by what it ran and where it wrote.
+printf '%s\td2g\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CORPUS" "$SIZE" "$STAGE" "$OUTPUT_DIR" "${SLURM_JOB_ID:-none}" \
+  >>"${SLURM_SUBMIT_DIR:-$PWD}/jobs.txt"
+
 module load sarus/1.6.4
 
 IMAGE="benikm91/dimwit-gpu:snapshot"
@@ -131,7 +135,6 @@ if [[ $STAGE == train ]]; then
   # Scoring is queued from here, so that it reads the checkpoints this run just wrote and runs only
   # if there are any. One GPU is enough: it scores one checkpoint at a time.
   evalId="$(sbatch --parsable --gres=gpu:1 --time=4:00:00 --job-name="d2g-$CORPUS-$SIZE-eval" runs/d2g.sh eval)"
-  printf '%s\td2g\t%s\t%s\teval\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CORPUS" "$SIZE" "$OUTPUT_DIR" "$evalId" >>jobs.txt
   echo "queued scoring as $evalId"
 else
   echo "job finished, metrics in $OUTPUT_DIR:"

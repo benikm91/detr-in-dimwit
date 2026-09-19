@@ -8,6 +8,7 @@ import dataset.Canvas
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
+import dataset.History
 import dataset.Record
 import dataset.RecordBatch
 import deepwit.checkpointing.TensorTreeCheckpointer
@@ -36,7 +37,7 @@ case class D2GTrainState(
     params: D2G.Params[Float32],
     optimizerState: LearningRateSchedulerState[D2G.Params[Float32], AdamState],
     linearization: Key,
-    lastCost: Tensor0[Float32]
+    loss: Tensor0[Float32]
 )
 
 /** Trains a transcription model on the corpus its [[D2GSetup]] names.
@@ -64,6 +65,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val warmupSteps = setup.warmupSamples / batchSize
   val cooldownSteps = setup.cooldownSamples / batchSize
   val checkpointEvery = setup.checkpointEverySamples / batchSize
+  require(numSteps % checkpointEvery == 0, s"$numSteps steps do not end on a checkpoint, which is where the cooldown ends")
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numSteps steps")
 
   val nodes = Axis[Node] -> setup.nodeSlots
@@ -119,7 +121,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
     val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, records.permuted(forThisStep, nodes, edges), forQueries))(state.params)
     val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)
-    D2GTrainState(params, optimizerState, nextLinearization, lastCost)
+    D2GTrainState(params, optimizerState, nextLinearization, state.loss * 0.99f + lastCost * 0.01f)
   val jitGradientStep = jitDonatingUnsafe(gradientStep[Batch |@| X])
 
   /** The batch with every device holding its share of the drawings; the step sees one axis. */
@@ -143,15 +145,17 @@ def trainTranscriber(setup: D2GSetup): Unit =
     )
 
   val checkpointer = TensorTreeCheckpointer.newIn(setup.checkpointRoot)
+  val history = History()
   val monitor = Monitor.ConcatMonitor[D2GTrainState](List(
     Monitor.StepMonitor(),
-    Monitor.LossMonitor(_.lastCost.item),
+    Monitor.LossMonitor(_.loss.item),
     Monitor.LearningRateMonitor(schedule),
     Monitor.PerformanceMonitor(batchSize)
   ))
+
   val started = System.nanoTime
   batches
-    .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, -1f)):
+    .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, 0f)):
       case (state, batch) =>
         val (images, records) = shard(batch)
         jitGradientStep(images, records, state)
@@ -160,7 +164,9 @@ def trainTranscriber(setup: D2GSetup): Unit =
     .tapEvery(checkpointEvery):
       case (state, step) =>
         checkpointer.save(state, step)
+        history.add(step, state.loss.item)
         println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
     .drop(numSteps)
     .next()
+  Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)
   Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)

@@ -33,12 +33,13 @@ case class DETRSetup(
     numHeads: Int = 4,
     embedding: Int = 128,
 
-    numSamples: Int = 300_000 * 64,
+    checkpointEverySamples: Int = 16_000 * 64,
+    numSamples: Int = 320_000 * 64,
     batchSizePerDevice: Int = 64,
     learningRate: Float = 3e-4f,
 
     /** Where the cosine bottoms out. Aligned with the other models. */
-    finalLearningRate: Float = 1e-4f,
+    finalLearningRate: Float = 0f,
     weightDecay: Float = 1e-4f,
 
     /** Global L2 norm the gradients are rescaled to, as in the DETR paper. The set loss reassigns
@@ -52,7 +53,6 @@ case class DETRSetup(
     warmupSamples: Int = 2_000 * 64,
     cooldownSamples: Int = 50_000 * 64,
 
-    checkpointEverySamples: Int = 16_000 * 64,
     seed: Int = 0
 ):
   require(

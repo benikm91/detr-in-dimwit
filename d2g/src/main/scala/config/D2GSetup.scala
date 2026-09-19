@@ -20,10 +20,10 @@ case class D2GSetup(
     // Train configuration
     checkpointRoot: String,
     checkpointEverySamples: Int = 16_000 * 64,
-    numSamples: Int = 300_000 * 64,
+    numSamples: Int = 320_000 * 64,
     batchSizePerDevice: Int = 64,
     learningRate: Float = 3e-4f,
-    finalLearningRate: Float = 1e-4f,
+    finalLearningRate: Float = 0f,
     weightDecay: Float = 1e-4f,
     maxGradientNorm: Float = 1f,
     warmupSamples: Int = 2_000 * 64,

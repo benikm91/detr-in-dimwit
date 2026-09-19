@@ -11,6 +11,7 @@ import dataset.DetectionBatch
 import dataset.ObjectBatch
 import dataset.Corpus
 import dataset.DrawingDataset
+import dataset.History
 import dataset.DrawingDataset.Split
 import deepwit.checkpointing.TensorTreeCheckpointer
 import deepwit.training.Monitor
@@ -49,7 +50,7 @@ trait Parameter derives Label
 case class TrainState(
     params: DETR.Params[Float32],
     optimizerState: LearningRateSchedulerState[DETR.Params[Float32], AdamState],
-    lastCost: Tensor0[Float32]
+    loss: Tensor0[Float32]
 )
 
 /** Trains a detector on the corpus its [[DETRSetup]] names.
@@ -67,6 +68,7 @@ def trainDetector(setup: DETRSetup): Unit =
   val warmupSteps = setup.warmupSamples / batchSize
   val cooldownSteps = setup.cooldownSamples / batchSize
   val checkpointEvery = setup.checkpointEverySamples / batchSize
+  require(numSteps % checkpointEvery == 0, s"$numSteps steps do not end on a checkpoint, which is where the cooldown ends")
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numSteps steps")
 
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
@@ -115,7 +117,7 @@ def trainDetector(setup: DETRSetup): Unit =
     val (lastCost, gradients) = Autodiff.valueAndGrad(cost(imgs, objects))(state.params)
     val clipped = gradients.clipGlobalNorm(setup.maxGradientNorm)
     val (params, optimizerState) = optimizer.update(clipped, state.params, state.optimizerState)
-    TrainState(params, optimizerState, lastCost)
+    TrainState(params, optimizerState, state.loss * 0.99f + lastCost * 0.01f)
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
   /** The batch with every device holding its share of the drawings; the step sees one axis. */
@@ -130,15 +132,17 @@ def trainDetector(setup: DETRSetup): Unit =
     )
 
   val checkpointer = TensorTreeCheckpointer.newIn(setup.checkpointRoot)
+  val history = History()
   val monitor = Monitor.ConcatMonitor[TrainState](List(
     Monitor.StepMonitor(),
-    Monitor.LossMonitor(_.lastCost.item),
+    Monitor.LossMonitor(_.loss.item),
     Monitor.LearningRateMonitor(schedule),
     Monitor.PerformanceMonitor(batchSize)
   ))
+
   val started = System.nanoTime
   batches
-    .scanLeft(TrainState(initialParams, optimizer.init(initialParams), -1f)):
+    .scanLeft(TrainState(initialParams, optimizer.init(initialParams), 0f)):
       case (state, batch) =>
         val (images, objects) = shard(batch)
         jitGradientStep(images, objects, state)
@@ -147,7 +151,9 @@ def trainDetector(setup: DETRSetup): Unit =
     .tapEvery(checkpointEvery):
       case (state, step) =>
         checkpointer.save(state, step)
+        history.add(step, state.loss.item)
         println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
     .drop(numSteps)
     .next()
+  Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)
   Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)

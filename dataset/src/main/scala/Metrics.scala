@@ -12,7 +12,7 @@ object Metrics:
 
   private val Header =
     "model,corpus,size,step,threshold,tolerance,parameters,training_seconds," +
-      "node_recall,node_precision,edge_recall,edge_precision,records_exact"
+      "node_recall,node_precision,nodes_exact,edge_recall,edge_precision,records_exact"
 
   /** Writes `<model>-<corpus>-<size>.csv` into [[Runs.outputDir]] and says where. A percentage
     * over nothing — a detector's relationships — is left blank.
@@ -32,6 +32,7 @@ object Metrics:
         trainingSeconds.fold("")(_.toString),
         percent(scored.map(_.nodesFound).sum, scored.map(_.nodes).sum),
         percent(scored.map(_.nodesFound).sum, scored.map(_.nodesPredicted).sum),
+        percent(scored.count(_.nodesExact), scored.length),
         percent(scored.map(_.relationshipsFound).sum, scored.map(_.relationships).sum),
         percent(scored.map(_.relationshipsFound).sum, scored.map(_.relationshipsPredicted).sum),
         percent(scored.count(_.isExact), scored.length)
