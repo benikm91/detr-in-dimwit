@@ -19,6 +19,7 @@ import dimwit.*
 import dimwit.Conversions.given
 import dimwit.jax.Jax
 import dimwit.sharding.*
+import deepwit.optimizer.ConstantLearningRate
 import deepwit.optimizer.CosineDecay
 import deepwit.optimizer.LearningRateSchedule
 import deepwit.optimizer.LearningRateScheduler
@@ -61,6 +62,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val batchSize = setup.batchSizePerDevice * mesh.sizeOf(MeshAxis[X])
   val numSteps = setup.numSamples / batchSize
   val warmupSteps = setup.warmupSamples / batchSize
+  val cooldownSteps = setup.cooldownSamples / batchSize
   val checkpointEvery = setup.checkpointEverySamples / batchSize
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numSteps steps")
 
@@ -73,7 +75,8 @@ def trainTranscriber(setup: D2GSetup): Unit =
 
   val schedule: LearningRateSchedule =
     LinearWarmup(setup.learningRate, warmupSteps)
-      .followBy(CosineDecay(setup.learningRate, setup.finalLearningRate, numSteps - warmupSteps))
+      .followBy(ConstantLearningRate(setup.learningRate, numSteps - warmupSteps - cooldownSteps))
+      .followBy(CosineDecay(setup.learningRate, setup.finalLearningRate, cooldownSteps))
   val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), setup.weightDecay), schedule)
 
   val initialParams = D2G.Params.init(

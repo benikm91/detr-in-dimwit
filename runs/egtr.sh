@@ -3,9 +3,9 @@
 #SBATCH --job-name=egtr
 #SBATCH --partition=gpu
 #SBATCH --account=cai_cv
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:4
 #SBATCH --exclude=sanjose,irvine,salinas
-#SBATCH --time=4:00:00
+#SBATCH --time=6:00:00
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/%x_%j.out
 #SBATCH --error=/cluster/home/%u/.logs/slurm/%j/%x_%j.err
 #
@@ -15,26 +15,30 @@
 #   CORPUS=l-shape SIZE=s \
 #   CACHE_DIR=/cluster/scratch/$USER/corpora \
 #   OUTPUT_DIR=/cluster/scratch/$USER/metrics \
-#     sbatch runs/egtr.sh
+#     sbatch runs/egtr.sh train
 #
 # `runs/queue_egtr.sh` is the usual way in; `sbatch` hands the environment on to the job.
 # CACHE_DIR is where the corpora land, so that the next job does not download them again.
 # OUTPUT_DIR is where `egtr-<corpus>-<size>.csv` ends up: what is left of the job once the
-# instance is wiped. CHECKPOINT_DIR is where the checkpoints go meanwhile, which need not
-# outlive the job.
+# instance is wiped. CHECKPOINT_DIR is where the checkpoints go, under OUTPUT_DIR unless it is set
+# otherwise: the scoring job reads them back, and they are yours to delete once it has.
 
 set -euo pipefail
 
+STAGE="${1:?say which stage to run: train or eval}"
+[[ $STAGE == train || $STAGE == eval ]] || { echo "no stage named '$STAGE': train or eval" >&2; exit 2; }
+
 : "${CACHE_DIR:?set CACHE_DIR to a directory that outlives the job, where the corpora are cached}"
 : "${OUTPUT_DIR:?set OUTPUT_DIR to a directory that outlives the job, where the metrics are written}"
-CHECKPOINT_DIR="${CHECKPOINT_DIR:-/scratch}"
+export CACHE_DIR OUTPUT_DIR
+export CHECKPOINT_DIR="${CHECKPOINT_DIR:-$OUTPUT_DIR/checkpoints}"
 
 # Which corpus to train on and how big a model — the names `Corpus` and `EGTR.Size` know.
-CORPUS="${CORPUS:-sketch}"
-SIZE="${SIZE:-s}"
+export CORPUS="${CORPUS:-sketch}"
+export SIZE="${SIZE:-s}"
 
 mkdir -p "$CACHE_DIR" "$OUTPUT_DIR" "$CHECKPOINT_DIR"
-echo "running egtr on $CORPUS at size $SIZE: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
+echo "running egtr $STAGE on $CORPUS at size $SIZE: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
 
 module load sarus/1.6.4
 
@@ -48,8 +52,12 @@ sarus run \
   "$IMAGE" \
   bash -c '
     set -euo pipefail
+    model="$0"
     corpus="$1"
     size="$2"
+    stage="$3"
+    slurmJobId="$4"
+    node="$5"
 
     export TMPDIR=/tmp
 
@@ -85,9 +93,47 @@ sarus run \
     # The image points DimWit at its own Python. Ours comes from pyproject.toml instead: DimWit runs uv sync and uses the venv that gives.
     unset DIMWIT_SKIP_SYNC DIMWIT_PYTHON_PATH DIMWIT_PYTHON_LIBRARY
 
-    sbt "egtr/runMain egtrTrain $corpus $size"
-    sbt "egtr/runMain egtrEval $corpus $size"
-  ' egtr "$CORPUS" "$SIZE"
+    # What produced the metrics beside it: the commits every part of the stack was built from, the
+    # JAX that ran them, and the GPUs they ran on. Written before training, so that a run cut short
+    # still says what it was.
+    if [[ $stage == train ]]; then
+      jaxVersion="$(uv run python -c "import jax; print(jax.__version__)" 2>/dev/null || echo unknown)"
+      gpus="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | paste -sd ";" - || true)"
+      [[ -n $gpus ]] || gpus=unknown
+      cat >"/output/$model-$corpus-$size.environment.json" <<JSON
+{
+  "model": "$model",
+  "corpus": "$corpus",
+  "size": "$size",
+  "slurmJobId": "$slurmJobId",
+  "node": "$node",
+  "gpus": "$gpus",
+  "jax": "$jaxVersion",
+  "commits": {
+    "detr-in-dimwit": "$(git -C /usr/src/detr-in-dimwit rev-parse HEAD)",
+    "dimwit": "$(git -C /usr/src/dimwit rev-parse HEAD)",
+    "deepwit": "$(git -C /usr/src/deepwit rev-parse HEAD)",
+    "dimwit-sharding": "$(git -C /usr/src/dimwit-sharding rev-parse HEAD)"
+  }
+}
+JSON
+      cat "/output/$model-$corpus-$size.environment.json"
+    fi
 
-echo "job finished, metrics in $OUTPUT_DIR:"
-ls -la "$OUTPUT_DIR"/egtr-"$CORPUS"-"$SIZE".csv
+    case "$stage" in
+      train) sbt "egtr/runMain egtrTrain $corpus $size" ;;
+      eval) sbt "egtr/runMain egtrEval $corpus $size" ;;
+    esac
+  ' egtr "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}"
+
+if [[ $STAGE == train ]]; then
+  echo "job finished, checkpoints in $CHECKPOINT_DIR"
+  # Scoring is queued from here, so that it reads the checkpoints this run just wrote and runs only
+  # if there are any. One GPU is enough: it scores one checkpoint at a time.
+  evalId="$(sbatch --parsable --gres=gpu:1 --time=4:00:00 --job-name="egtr-$CORPUS-$SIZE-eval" runs/egtr.sh eval)"
+  printf '%s\tegtr\t%s\t%s\teval\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CORPUS" "$SIZE" "$OUTPUT_DIR" "$evalId" >>jobs.txt
+  echo "queued scoring as $evalId"
+else
+  echo "job finished, metrics in $OUTPUT_DIR:"
+  ls -la "$OUTPUT_DIR"/egtr-"$CORPUS"-"$SIZE".csv
+fi

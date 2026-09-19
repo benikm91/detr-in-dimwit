@@ -25,6 +25,7 @@ import dimwit.*
 import dimwit.Conversions.given
 import dimwit.jax.Jax
 import dimwit.sharding.*
+import deepwit.optimizer.ConstantLearningRate
 import deepwit.optimizer.CosineDecay
 import deepwit.optimizer.LearningRateSchedule
 import deepwit.optimizer.LearningRateScheduler
@@ -64,25 +65,21 @@ def trainDetector(setup: DETRSetup): Unit =
   val batchSize = setup.batchSizePerDevice * mesh.sizeOf(MeshAxis[X])
   val numSteps = setup.numSamples / batchSize
   val warmupSteps = setup.warmupSamples / batchSize
+  val cooldownSteps = setup.cooldownSamples / batchSize
   val checkpointEvery = setup.checkpointEverySamples / batchSize
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numSteps steps")
 
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
   val batches = data.objectBatches(Axis[Batch] -> batchSize)
 
-  /** Linear warmup into a cosine decay to a floor. Adam moves the weights by the same amount
-    * whatever the gradient is, so the rate is the only thing that sets how far a step travels;
-    * held constant it never shrinks and the model orbits a solution instead of settling on it.
+  /** Warmup, then the rate held, then a cosine cooldown over the last stretch. Adam orbits a
+    * solution at a distance the rate sets, which is what the cooldown closes; holding the rate
+    * until then leaves a checkpoint comparable with one from a run of another length.
     */
   val schedule: LearningRateSchedule =
     LinearWarmup(setup.learningRate, warmupSteps)
-      .followBy(
-        CosineDecay(
-          setup.learningRate,
-          setup.finalLearningRate,
-          numSteps - warmupSteps
-        )
-      )
+      .followBy(ConstantLearningRate(setup.learningRate, numSteps - warmupSteps - cooldownSteps))
+      .followBy(CosineDecay(setup.learningRate, setup.finalLearningRate, cooldownSteps))
   val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), setup.weightDecay), schedule)
 
   val initialParams = DETR.Params.init(

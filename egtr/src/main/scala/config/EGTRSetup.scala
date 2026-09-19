@@ -49,7 +49,7 @@ case class EGTRSetup(
     sourceExtent: Int = 128,
     hiddenExtent: Int = 128,
 
-    numSamples: Int = 200_000 * 64,
+    numSamples: Int = 300_000 * 64,
     batchSizePerDevice: Int = 64,
     learningRate: Float = 3e-4f,
 
@@ -58,10 +58,11 @@ case class EGTRSetup(
     weightDecay: Float = 1e-4f,
     maxGradientNorm: Float = 1f,
 
-    /** How long the rate climbs before it starts to fall. */
+    /** How long the rate climbs before it holds, and how long it falls again at the end. */
     warmupSamples: Int = 2_000 * 64,
+    cooldownSamples: Int = 50_000 * 64,
 
-    checkpointEverySamples: Int = 10_000 * 64,
+    checkpointEverySamples: Int = 16_000 * 64,
     seed: Int = 0
 ):
   require(

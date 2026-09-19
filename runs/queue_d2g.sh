@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# Queues a d2g job per corpus and model size, noting each SLURM id in `jobs.txt`.
+# Queues a d2g training job per corpus and model size, noting each SLURM id in `jobs.txt`.
+# Every training job queues its own scoring job when it finishes, and notes that id too.
 #
 #   runs/queue_d2g.sh              # every configuration below, sharing one OUTPUT_DIR
 #   runs/queue_d2g.sh l-shape xs   # one configuration, in an OUTPUT_DIR of its own
@@ -18,8 +19,9 @@ if [[ $# -eq 2 ]]; then
   SIZE="$2"
   export CORPUS SIZE
   mkdir -p "$OUTPUT_DIR"
-  jobId="$(sbatch --parsable --job-name="$MODEL-$CORPUS-$SIZE" "runs/$MODEL.sh")"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$MODEL" "$CORPUS" "$SIZE" "$OUTPUT_DIR" "$jobId" >>"$JOBS_FILE"
+
+  jobId="$(sbatch --parsable --job-name="$MODEL-$CORPUS-$SIZE-train" "runs/$MODEL.sh" train)"
+  printf '%s\t%s\t%s\t%s\ttrain\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$MODEL" "$CORPUS" "$SIZE" "$OUTPUT_DIR" "$jobId" >>"$JOBS_FILE"
   echo "queued $MODEL on $CORPUS at size $SIZE as $jobId: metrics in $OUTPUT_DIR, noted in $JOBS_FILE"
   exit 0
 fi
