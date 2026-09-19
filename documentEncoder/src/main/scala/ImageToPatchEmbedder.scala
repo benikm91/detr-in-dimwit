@@ -7,18 +7,9 @@ import dimwit.Label as Λ
 
 trait PatchFeature derives Label
 
-/** Cuts a drawing into non-overlapping 16x16 patches and embeds every patch into a sequence
-  * element.
-  *
-  * Each patch is flattened and embedded by one affine map, and the patch grid is enriched with a 2D
-  * sinusoidal positional encoding before being flattened into a sequence. This is exactly the
-  * convolution with stride equal to kernel that patch embeddings usually go by, but computed as a
-  * reshape and a matrix product, so it runs wherever those do.
-  *
-  * @param width The axis of the drawing width; the drawing must cut into whole patches.
-  * @param height The axis of the drawing height; likewise.
-  * @param channel The axis of the single drawing channel.
-  * @param params The learnable parameters.
+/** Cuts a drawing into non-overlapping 16x16 patches, embeds each with one affine map, adds a 2D
+  * sinusoidal positional encoding and flattens the grid into a sequence. The drawing must cut into
+  * whole patches.
   */
 class ImageToPatchEmbedder[PatchEmbedding: Λ, V: IsFloating](
     params: ImageToPatchEmbedder.Params[PatchEmbedding, V]

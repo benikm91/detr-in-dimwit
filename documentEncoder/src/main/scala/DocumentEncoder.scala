@@ -14,12 +14,7 @@ trait Height derives Label
 trait Channel derives Label
 trait Patch derives Label
 
-/** A vision transformer over the document: its patches embedded, then full self-attention among them.
-  *
-  * @param width The axis of the document width; the document must cut into whole patches.
-  * @param height The axis of the document height; likewise.
-  * @param channel The axis of the single drawing channel.
-  */
+/** A vision transformer over the document: its patches embedded, then full self-attention among them. */
 class DocumentEncoder[Embedding: Λ, V: IsFloating](
     params: DocumentEncoder.Params[Embedding, V]
 ) extends (Tensor3[Width, Height, Channel, V] => Tensor2[Patch, Embedding, V]):
