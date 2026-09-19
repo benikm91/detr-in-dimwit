@@ -105,7 +105,7 @@ class EdgeHead[V: IsFloating](params: EdgeHead.Params[V]) extends (Tensor2[Edge,
     val relates = !(edgeClass elementEquals_! EdgeClass.NoEdge.id)
     def named(scores: Tensor2[Edge, LinkedNode, V]) =
       val end = scores.argmax(Axis[LinkedNode])
-      where(relates, end, Tensor.like(end).fill(0))
+      where_!(relates, end, 0)
     RecordEdges(edgeClass = edgeClass, subject = named(logits.subject), obj = named(logits.obj))
 
 object EdgeHead:

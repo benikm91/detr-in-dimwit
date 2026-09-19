@@ -5,6 +5,9 @@ import d2g.train.*
 import d2g.eval.*
 import d2g.config.*
 import dimwit.*
+import dimwit.Conversions.given
+
+import scala.language.implicitConversions
 
 export documentEncoder.{Width, Height, Channel, Patch}
 
@@ -22,8 +25,8 @@ trait Embedding derives Label // The (learned) latent vector spaces inside the m
 object Pixels:
 
   def of[T <: Tuple: Labels](coordinates: Tensor[T, Float32], canvas: Int): Tensor[T, Int32] =
-    val pixel = (coordinates * Tensor.like(coordinates).fill(canvas.toFloat) + Tensor.like(coordinates).fill(0.5f)).asInt(VType[Int32])
+    val pixel = (coordinates *! canvas.toFloat +! 0.5f).asInt(VType[Int32])
     minimum(pixel, Tensor.like(pixel).fill(canvas - 1))
 
   def coordinates[T <: Tuple: Labels](pixels: Tensor[T, Int32], canvas: Int): Tensor[T, Float32] =
-    pixels.asFloat(VType[Float32]) / Tensor.like(pixels).fill(canvas).asFloat(VType[Float32])
+    pixels.asFloat(VType[Float32]) /! canvas.toFloat

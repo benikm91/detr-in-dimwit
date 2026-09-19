@@ -36,7 +36,7 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int)
     val pairs = Shape2(nodes, Axis[Candidate] -> nodes.size)
     val holdsNode = NodeClass.indicator(vtype)(_.isNode).take(Axis[NodeClasses])(target.nodeClass)
     val taken = holdsNode.sum
-    val candidates = triu(Tensor(pairs, vtype).fill(1f)) * holdsNode.relabelTo(Axis[Candidate]).broadcastTo(pairs)
+    val candidates = triu(Tensor(pairs, vtype).fill(1f)) *! holdsNode.relabelTo(Axis[Candidate])
 
     val asked = candidates.max(Axis[Candidate])
     val guessed = distinctly(dissimilarity(a, target), dissimilarity(b, target), candidates)
@@ -58,7 +58,7 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int)
     costOfValue(logits.nodeClass, candidateClass) +
       placed(logits.startX, target.startX) +
       placed(logits.startY, target.startY) +
-      ends * runsOn.broadcastTo(ends.shape)
+      ends *! runsOn
 
 /** The same over the relationships of a record, which are predicted the same way — a relationship
   * carries the nodes it links where a node carries its points.
@@ -76,7 +76,7 @@ class RemainingEdgeLoss[V: IsFloating](vtype: VType[V])
     val pairs = Shape2(edges, Axis[Candidate] -> edges.size)
     val holdsEdge = EdgeClass.indicator(vtype)(_.isEdge).take(Axis[EdgeClasses])(target.edgeClass)
     val taken = holdsEdge.sum
-    val candidates = triu(Tensor(pairs, vtype).fill(1f)) * holdsEdge.relabelTo(Axis[Candidate]).broadcastTo(pairs)
+    val candidates = triu(Tensor(pairs, vtype).fill(1f)) *! holdsEdge.relabelTo(Axis[Candidate])
 
     val asked = candidates.max(Axis[Candidate])
     val guessed = distinctly(dissimilarity(a, target), dissimilarity(b, target), candidates)
@@ -131,7 +131,7 @@ private def costOfValue[Slot: Label, Candidate: Label, L: Label, V: IsFloating](
     values: Tensor1[Candidate, Int32]
 ): Tensor2[Slot, Candidate, V] =
   val chosen = logits.take(Axis[L])(values)
-  logNormalizer(logits).broadcastTo(chosen.shape) - chosen
+  logNormalizer(logits) -! chosen
 
 /** The cross entropy of every position's scores against one class, which is the one that ends the
   * record.
@@ -141,9 +141,9 @@ private def costOfClass[Slot: Label, Classes: Label, V: IsFloating](logits: Tens
 
 private def logNormalizer[Slot: Label, L: Label, V: IsFloating](logits: Tensor2[Slot, L, V]): Tensor1[Slot, V] =
   val peak = logits.max(Axis[L])
-  peak + (logits - peak.broadcastTo(logits.shape)).exp.sum(Axis[L]).log
+  peak + (logits -! peak).exp.sum(Axis[L]).log
 
 /** A one at the given position, which is where the record ends. */
 private def isAt[Slot: Label, V: IsFloating](position: Tensor0[V], slots: AxisExtent[Slot], vtype: VType[V]): Tensor1[Slot, V] =
   val indices = Tensor1(slots.axis, VType[Int32]).fromArray(Array.range(0, slots.size)).asFloat(vtype)
-  indices.elementEquals(position.broadcastTo(indices.shape)).asFloat(vtype)
+  (indices elementEquals_! position).asFloat(vtype)

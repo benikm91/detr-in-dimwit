@@ -212,7 +212,7 @@ class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExten
       val here = Shape2(everyDrawing, nodes)
       val filling = only(nodes, slot).broadcastTo(here) and fills.broadcastTo(here)
       def put[W](old: Tensor2[Drawing, Node, W], now: Tensor1[Drawing, W]) =
-        where(filling, now.broadcastTo(here), old)
+        where_!(filling, now, old)
       val record = taken.copy(
         nodeClass = put(taken.nodeClass, said),
         startX = put(taken.startX, startX),
@@ -229,7 +229,7 @@ class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExten
       val here = Shape2(everyDrawing, edges)
       val filling = only(edges, slot).broadcastTo(here) and fills.broadcastTo(here)
       def put[W](old: Tensor2[Drawing, Edge, W], now: Tensor1[Drawing, W]) =
-        where(filling, now.broadcastTo(here), old)
+        where_!(filling, now, old)
       val record = taken.copy(
         edgeClass = put(taken.edgeClass, said),
         subject = put(taken.subject, subject),
@@ -273,7 +273,7 @@ private def answered(scorer: EdgeHead[Float32], logits: EdgeLogits[Float32]) =
 /** The log probability of the value a position's scores are highest for. */
 private def chosen[Slot: Label, L: Label](logits: Tensor2[Slot, L, Float32]): Tensor1[Slot, Float32] =
   val peak = logits.max(Axis[L])
-  peak - (peak + (logits - peak.broadcastTo(logits.shape)).exp.sum(Axis[L]).log)
+  peak - (peak + (logits -! peak).exp.sum(Axis[L]).log)
 
 /** How much of a record there is to see, for the header of a drawing of it. */
 private def counted(record: RecordGraph): String =
