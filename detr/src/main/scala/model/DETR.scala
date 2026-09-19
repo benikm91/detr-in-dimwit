@@ -152,9 +152,13 @@ object DETR:
   /** How big a model a run asks for, which is the one thing about the model a run gets to choose.
     * Everything else is fixed, so that two runs of the same size are the same model.
     */
+  /** `s-deep` is the transformer of [[https://arxiv.org/abs/2005.12872 DETR]] itself: six layers
+    * either side, 256 wide, eight heads.
+    */
   enum Size(val name: String, val embedding: Int, val numLayers: Int, val numHeads: Int):
     case XS extends Size("xs", 128, 3, 4)
     case S extends Size("s", 256, 3, 8)
+    case SDeep extends Size("s-deep", 256, 6, 8)
 
   object Size:
 

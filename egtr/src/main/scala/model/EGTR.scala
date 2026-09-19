@@ -130,6 +130,7 @@ object EGTR:
   enum Size(val name: String, val embedding: Int, val numLayers: Int, val numHeads: Int):
     case XS extends Size("xs", 128, 3, 4)
     case S extends Size("s", 256, 3, 8)
+    case SDeep extends Size("s-deep", 256, 6, 8)
 
   object Size:
 
