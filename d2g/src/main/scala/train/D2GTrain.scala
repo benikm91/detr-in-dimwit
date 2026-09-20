@@ -49,9 +49,9 @@ case class D2GTrainState(
   * One implementation serves every corpus. What differs between them is held in the setup, so that
   * a change to how training works cannot reach one corpus and miss another.
   *
-  * Every device takes a batch of its own: the same step on its own drawings, and the gradients
-  * summed across devices before the parameters move. A run on several GPUs therefore takes fewer,
-  * larger steps than a run on one — the batch grows with the devices, not the step count.
+  * The batch is split over the devices: each takes the same step on its share of the drawings, and
+  * the gradients are summed before the parameters move. A run on more GPUs therefore holds less per
+  * device and takes the same steps — how many GPUs a run gets does not change what it learns.
   */
 def trainTranscriber(setup: D2GSetup): Unit =
   println(s"training $setup")
@@ -60,7 +60,8 @@ def trainTranscriber(setup: D2GSetup): Unit =
   trait Batch derives Label
   trait X derives MeshLabel
   val mesh = Mesh1(MeshAxis[X] -> Jax.devices.size)
-  val batchSize = setup.batchSizePerDevice * mesh.sizeOf(MeshAxis[X])
+  val batchSize = setup.batchSize
+  require(batchSize % mesh.sizeOf(MeshAxis[X]) == 0, s"a batch of $batchSize does not split over $mesh")
   val numSteps = setup.numSamples / batchSize
   val warmupSteps = setup.warmupSamples / batchSize
   val cooldownSteps = setup.cooldownSamples / batchSize

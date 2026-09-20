@@ -19,7 +19,12 @@ if [[ $# -eq 2 ]]; then
   export CORPUS SIZE
   mkdir -p "$OUTPUT_DIR"
 
-  jobId="$(sbatch --parsable --job-name="$MODEL-$CORPUS-$SIZE-train" "runs/$MODEL.sh" train)"
+  # Enough GPUs that a device's share of the batch fits in memory.
+  case $SIZE in
+    s-deep) gpus=4 ;;
+    *) gpus=2 ;;
+  esac
+  jobId="$(sbatch --parsable --gres=gpu:$gpus --job-name="$MODEL-$CORPUS-$SIZE-train" "runs/$MODEL.sh" train)"
   echo "queued $MODEL on $CORPUS at size $SIZE as $jobId: metrics in $OUTPUT_DIR"
   exit 0
 fi

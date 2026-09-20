@@ -21,7 +21,7 @@ case class D2GSetup(
     checkpointRoot: String,
     checkpointEverySamples: Int = 16_000 * 64,
     numSamples: Int = 320_000 * 64,
-    batchSizePerDevice: Int = 64,
+    batchSize: Int = 128,
     learningRate: Float = 3e-4f,
     finalLearningRate: Float = 0f,
     weightDecay: Float = 1e-4f,
@@ -34,7 +34,7 @@ case class D2GSetup(
   val nodeSlots: Int = corpus.maxNodes + 1 // One more due to the end prediction
   val edgeSlots: Int = corpus.maxEdges + 1 // One more due to the end prediction
 
-  override def toString: String = s"D2GSetup(${corpus.repoId}, layers=$numLayers, heads=$numHeads, embedding=$embedding, nodes=$nodeSlots, edges=$edgeSlots, samples=$numSamples, batch=$batchSizePerDevice per device)"
+  override def toString: String = s"D2GSetup(${corpus.repoId}, layers=$numLayers, heads=$numHeads, embedding=$embedding, nodes=$nodeSlots, edges=$edgeSlots, samples=$numSamples, batch=$batchSize)"
 
 object D2GSetup:
 
