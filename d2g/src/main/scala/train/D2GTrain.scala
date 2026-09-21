@@ -52,8 +52,14 @@ case class D2GTrainState(
   * The batch is split over the devices: each takes the same step on its share of the drawings, and
   * the gradients are summed before the parameters move. A run on more GPUs therefore holds less per
   * device and takes the same steps — how many GPUs a run gets does not change what it learns.
+  *
+  * A run continued `from` a step starts where the newest run in the same place stood at that step
+  * — parameters, optimizer moments, the batch it had reached — and follows this setup's schedule
+  * from there, which has to agree with the earlier run's up to that step: a step of the constant
+  * learning rate. The checkpoints up to there come along, so that scoring the continued run scores
+  * the whole history.
   */
-def trainTranscriber(setup: D2GSetup): Unit =
+def trainTranscriber(setup: D2GSetup, from: Option[Int] = None): Unit =
   println(s"training $setup")
 
   dimwit.initialize()
@@ -67,12 +73,15 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val cooldownSteps = setup.cooldownSamples / batchSize
   val checkpointEvery = setup.checkpointEverySamples / batchSize
   require(numSteps % checkpointEvery == 0, s"$numSteps steps do not end on a checkpoint, which is where the cooldown ends")
+  from.foreach: step =>
+    require(step % checkpointEvery == 0, s"step $step is not a checkpoint")
+    require(step > warmupSteps && step <= numSteps - cooldownSteps, s"step $step is not at the constant learning rate, where a run is continued from")
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numSteps steps")
 
   val nodes = Axis[Node] -> setup.nodeSlots
   val edges = Axis[Edge] -> setup.edgeSlots
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
-  val batches = data.batches(Axis[Batch] -> batchSize)
+  val batches = data.batches(Axis[Batch] -> batchSize, skipping = from.getOrElse(0))
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 
@@ -145,7 +154,17 @@ def trainTranscriber(setup: D2GSetup): Unit =
       )
     )
 
+  // The new folder is made at the first save, so the newest one is still the earlier run's.
   val checkpointer = TensorTreeCheckpointer.newIn(setup.checkpointRoot)
+  val (initialState, startStep, secondsBefore) = from match
+    case None => (D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, 0f), 0, 0L)
+    case Some(step) =>
+      val earlier = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no run to continue in ${setup.checkpointRoot}"))
+      val state = earlier.load[D2GTrainState](step).getOrElse(sys.error(s"no checkpoint $step in ${earlier.rootPath}: ${earlier.iterations.mkString(", ")}"))
+      earlier.iterations.takeWhile(_ <= step).foreach(at => checkpointer.save(earlier.load[D2GTrainState](at).get, at))
+      println(s"continuing ${earlier.rootPath} from step $step, its checkpoints up to there taken over")
+      val secondsUpToStep = Runs.trainingSeconds(earlier.rootPath).fold(0L)(_ * step / earlier.iterations.last)
+      (state, step, secondsUpToStep)
   val history = History()
   val monitor = Monitor.ConcatMonitor[D2GTrainState](List(
     Monitor.StepMonitor(),
@@ -156,18 +175,18 @@ def trainTranscriber(setup: D2GSetup): Unit =
 
   val started = System.nanoTime
   batches
-    .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, 0f)):
+    .scanLeft(initialState):
       case (state, batch) =>
         val (images, records) = shard(batch)
         jitGradientStep(images, records, state)
     .tapEvery(100):
-      case (state, step) => println(monitor.report(step, state))
+      case (state, taken) => println(monitor.report(startStep + taken, state))
     .tapEvery(checkpointEvery):
-      case (state, step) =>
+      case (state, taken) =>
+        val step = startStep + taken
         checkpointer.save(state, step)
         history.add(step, state.loss.item)
         println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
-    .drop(numSteps)
+    .drop(numSteps - startStep)
     .next()
-  Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)
-  Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)
+  Runs.noteTrainingSeconds(checkpointer.rootPath, secondsBefore + (System.nanoTime - started) / 1_000_000_000)

@@ -131,13 +131,14 @@ final class DrawingDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Labe
     (0 until numSamples).iterator.map: at =>
       Sample(drawn(Axis[Drawings] -> 1, at).slice(Axis[Drawings].at(0)), recordAt(at))
 
-  /** Batches of drawings, for as long as they are asked for. The drawings were generated
+  /** Batches of drawings, for as long as they are asked for, the first `skipping` of them left
+    * out — where a run continued from a step picks the cycle up. The drawings were generated
     * independently of one another, so reading them in order is already a shuffle.
     */
-  def batches[S: Label](batch: AxisExtent[S]): Iterator[Batch[S, W, H, C, RecordBatch[S, Node, Edge]]] =
+  def batches[S: Label](batch: AxisExtent[S], skipping: Int = 0): Iterator[Batch[S, W, H, C, RecordBatch[S, Node, Edge]]] =
     require(batch.size <= numSamples, s"a batch of ${batch.size} exceeds the $numSamples drawings of the split")
     val starts = 0 to numSamples - batch.size by batch.size
-    Iterator.continually(starts).flatten.map(from => Batch(drawn(batch, from), recordsIn(batch, from)))
+    Iterator.continually(starts).flatten.drop(skipping).map(from => Batch(drawn(batch, from), recordsIn(batch, from)))
 
   /** The same drawings as something to detect. */
   def objects: Iterator[Sample[W, H, C, Objects[Node]]] = samples.map(_.map(Objects.of))

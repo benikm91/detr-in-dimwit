@@ -23,11 +23,15 @@
 # OUTPUT_DIR is where `d2g-<corpus>-<size>.csv` ends up: what is left of the job once the
 # instance is wiped. CHECKPOINT_DIR is where the checkpoints go, under OUTPUT_DIR unless it is set
 # otherwise: the scoring job reads them back, and they are yours to delete once it has.
+#
+# The `continue` stage takes the newest run in CHECKPOINT_DIR up again at step FROM_STEP, so
+# CHECKPOINT_DIR points at the checkpoints of the run to continue.
 
 set -euo pipefail
 
-STAGE="${1:?say which stage to run: train or eval}"
-[[ $STAGE == train || $STAGE == eval ]] || { echo "no stage named '$STAGE': train or eval" >&2; exit 2; }
+STAGE="${1:?say which stage to run: train, continue or eval}"
+[[ $STAGE == train || $STAGE == continue || $STAGE == eval ]] || { echo "no stage named '$STAGE': train, continue or eval" >&2; exit 2; }
+[[ $STAGE != continue ]] || : "${FROM_STEP:?set FROM_STEP to the checkpoint step to continue from}"
 
 : "${CACHE_DIR:?set CACHE_DIR to a directory that outlives the job, where the corpora are cached}"
 : "${OUTPUT_DIR:?set OUTPUT_DIR to a directory that outlives the job, where the metrics are written}"
@@ -63,6 +67,7 @@ sarus run \
     stage="$3"
     slurmJobId="$4"
     node="$5"
+    fromStep="$6"
 
     export TMPDIR=/tmp
 
@@ -101,7 +106,7 @@ sarus run \
     # What produced the metrics beside it: the commits every part of the stack was built from, the
     # JAX that ran them, and the GPUs they ran on. Written before training, so that a run cut short
     # still says what it was.
-    if [[ $stage == train ]]; then
+    if [[ $stage != eval ]]; then
       jaxVersion="$(uv run python -c "import jax; print(jax.__version__)" 2>/dev/null || echo unknown)"
       gpus="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | paste -sd ";" - || true)"
       [[ -n $gpus ]] || gpus=unknown
@@ -127,15 +132,16 @@ JSON
 
     case "$stage" in
       train) sbt "d2g/runMain d2gTrain $corpus $size" ;;
+      continue) sbt "d2g/runMain d2gContinue $corpus $size $fromStep" ;;
       eval) sbt "d2g/runMain d2gEval $corpus $size" ;;
     esac
-  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}"
+  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "${FROM_STEP:-}"
 
-if [[ $STAGE == train ]]; then
+if [[ $STAGE != eval ]]; then
   echo "job finished, checkpoints in $CHECKPOINT_DIR"
   # Scoring is queued from here, so that it reads the checkpoints this run just wrote and runs only
   # if there are any. One GPU is enough: it scores one checkpoint at a time.
-  evalId="$(sbatch --parsable --gres=gpu:1 --time=4:00:00 --job-name="d2g-$CORPUS-$SIZE-eval" runs/d2g.sh eval)"
+  evalId="$(sbatch --parsable --gres=gpu:1 --time=8:00:00 --job-name="d2g-$CORPUS-$SIZE-eval" runs/d2g.sh eval)"
   echo "queued scoring as $evalId"
 else
   echo "job finished, metrics in $OUTPUT_DIR:"
