@@ -47,12 +47,13 @@ def scoreTranscriber(setup: D2GSetup, size: String): Unit =
   val data = open(setup, Split.Validation)
   println(s"pool of ${setup.queryPool} queries, ${data.numSamples} drawings\n")
 
+  val transcriber = Transcriber(nodes, edges, TranscribedTogether)
+
   /** Every drawing of the split transcribed by a model, beside the record it was rendered from. */
   def transcribed(params: D2G.Params[Float32]): Seq[(RecordGraph, RecordGraph)] =
-    val transcriber = Transcriber(D2G(params), nodes, edges, TranscribedTogether)
     data.samples
       .grouped(TranscribedTogether)
-      .flatMap(batch => batch.map(sample => RecordGraph.of(sample.target)).zip(transcriber(batch.map(_.image))))
+      .flatMap(batch => batch.map(sample => RecordGraph.of(sample.target)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
   val rows = checkpoints.iterations.flatMap: step =>
@@ -75,9 +76,9 @@ def plotTranscriber(setup: D2GSetup): Unit =
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
-  val model = D2G(checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params)
+  val params = checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params
   val (nodes, edges) = (Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots)
-  val transcriber = Transcriber(model, nodes, edges)
+  val transcriber = Transcriber(nodes, edges)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
     val data = open(setup, split)
     data
@@ -87,7 +88,7 @@ def plotTranscriber(setup: D2GSetup): Unit =
       .map: (sample, index) =>
         val document = Outlines.greyLevels(sample.image)
         val target = RecordGraph.of(sample.target)
-        val transcribed = transcriber(sample.image)
+        val transcribed = transcriber(params, sample.image)
         println(s"${split.fileName} $index target:      ${describe(target)}")
         println(s"${split.fileName} $index transcribed: ${describe(transcribed)}")
         def drawn(record: RecordGraph) = RecordDrawing(record, document, Axis[Channel])
@@ -122,8 +123,8 @@ private trait Drawing derives Label
   * encoder, every decoding step and both scorers together — so a batch costs one compiled call
   * rather than one dispatch per operation per step per drawing. `drawings` is how wide that batch
   * is; a call handing over fewer is filled up with a drawing it already holds and read back short
-  * again, so that every batch is the same shape and the computation is compiled once for the
-  * whole split.
+  * again, so that every batch is the same shape. The parameters are an argument, so the one
+  * compiled computation serves every batch of every checkpoint.
   *
   * In lockstep means every drawing takes its first node, then its second, and so on for as many
   * slots as a record has. A drawing that has answered [[NodeClass.NoNode]] takes nothing more, and
@@ -137,14 +138,13 @@ private trait Drawing derives Label
   * Each step still re-reads what it has taken so far, since there is no KV cache. That makes every
   * step cost more than it needs to, which is of no consequence here.
   */
-class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: Int = 1)
-    extends (Tensor3[Width, Height, Channel, Float32] => RecordGraph):
+class Transcriber(nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: Int = 1):
 
-  private val transcribe = jit: (documents: Tensor4[Drawing, Width, Height, Channel, Float32]) =>
-    written(documents)
+  private val transcribe = jit: (params: D2G.Params[Float32], documents: Tensor4[Drawing, Width, Height, Channel, Float32]) =>
+    written(D2G(params), documents)
 
   /** The records a batch of documents hold. */
-  private def written(documents: Tensor4[Drawing, Width, Height, Channel, Float32]): RecordBatch[Drawing, Node, Edge] =
+  private def written(model: D2G[Float32], documents: Tensor4[Drawing, Width, Height, Channel, Float32]): RecordBatch[Drawing, Node, Edge] =
 
     val everyDrawing = documents.shape.extent(Axis[Drawing])
 
@@ -245,14 +245,14 @@ class Transcriber(model: D2G[Float32], nodes: AxisExtent[Node], edges: AxisExten
 
     withEdges
 
-  override def apply(document: Tensor3[Width, Height, Channel, Float32]): RecordGraph =
-    apply(Seq(document)).head
+  def apply(params: D2G.Params[Float32], document: Tensor3[Width, Height, Channel, Float32]): RecordGraph =
+    apply(params, Seq(document)).head
 
-  def apply(documents: Seq[Tensor3[Width, Height, Channel, Float32]]): Seq[RecordGraph] =
+  def apply(params: D2G.Params[Float32], documents: Seq[Tensor3[Width, Height, Channel, Float32]]): Seq[RecordGraph] =
     require(documents.nonEmpty, "there is nothing to transcribe")
     require(documents.size <= drawings, s"${documents.size} drawings do not fit in a batch of $drawings")
     val filled = documents.padTo(drawings, documents.last)
-    RecordGraph.of(transcribe(stack(filled, Axis[Drawing]))).take(documents.size)
+    RecordGraph.of(transcribe(params, stack(filled, Axis[Drawing]))).take(documents.size)
 
 private def open(setup: D2GSetup, split: Split) =
   DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
