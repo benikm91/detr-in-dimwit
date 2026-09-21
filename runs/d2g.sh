@@ -18,7 +18,9 @@
 #   OUTPUT_DIR=/cluster/scratch/$USER/metrics \
 #     sbatch runs/d2g.sh train
 #
-# `runs/queue_d2g.sh` is the usual way in; `sbatch` hands the environment on to the job.
+# `runs/queue_d2g.sh` is the usual way in; `sbatch` hands the environment on to the job. The job
+# builds the branch this repository has checked out, as pushed to GitHub — a change that is not
+# pushed is not run.
 # CACHE_DIR is where the corpora land, so that the next job does not download them again.
 # OUTPUT_DIR is where `d2g-<corpus>-<size>.csv` ends up: what is left of the job once the
 # instance is wiped. CHECKPOINT_DIR is where the checkpoints go, under OUTPUT_DIR unless it is set
@@ -42,8 +44,11 @@ export CHECKPOINT_DIR="${CHECKPOINT_DIR:-$OUTPUT_DIR/checkpoints}"
 export CORPUS="${CORPUS:-sketch}"
 export SIZE="${SIZE:-s}"
 
+# Inherited by the scoring job this one queues, so both build the same branch.
+export BRANCH="${BRANCH:-$(git -C "${SLURM_SUBMIT_DIR:-$PWD}" rev-parse --abbrev-ref HEAD)}"
+
 mkdir -p "$CACHE_DIR" "$OUTPUT_DIR" "$CHECKPOINT_DIR"
-echo "running d2g $STAGE on $CORPUS at size $SIZE: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
+echo "running d2g $STAGE on $CORPUS at size $SIZE from branch $BRANCH: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
 
 # Which run this job is, for looking its id up later by what it ran and where it wrote.
 printf '%s\td2g\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CORPUS" "$SIZE" "$STAGE" "$OUTPUT_DIR" "${SLURM_JOB_ID:-none}" \
@@ -68,6 +73,7 @@ sarus run \
     slurmJobId="$4"
     node="$5"
     fromStep="$6"
+    branch="$7"
 
     export TMPDIR=/tmp
 
@@ -84,7 +90,7 @@ sarus run \
     git clone https://github.com/dimwit-dev/dimwit
     git clone https://github.com/dimwit-dev/deepwit
     git clone https://github.com/benikm91/dimwit-sharding
-    git clone https://github.com/benikm91/detr-in-dimwit
+    git clone --branch "$branch" https://github.com/benikm91/detr-in-dimwit
 
     cd dimwit
     sbt publishLocal
@@ -119,6 +125,7 @@ sarus run \
   "node": "$node",
   "gpus": "$gpus",
   "jax": "$jaxVersion",
+  "branch": "$branch",
   "commits": {
     "detr-in-dimwit": "$(git -C /usr/src/detr-in-dimwit rev-parse HEAD)",
     "dimwit": "$(git -C /usr/src/dimwit rev-parse HEAD)",
@@ -135,7 +142,7 @@ JSON
       continue) sbt "d2g/runMain d2gContinue $corpus $size $fromStep" ;;
       eval) sbt "d2g/runMain d2gEval $corpus $size" ;;
     esac
-  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "${FROM_STEP:-}"
+  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "${FROM_STEP:-}" "$BRANCH"
 
 if [[ $STAGE != eval ]]; then
   echo "job finished, checkpoints in $CHECKPOINT_DIR"
