@@ -55,15 +55,17 @@ case class TrainState(
 
 /** Trains a detector on the corpus its [[DETRSetup]] names.
   *
-  * The batch grows with the devices, not the step count: every device takes a batch of its own and
-  * the gradients are summed across them before the parameters move.
+  * The batch is split over the devices: each takes the same step on its share of the drawings, and
+  * the gradients are summed before the parameters move. A run on more GPUs therefore holds less per
+  * device and takes the same steps — how many GPUs a run gets does not change what it learns.
   */
 def trainDetector(setup: DETRSetup): Unit =
   dimwit.initialize()
   println(s"training $setup")
 
   val mesh = Mesh1(MeshAxis[X] -> Jax.devices.size)
-  val batchSize = setup.batchSizePerDevice * mesh.sizeOf(MeshAxis[X])
+  val batchSize = setup.batchSize
+  require(batchSize % mesh.sizeOf(MeshAxis[X]) == 0, s"a batch of $batchSize does not split over $mesh")
   val numSteps = setup.numSamples / batchSize
   val warmupSteps = setup.warmupSamples / batchSize
   val cooldownSteps = setup.cooldownSamples / batchSize
