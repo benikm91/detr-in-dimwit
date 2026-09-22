@@ -49,9 +49,12 @@ case class EGTRSetup(
     sourceExtent: Int = 128,
     hiddenExtent: Int = 128,
 
-    checkpointEverySamples: Int = 16_000 * 64,
-    numSamples: Int = 320_000 * 64,
-    batchSizePerDevice: Int = 64,
+    /** The same run as the transcriber's, so that the two are compared on it: 328k steps of 128
+      * drawings, the last 80k of them the cooldown.
+      */
+    checkpointEverySamples: Int = 8_000 * 128,
+    numSamples: Int = 328_000 * 128,
+    batchSize: Int = 128,
     learningRate: Float = 3e-4f,
 
     /** Where the cosine bottoms out. Aligned with the other models. */
@@ -60,8 +63,8 @@ case class EGTRSetup(
     maxGradientNorm: Float = 1f,
 
     /** How long the rate climbs before it holds, and how long it falls again at the end. */
-    warmupSamples: Int = 2_000 * 64,
-    cooldownSamples: Int = 50_000 * 64,
+    warmupSamples: Int = 1_000 * 128,
+    cooldownSamples: Int = 80_000 * 128,
 
     seed: Int = 0
 ):
@@ -72,7 +75,7 @@ case class EGTRSetup(
 
   override def toString: String =
     s"EGTRSetup(${corpus.repoId}, layers=$numLayers, heads=$numHeads, embedding=$embedding, " +
-      s"queries=$numQueries, objects<=${corpus.maxNodes}, samples=$numSamples, batch=$batchSizePerDevice per device, " +
+      s"queries=$numQueries, objects<=${corpus.maxNodes}, samples=$numSamples, batch=$batchSize, " +
       s"detector=${detectorCheckpointRoot.getOrElse("from scratch")})"
 
 object EGTRSetup:
