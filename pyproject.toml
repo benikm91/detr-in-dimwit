@@ -5,11 +5,23 @@ description = "Python environment accessed through ScalaPy by DimWit and the l-s
 requires-python = ">=3.12"
 dependencies = [
     "einops>=0.8.1",
-    "jax[cuda12]>=0.8.2",
+    # The CUDA build is what the cluster trains on; a desk reading results gets plain jax.
+    "jax[cuda12]>=0.8.2 ; sys_platform == 'linux'",
+    "jax>=0.8.2 ; sys_platform != 'linux'",
     "numpy>=2.0",
     # Used by src/main/resources/python/l_shape_dataset.py to fetch the dataset;
     # hf-xet makes the ~8.6 GB train split download noticeably faster.
     "huggingface-hub[hf-xet]>=0.36",
+]
+
+# Reading what a run measured, not running one: plot_run.py and the interactive window.
+[dependency-groups]
+analysis = [
+    "pandas>=2.2",
+    "seaborn>=0.13",
+    "matplotlib>=3.9",
+    "pillow>=10.0",
+    "ipykernel>=6.29",
 ]
 
 [tool.uv]
