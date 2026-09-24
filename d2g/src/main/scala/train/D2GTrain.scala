@@ -62,9 +62,9 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val mesh = Mesh1(MeshAxis[X] -> Jax.devices.size)
   val batchSize = setup.batchSize
   require(batchSize % mesh.sizeOf(MeshAxis[X]) == 0, s"a batch of $batchSize does not split over $mesh")
-  val numSteps = setup.numSamples / batchSize
-  val warmupSteps = setup.warmupSamples / batchSize
-  val cooldownSteps = setup.cooldownSamples / batchSize
+  // Hardcoded: continue the sketch run rather than start one, at the rate it was held at.
+  val numSteps = 304_000
+  val warmupSteps = 1_000
   val checkpointEvery = setup.checkpointEverySamples / batchSize
   require(numSteps % checkpointEvery == 0, s"$numSteps steps do not end on a checkpoint, which is where the cooldown ends")
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numSteps steps")
@@ -76,22 +76,24 @@ def trainTranscriber(setup: D2GSetup): Unit =
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 
+  /** The rate climbs back to where it was held, and is held there: this run only continues the
+    * last one, and the cosine that settles a model comes at the end of whatever follows it.
+    */
   val schedule: LearningRateSchedule =
     LinearWarmup(setup.learningRate, warmupSteps)
-      .followBy(ConstantLearningRate(setup.learningRate, numSteps - warmupSteps - cooldownSteps))
-      .followBy(CosineDecay(setup.learningRate, setup.finalLearningRate, cooldownSteps))
+      .followBy(ConstantLearningRate(setup.learningRate, numSteps - warmupSteps))
   val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), setup.weightDecay), schedule)
 
-  val initialParams = D2G.Params.init(
-    numLayers = setup.numLayers,
-    numHeads = setup.numHeads,
-    embedding = setup.embedding,
-    nodes = setup.nodeSlots,
-    edges = setup.edgeSlots,
-    queries = setup.queryPool,
-    canvas = Canvas,
-    key = initKey
-  )
+  /** Where the last run was still being held at the full rate: the step before its cooldown. */
+  val continuedFrom = 248_000
+
+  val initialParams = TensorTreeCheckpointer
+    .latestIn(setup.checkpointRoot)
+    .getOrElse(sys.error(s"no run to continue in ${setup.checkpointRoot}"))
+    .load[D2GTrainState](continuedFrom)
+    .getOrElse(sys.error(s"no checkpoint $continuedFrom to continue from"))
+    .params
+  println(s"continuing from step $continuedFrom for $numSteps more")
 
   trait Parameter derives Label
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
