@@ -6,7 +6,11 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # The runs to look at; the order fixes which colour each of them gets where they are compared.
-RUNS = [Path("d2g-rectilinear-s-deep.csv"), Path("detr-rectilinear-s-deep.csv")]
+RUNS = [
+    Path("d2g-rectilinear-s-deep.csv"),
+    Path("detr-rectilinear-s-deep.csv"),
+    Path("d2g-sketch-s-deep.csv"),
+]
 
 # A model that decides by a threshold is scored at several; read it at this one. None for a
 # model that has no threshold.
@@ -138,39 +142,42 @@ for path, scores in runs.items():
     fig.tight_layout()
     plt.show()
 
-# %% The runs on the same corpus, what they say about nodes
-compared = pd.concat(runs.values())
-# At no tolerance at all nothing is ever exactly right, so that panel would be empty.
-compared = compared[compared.tolerance > 0].sort_values(["model", "tolerance", "step"])
-# Runs need not be the same length, so each line is named with the step it reaches.
-reached = compared.groupby("model").step.max()
-models = list(dict.fromkeys(compared.model))
+# %% The runs on each corpus, what they say about nodes
+scores = pd.concat(runs.values())
+# A model keeps its colour wherever it is compared, so two corpora read the same way.
+models = list(dict.fromkeys(scores.model))
 MODEL_COLOURS = dict(zip(models, ["#2a78d6", "#eb6834"]))
-# Both models can finish on the same value, so their end labels are nudged apart.
+# Two models can finish on the same value, so their end labels are nudged apart.
 LABEL_NUDGES = dict(zip(models, [7, -7]))
 
 # A detector answers with no relationships, so only what a model says about nodes is comparable.
 COMPARED_SCORES = ["node_recall", "node_precision", "nodes_exact"]
-tolerances_compared = sorted(compared.tolerance.unique())
 
-fig, axes = plt.subplots(len(COMPARED_SCORES), len(tolerances_compared), sharex=True, sharey=True,
-                         figsize=(5 * len(tolerances_compared), 3.6 * len(COMPARED_SCORES)))
-for row, score in zip(axes, COMPARED_SCORES):
-    for ax, tolerance in zip(row, tolerances_compared):
-        for model, at in compared[compared.tolerance == tolerance].groupby("model"):
-            ax.plot(at.step, at[score], color=MODEL_COLOURS[model],
-                    label=f"{model} (to {reached[model] / 1000:.0f}k)")
-            end = at.iloc[-1]
-            ax.annotate(f"{end[score]:.0f}%", (end.step, end[score]), xytext=(8, LABEL_NUDGES[model]),
-                        textcoords="offset points", va="center", fontsize=9, color="#52514e")
-        ax.set_ylim(0, 100)
-        ax.set_xlim(0, compared.step.max() * 1.12)
-    row[0].set_ylabel(f"{SCORES[score]} (%)")
-for ax, tolerance in zip(axes[0], tolerances_compared):
-    ax.set_title(f"{tolerance:.0f} px", loc="left")
-for ax in axes[-1]:
-    step_axis(ax)
-axes[0, 0].legend(loc="lower right")
-fig.suptitle(f"{compared.corpus.iloc[0]}, {compared['size'].iloc[0]}", x=0.01, ha="left")
-fig.tight_layout()
-plt.show()
+for corpus, compared in scores.groupby("corpus"):
+    # At no tolerance at all nothing is ever exactly right, so that panel would be empty.
+    compared = compared[compared.tolerance > 0].sort_values(["model", "tolerance", "step"])
+    # Runs need not be the same length, so each line is named with the step it reaches.
+    reached = compared.groupby("model").step.max()
+    tolerances_compared = sorted(compared.tolerance.unique())
+
+    fig, axes = plt.subplots(len(COMPARED_SCORES), len(tolerances_compared), sharex=True, sharey=True,
+                             figsize=(5 * len(tolerances_compared), 3.6 * len(COMPARED_SCORES)))
+    for row, score in zip(axes, COMPARED_SCORES):
+        for ax, tolerance in zip(row, tolerances_compared):
+            for model, at in compared[compared.tolerance == tolerance].groupby("model"):
+                ax.plot(at.step, at[score], color=MODEL_COLOURS[model],
+                        label=f"{model} (to {reached[model] / 1000:.0f}k)")
+                end = at.iloc[-1]
+                ax.annotate(f"{end[score]:.0f}%", (end.step, end[score]), xytext=(8, LABEL_NUDGES[model]),
+                            textcoords="offset points", va="center", fontsize=9, color="#52514e")
+            ax.set_ylim(0, 100)
+            ax.set_xlim(0, compared.step.max() * 1.12)
+        row[0].set_ylabel(f"{SCORES[score]} (%)")
+    for ax, tolerance in zip(axes[0], tolerances_compared):
+        ax.set_title(f"{tolerance:.0f} px", loc="left")
+    for ax in axes[-1]:
+        step_axis(ax)
+    axes[0, 0].legend(loc="lower right")
+    fig.suptitle(f"{corpus}, {compared['size'].iloc[0]}", x=0.01, ha="left")
+    fig.tight_layout()
+    plt.show()
