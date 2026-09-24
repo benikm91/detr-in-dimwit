@@ -9,29 +9,29 @@ import zlib
 
 import numpy as np
 
-# Between the two drawings of a pair, and between one pair and the next.
+# Between the tiles of one drawing, and between one drawing and the next.
 GUTTER = 2
 MARGIN = 10
 
 BLANK = 255
 
 
-def write(tiles, path, rows, pairs):
-    """Lays `tiles` out `pairs` across and `rows` down and writes the picture to `path`.
+def write(tiles, path, rows, across, per_drawing):
+    """Lays `tiles` out `across` drawings per row and `rows` down and writes the picture to `path`.
 
-    :param tiles: `(tile, width, height, colour)` pixels, every record followed by the
-        transcription of the same drawing.
+    :param tiles: `(tile, width, height, colour)` pixels, the `per_drawing` tiles of one drawing
+        one after the other.
     """
     tiles = np.asarray(tiles, dtype=np.uint8).transpose(0, 2, 1, 3)
     _, height, width, colours = tiles.shape
-    pair = 2 * width + GUTTER
+    drawing = per_drawing * width + (per_drawing - 1) * GUTTER
     picture = np.full(
-        (rows * (height + MARGIN) - MARGIN, pairs * (pair + MARGIN) - MARGIN, colours), BLANK, np.uint8
+        (rows * (height + MARGIN) - MARGIN, across * (drawing + MARGIN) - MARGIN, colours), BLANK, np.uint8
     )
     for at, tile in enumerate(tiles):
-        row, column = divmod(at // 2, pairs)
+        row, column = divmod(at // per_drawing, across)
         top = row * (height + MARGIN)
-        left = column * (pair + MARGIN) + (at % 2) * (width + GUTTER)
+        left = column * (drawing + MARGIN) + (at % per_drawing) * (width + GUTTER)
         picture[top:top + height, left:left + width] = tile
     _png(path, picture)
 

@@ -23,9 +23,10 @@ import java.nio.file.StandardCopyOption
   * `sbt "d2g/runMain d2gDraw sketch s-deep"`.
   *
   * A score says a transcription is wrong without saying how, and where the records themselves are
-  * uncertain — one stroke written down as two — how is most of what there is to know. Each picture
-  * holds validation drawings in pairs, the record a drawing was rendered from beside the record
-  * the model wrote down, and lands beside the metrics in `OUTPUT_DIR`.
+  * uncertain — one stroke written down as two — how is most of what there is to know. Every
+  * validation drawing is shown three times: the record it was rendered from, the record the model
+  * wrote down over the same drawing, and that record on its own. The pictures land beside the
+  * metrics in `OUTPUT_DIR`.
   */
 @main
 def d2gDraw(corpus: String, size: String): Unit =
@@ -36,25 +37,35 @@ def d2gDraw(corpus: String, size: String): Unit =
   println(s"reading ${checkpoints.rootPath}")
 
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation)
-  val drawings = data.samples.take(Rows * Pairs).toSeq
+  val drawings = data.samples.take(Rows * Across).toSeq
   val transcriber = Transcriber(Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots, WrittenTogether)
 
   /** What every checkpoint is drawn over and held against, read once since it does not change. */
-  val shown = drawings.map(sample => (Outlines.greyLevels(sample.image), RecordGraph.of(sample.target)))
+  val documents = drawings.map(sample => Outlines.greyLevels(sample.image))
+  val targets = drawings.map(sample => RecordGraph.of(sample.target))
+
+  /** The same canvas with nothing on it, so a transcription can also be read on its own. */
+  val nothing = Tensor.like(documents.head).fill(Blank)
 
   for step <- checkpoints.iterations do
     val params = checkpoints.load[D2GTrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params
     val written = drawings.grouped(WrittenTogether).flatMap(batch => transcriber(params, batch.map(_.image))).toSeq
-    val tiles = shown.zip(written).flatMap:
-      case ((document, target), transcribed) =>
-        Seq(RecordDrawing(target, document, Axis[Channel]), RecordDrawing(transcribed, document, Axis[Channel]))
+    val eachDrawing = documents.lazyZip(targets).lazyZip(written).map: (document, target, transcribed) =>
+      Seq(
+        RecordDrawing(target, document, Axis[Channel]),
+        RecordDrawing(transcribed, document, Axis[Channel]),
+        RecordDrawing(transcribed, nothing, Axis[Channel])
+      )
     val picture = Path.of(Runs.outputDir, s"d2g-${setup.corpus.name}-$size-$step.png")
-    tiling.write(toPyTensor(stack(tiles, Axis[Tile])), picture.toString, Rows, Pairs)
+    tiling.write(toPyTensor(stack(eachDrawing.flatten, Axis[Tile])), picture.toString, Rows, Across, eachDrawing.head.size)
     println(s"step $step | ${written.size} drawings written to $picture")
 
-/** The picture: pairs across, rows down, a pair being one record beside one transcription. */
+/** The picture: drawings across, rows down, each drawing shown as the three tiles above. */
 private val Rows = 16
-private val Pairs = 16
+private val Across = 16
+
+/** An empty canvas, as [[dataset.Outlines]] reads one. */
+private val Blank = 255
 
 /** How many drawings are transcribed together, as in the scoring: one traced computation. */
 private val WrittenTogether = 32
