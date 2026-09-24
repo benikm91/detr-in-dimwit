@@ -29,7 +29,7 @@ object Matching:
       .foldLeft((cost, Tensor(Shape1(rows), VType[Int32]).fill(0))):
         case ((remaining, assignment), _) =>
           val cheapestColumn = remaining.argmin(Axis[Column])
-          val row = remaining.min(Axis[Column]).argmin
+          val row = remaining.min(Axis[Column]).argmin(Axis[Row])
           val column = cheapestColumn.slice(Axis[Row].at(row))
           val isRow = rowIndices.elementEquals(row.broadcastTo(Shape1(rows)))
           val isColumn = columnIndices.elementEquals(column.broadcastTo(Shape1(columns)))

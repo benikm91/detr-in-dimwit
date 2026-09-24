@@ -184,7 +184,7 @@ class Transcriber(nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: In
               case (nodeClass, startX, startY, endX, endY) =>
                 answered(model.nodeHead, NodeLogits(nodeClass, startX, startY, endX, endY))
           val here = Axis[Node].at(slot)
-          val likeliest = Axis[PoolQuery].at(score.slice(here).argmax)
+          val likeliest = Axis[PoolQuery].at(score.slice(here).argmax(Axis[PoolQuery]))
           (saidClass.slice(here).slice(likeliest), saidStartX.slice(here).slice(likeliest), saidStartY.slice(here).slice(likeliest), saidEndX.slice(here).slice(likeliest), saidEndY.slice(here).slice(likeliest))
 
     /** The same for a relationship slot. */
@@ -196,7 +196,7 @@ class Transcriber(nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: In
             zipvmap(Axis[PoolQuery])(scored.edgeClass, scored.subject, scored.obj):
               case (edgeClass, subject, obj) => answered(model.edgeHead, EdgeLogits(edgeClass, subject, obj))
           val here = Axis[Edge].at(slot)
-          val likeliest = Axis[PoolQuery].at(score.slice(here).argmax)
+          val likeliest = Axis[PoolQuery].at(score.slice(here).argmax(Axis[PoolQuery]))
           (saidClass.slice(here).slice(likeliest), saidSubject.slice(here).slice(likeliest), saidObj.slice(here).slice(likeliest))
 
     /** The slot a step fills, as a mask over the record's slots. */
