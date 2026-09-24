@@ -76,7 +76,8 @@ def _ring(image, left, right, colour):
     (left_x, y), (right_x, _) = left, right
     radius = (right_x - left_x) / 2
     centre_x = left_x + radius
-    steps = 2 * int(np.ceil(2 * np.pi * radius * canvas)) + 1
+    # A transcription may place the ends the other way round, which is the same circle drawn backwards.
+    steps = 2 * int(np.ceil(2 * np.pi * abs(radius) * canvas)) + 1
     for angle in np.linspace(0, 2 * np.pi, steps):
         _dot(image, centre_x + radius * np.cos(angle), y + radius * np.sin(angle), colour)
 
