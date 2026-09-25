@@ -33,11 +33,11 @@ case class DETRSetup(
     numHeads: Int = 4,
     embedding: Int = 128,
 
-    /** The same run as the transcriber's, so that the two are compared on it: 328k steps of 128
-      * drawings, the last 80k of them the cooldown.
+    /** The same run as the transcriber's, so that the two are compared on it: 1M steps of 128
+      * drawings, the last 100k of them the cooldown.
       */
-    checkpointEverySamples: Int = 8_000 * 128,
-    numSamples: Int = 328_000 * 128,
+    checkpointEverySamples: Int = 20_000 * 128,
+    numSamples: Int = 1_000_000 * 128,
     batchSize: Int = 128,
     learningRate: Float = 3e-4f,
 
@@ -54,7 +54,7 @@ case class DETRSetup(
 
     /** How long the rate climbs before it holds, and how long it falls again at the end. */
     warmupSamples: Int = 1_000 * 128,
-    cooldownSamples: Int = 80_000 * 128,
+    cooldownSamples: Int = 100_000 * 128,
 
     seed: Int = 0
 ):
