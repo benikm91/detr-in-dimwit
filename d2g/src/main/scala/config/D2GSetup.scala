@@ -19,15 +19,15 @@ case class D2GSetup(
 
     // Train configuration
     checkpointRoot: String,
-    checkpointEverySamples: Int = 8_000 * 128,
-    numSamples: Int = 328_000 * 128,
+    checkpointEverySamples: Int = 20_000 * 128,
+    numSamples: Int = 1_000_000 * 128,
     batchSize: Int = 128,
     learningRate: Float = 3e-4f,
     finalLearningRate: Float = 0f,
     weightDecay: Float = 1e-4f,
     maxGradientNorm: Float = 1f,
     warmupSamples: Int = 1_000 * 128,
-    cooldownSamples: Int = 80_000 * 128,
+    cooldownSamples: Int = 100_000 * 128,
     seed: Int = 42
 ):
 
