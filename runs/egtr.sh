@@ -8,6 +8,9 @@
 #SBATCH --time=6:00:00
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/%x_%j.out
 #SBATCH --error=/cluster/home/%u/.logs/slurm/%j/%x_%j.err
+#SBATCH --signal=B:USR1@600
+#SBATCH --requeue
+#SBATCH --open-mode=append
 #
 # Trains the scene graph model on a corpus, scores every checkpoint, and leaves the metrics as one
 # CSV. The detector underneath is trained with it, from scratch. The batch is split over the GPUs
@@ -50,6 +53,17 @@ echo "running egtr $STAGE on $CORPUS at size $SIZE from branch $BRANCH: corpora 
 # Which run this job is, for looking its id up later by what it ran and where it wrote.
 printf '%s\tegtr\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CORPUS" "$SIZE" "$STAGE" "$OUTPUT_DIR" "${SLURM_JOB_ID:-none}" \
   >>"${SLURM_SUBMIT_DIR:-$PWD}/jobs.txt"
+
+# A run longer than one job puts itself back in the queue shortly before Slurm would kill it.
+# What starts again reads the newest checkpoint of the same folder and takes the steps that
+# are left, so how long a run is is set by its step count and not by what fits in a job.
+requeued=no
+continueLater() {
+  requeued=yes
+  echo "time limit approaching: putting ${SLURM_JOB_ID:-this job} back in the queue to carry on"
+  scontrol requeue "$SLURM_JOB_ID"
+}
+if [[ $STAGE == train ]]; then trap continueLater USR1; fi
 
 module load sarus/1.6.4
 
@@ -137,7 +151,15 @@ JSON
       train) sbt "egtr/runMain egtrTrain $corpus $size" ;;
       eval) sbt "egtr/runMain egtrEval $corpus $size" ;;
     esac
-  ' egtr "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH"
+  ' egtr "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" &
+
+wait $! || trained=$?
+
+if [[ $requeued == yes ]]; then
+  echo "stopped at the time limit; the rest of this run is queued"
+  exit 0
+fi
+[[ ${trained:-0} -eq 0 ]] || exit "${trained:-0}"
 
 if [[ $STAGE == train ]]; then
   echo "job finished, checkpoints in $CHECKPOINT_DIR"

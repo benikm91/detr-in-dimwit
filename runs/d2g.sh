@@ -8,6 +8,9 @@
 #SBATCH --time=6:00:00
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/%x_%j.out
 #SBATCH --error=/cluster/home/%u/.logs/slurm/%j/%x_%j.err
+#SBATCH --signal=B:USR1@600
+#SBATCH --requeue
+#SBATCH --open-mode=append
 #
 # Trains the transcriber on a corpus, scores every checkpoint, and leaves the metrics as one CSV.
 # The batch is split over the GPUs the job gets, so `--gres=gpu:N` sets how much of it each GPU
@@ -38,12 +41,27 @@ export CHECKPOINT_DIR="${CHECKPOINT_DIR:-$OUTPUT_DIR/checkpoints}"
 export CORPUS="${CORPUS:-sketch}"
 export SIZE="${SIZE:-s}"
 
+# Which branch the container builds, as pushed to GitHub — a change that is not pushed is not
+# run. Inherited by the scoring job this one queues, so both build the same one.
+export BRANCH="${BRANCH:-main}"
+
 mkdir -p "$CACHE_DIR" "$OUTPUT_DIR" "$CHECKPOINT_DIR"
-echo "running d2g $STAGE on $CORPUS at size $SIZE: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
+echo "running d2g $STAGE on $CORPUS at size $SIZE from branch $BRANCH: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
 
 # Which run this job is, for looking its id up later by what it ran and where it wrote.
 printf '%s\td2g\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CORPUS" "$SIZE" "$STAGE" "$OUTPUT_DIR" "${SLURM_JOB_ID:-none}" \
   >>"${SLURM_SUBMIT_DIR:-$PWD}/jobs.txt"
+
+# A run longer than one job puts itself back in the queue shortly before Slurm would kill it.
+# What starts again reads the newest checkpoint of the same folder and takes the steps that
+# are left, so how long a run is is set by its step count and not by what fits in a job.
+requeued=no
+continueLater() {
+  requeued=yes
+  echo "time limit approaching: putting ${SLURM_JOB_ID:-this job} back in the queue to carry on"
+  scontrol requeue "$SLURM_JOB_ID"
+}
+if [[ $STAGE == train ]]; then trap continueLater USR1; fi
 
 module load sarus/1.6.4
 
@@ -63,6 +81,7 @@ sarus run \
     stage="$3"
     slurmJobId="$4"
     node="$5"
+    branch="$6"
 
     export TMPDIR=/tmp
 
@@ -79,7 +98,7 @@ sarus run \
     git clone https://github.com/dimwit-dev/dimwit
     git clone https://github.com/dimwit-dev/deepwit
     git clone https://github.com/benikm91/dimwit-sharding
-    git clone https://github.com/benikm91/detr-in-dimwit
+    git clone --branch "$branch" https://github.com/benikm91/detr-in-dimwit
 
     cd dimwit
     sbt publishLocal
@@ -114,6 +133,7 @@ sarus run \
   "node": "$node",
   "gpus": "$gpus",
   "jax": "$jaxVersion",
+  "branch": "$branch",
   "commits": {
     "detr-in-dimwit": "$(git -C /usr/src/detr-in-dimwit rev-parse HEAD)",
     "dimwit": "$(git -C /usr/src/dimwit rev-parse HEAD)",
@@ -130,7 +150,15 @@ JSON
       eval) sbt "d2g/runMain d2gEval $corpus $size" ;;
       draw) sbt "d2g/runMain d2gDraw $corpus $size" ;;
     esac
-  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}"
+  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" &
+
+wait $! || trained=$?
+
+if [[ $requeued == yes ]]; then
+  echo "stopped at the time limit; the rest of this run is queued"
+  exit 0
+fi
+[[ ${trained:-0} -eq 0 ]] || exit "${trained:-0}"
 
 if [[ $STAGE == train ]]; then
   echo "job finished, checkpoints in $CHECKPOINT_DIR"

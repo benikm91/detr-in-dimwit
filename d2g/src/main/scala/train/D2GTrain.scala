@@ -62,12 +62,12 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val mesh = Mesh1(MeshAxis[X] -> Jax.devices.size)
   val batchSize = setup.batchSize
   require(batchSize % mesh.sizeOf(MeshAxis[X]) == 0, s"a batch of $batchSize does not split over $mesh")
-  val numSteps = setup.numSamples / batchSize
+  val numTotalSteps = setup.numSamples / batchSize
   val warmupSteps = setup.warmupSamples / batchSize
   val cooldownSteps = setup.cooldownSamples / batchSize
   val checkpointEvery = setup.checkpointEverySamples / batchSize
-  require(numSteps % checkpointEvery == 0, s"$numSteps steps do not end on a checkpoint, which is where the cooldown ends")
-  println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numSteps steps")
+  require(numTotalSteps % checkpointEvery == 0, s"$numTotalSteps steps do not end on a checkpoint, which is where the cooldown ends")
+  println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numTotalSteps steps")
 
   val nodes = Axis[Node] -> setup.nodeSlots
   val edges = Axis[Edge] -> setup.edgeSlots
@@ -78,7 +78,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
 
   val schedule: LearningRateSchedule =
     LinearWarmup(setup.learningRate, warmupSteps)
-      .followBy(ConstantLearningRate(setup.learningRate, numSteps - warmupSteps - cooldownSteps))
+      .followBy(ConstantLearningRate(setup.learningRate, numTotalSteps - warmupSteps - cooldownSteps))
       .followBy(CosineDecay(setup.learningRate, setup.finalLearningRate, cooldownSteps))
   val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), setup.weightDecay), schedule)
 
@@ -145,7 +145,16 @@ def trainTranscriber(setup: D2GSetup): Unit =
       )
     )
 
-  val checkpointer = TensorTreeCheckpointer.newIn(setup.checkpointRoot)
+  /** The run's own folder, continued where it already holds checkpoints: a job that runs out
+    * of time puts itself back in the queue, and what starts again carries on from the newest
+    * one. The schedule rides along in the optimizer's state, so the cooldown still falls where
+    * it was always going to.
+    */
+  val checkpointer = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(TensorTreeCheckpointer.newIn(setup.checkpointRoot))
+  val taken = checkpointer.iterations.maxOption.getOrElse(0)
+  val initialState = if taken == 0 then D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, 0f)
+    else checkpointer.load[D2GTrainState](taken).getOrElse(sys.error(s"checkpoint $taken of ${checkpointer.rootPath} will not load"))
+  if taken > 0 then println(s"continuing ${checkpointer.rootPath} from step $taken")
   val history = History()
   val monitor = Monitor.ConcatMonitor[D2GTrainState](List(
     Monitor.StepMonitor(),
@@ -156,18 +165,17 @@ def trainTranscriber(setup: D2GSetup): Unit =
 
   val started = System.nanoTime
   batches
-    .scanLeft(D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, 0f)):
+    .scanLeft(initialState):
       case (state, batch) =>
         val (images, records) = shard(batch)
         jitGradientStep(images, records, state)
     .tapEvery(100):
-      case (state, step) => println(monitor.report(step, state))
+      case (state, step) => println(monitor.report(taken + step, state))
     .tapEvery(checkpointEvery):
       case (state, step) =>
-        checkpointer.save(state, step)
-        history.add(step, state.loss.item)
-        println(s"Step $step | checkpoint saved to ${checkpointer.rootPath}")
-    .drop(numSteps)
+        checkpointer.save(state, taken + step)
+        history.add(taken + step, state.loss.item)
+        println(s"Step ${taken + step} | checkpoint saved to ${checkpointer.rootPath}")
+    .drop(numTotalSteps - taken)
     .next()
-  Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)
   Runs.noteTrainingSeconds(checkpointer.rootPath, (System.nanoTime - started) / 1_000_000_000)

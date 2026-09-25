@@ -14,9 +14,12 @@ object Runs:
   val checkpointDir: String = sys.env.getOrElse("CHECKPOINT_DIR", "out")
   val outputDir: String = sys.env.getOrElse("OUTPUT_DIR", "out")
 
-  /** How long a run trained for, kept beside its checkpoints so that scoring them can say. */
+  /** How long a run trained for, kept beside its checkpoints so that scoring them can say. A run
+    * that takes more than one job adds what each of them spent to what is already noted.
+    */
   def noteTrainingSeconds(runDir: String, seconds: Long): Unit =
-    Files.writeString(Path.of(runDir, "training-seconds"), seconds.toString)
+    val sofar = trainingSeconds(runDir).getOrElse(0L)
+    Files.writeString(Path.of(runDir, "training-seconds"), (sofar + seconds).toString)
 
   def trainingSeconds(runDir: String): Option[Long] =
     val noted = Path.of(runDir, "training-seconds")
