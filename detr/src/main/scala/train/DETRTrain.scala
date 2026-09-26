@@ -136,9 +136,12 @@ def trainDetector(setup: DETRSetup): Unit =
   /** The run's own folder, continued where it already holds checkpoints: a job that runs out
     * of time puts itself back in the queue, and what starts again carries on from the newest
     * one. The schedule rides along in the optimizer's state, so the cooldown still falls where
-    * it was always going to.
+    * it was always going to. Writing into a folder that is already there is what `overwrite`
+    * allows; it adds checkpoints and removes none.
     */
-  val checkpointer = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(TensorTreeCheckpointer.newIn(setup.checkpointRoot))
+  val checkpointer = TensorTreeCheckpointer.latestIn(setup.checkpointRoot) match
+    case Some(started) => TensorTreeCheckpointer(started.rootPath, overwrite = true)
+    case None          => TensorTreeCheckpointer.newIn(setup.checkpointRoot)
   val taken = checkpointer.iterations.maxOption.getOrElse(0)
   val initialState = if taken == 0 then TrainState(initialParams, optimizer.init(initialParams), 0f)
     else checkpointer.load[TrainState](taken).getOrElse(sys.error(s"checkpoint $taken of ${checkpointer.rootPath} will not load"))
