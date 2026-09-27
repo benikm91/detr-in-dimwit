@@ -13,7 +13,6 @@ import dataset.RecordNodes
 import deepwit.base.AffineLayer
 import deepwit.embedder.VocabularyEmbedder
 import dimwit.*
-import dimwit.Conversions.given
 
 import scala.language.implicitConversions
 

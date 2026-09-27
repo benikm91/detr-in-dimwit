@@ -13,7 +13,6 @@ import dataset.RecordNodes
 import EdgeHead.EdgeLogits
 import NodeHead.NodeLogits
 import dimwit.*
-import dimwit.Conversions.given
 
 import scala.language.implicitConversions
 

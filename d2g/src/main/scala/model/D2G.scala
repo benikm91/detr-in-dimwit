@@ -21,7 +21,6 @@ import EdgeHead.EdgeLogits
 import NodeHead.NodeLogits
 import dimwit.stats.Uniform
 import dimwit.*
-import dimwit.Conversions.given
 
 import scala.language.implicitConversions
 

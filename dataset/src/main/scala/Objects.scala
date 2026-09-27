@@ -1,7 +1,6 @@
 package dataset
 
 import dimwit.*
-import dimwit.Conversions.given
 import dimwit.tensor.Tensor4
 
 import scala.language.implicitConversions

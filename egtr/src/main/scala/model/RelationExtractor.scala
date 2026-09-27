@@ -18,7 +18,6 @@ import deepwit.attention.HeadQuery
 import deepwit.base.AffineLayer
 import deepwit.base.LinearLayer
 import dimwit.*
-import dimwit.Conversions.given
 import dimwit.Label as Λ
 import deepwit.init.Init
 

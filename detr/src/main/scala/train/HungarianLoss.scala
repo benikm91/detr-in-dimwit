@@ -10,7 +10,6 @@ import dataset.ObjectClass
 import deepwit.activation.softmax
 import deepwit.loss.CategoricalCrossEntropy
 import dimwit.*
-import dimwit.Conversions.given
 
 import scala.language.implicitConversions
 

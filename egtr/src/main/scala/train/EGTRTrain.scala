@@ -24,7 +24,6 @@ import deepwit.training.tapEvery
 import deepwit.optimizer.clipGlobalNorm
 import dataset.Runs
 import dimwit.*
-import dimwit.Conversions.given
 import dimwit.jax.Jax
 import dimwit.sharding.*
 import deepwit.optimizer.ConstantLearningRate

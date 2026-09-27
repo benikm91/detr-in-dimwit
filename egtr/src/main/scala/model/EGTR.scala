@@ -16,7 +16,6 @@ import dataset.RelationClasses
 import deepwit.activation.sigmoid
 import deepwit.activation.softmax
 import dimwit.*
-import dimwit.Conversions.given
 
 import scala.language.implicitConversions
 

@@ -28,7 +28,6 @@ import dataset.at
 import dataset.report
 import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
-import dimwit.Conversions.given
 import dimwit.tensor.Tensor4
 import plotwit.*
 import viz.PlotTargets.websocket

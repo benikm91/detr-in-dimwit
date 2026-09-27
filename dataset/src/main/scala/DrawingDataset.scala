@@ -1,7 +1,6 @@
 package dataset
 
 import dimwit.*
-import dimwit.Conversions.given
 import dimwit.jax.Jax
 import dimwit.python.PyBridge.liftPyTensor
 import dimwit.tensor.Tensor4

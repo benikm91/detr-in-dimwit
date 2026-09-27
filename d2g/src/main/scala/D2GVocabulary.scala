@@ -5,7 +5,6 @@ import d2g.train.*
 import d2g.eval.*
 import d2g.config.*
 import dimwit.*
-import dimwit.Conversions.given
 
 import scala.language.implicitConversions
 

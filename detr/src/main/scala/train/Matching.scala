@@ -5,7 +5,6 @@ import detr.model.*
 import detr.eval.*
 import detr.config.*
 import dimwit.*
-import dimwit.Conversions.given
 
 import scala.language.implicitConversions
 

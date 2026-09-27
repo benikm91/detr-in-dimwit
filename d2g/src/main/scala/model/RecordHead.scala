@@ -12,7 +12,6 @@ import dataset.RecordEdges
 import dataset.RecordNodes
 import deepwit.base.AffineLayer
 import dimwit.*
-import dimwit.Conversions.given
 
 import scala.language.implicitConversions
 

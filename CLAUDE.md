@@ -81,7 +81,7 @@ survives that, it is worth a comment saying why.
 
 Follow the style of those repositories, core and examples both.
 
-- `import dimwit.Conversions.given` and write scalars plainly. Not `Tensor0(vtype)(1f)`.
+- Write scalars plainly. Not `Tensor0(vtype)(1f)`.
 - `broadcastTo` only when nothing else will do. There is usually a broadcasting operator — `*!`,
   `+!`, `<=!`, `where_!` — and it reads better.
 - Look for the nicest way the libraries offer before writing it by hand.

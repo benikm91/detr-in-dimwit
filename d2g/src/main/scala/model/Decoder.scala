@@ -16,7 +16,6 @@ import deepwit.base.AffineLayer
 import deepwit.normalization.LayerNorm
 import deepwit.transformer.TransformerBlock
 import dimwit.*
-import dimwit.Conversions.given
 import dimwit.Label as Λ
 
 import scala.language.implicitConversions
