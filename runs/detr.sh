@@ -164,7 +164,7 @@ if [[ $STAGE == train ]]; then
   echo "job finished, checkpoints in $CHECKPOINT_DIR"
   # Scoring is queued from here, so that it reads the checkpoints this run just wrote and runs only
   # if there are any. One GPU is enough: it scores one checkpoint at a time.
-  evalId="$(sbatch --parsable --gres=gpu:1 --time=8:00:00 --job-name="detr-$CORPUS-$SIZE-eval" runs/detr.sh eval)"
+  evalId="$(sbatch --parsable --gres=gpu:1 --time=16:00:00 --job-name="detr-$CORPUS-$SIZE-eval" runs/detr.sh eval)"
   echo "queued scoring as $evalId"
 else
   echo "job finished, metrics in $OUTPUT_DIR:"
