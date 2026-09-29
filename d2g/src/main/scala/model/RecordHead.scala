@@ -25,6 +25,8 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Node,
   private val startY = AffineLayer(params.startY)
   private val endX = AffineLayer(params.endX)
   private val endY = AffineLayer(params.endY)
+  private val midX = AffineLayer(params.midX)
+  private val midY = AffineLayer(params.midY)
 
   val canvas: Int = params.startX.bias.shape(Axis[Pixel])
 
@@ -34,7 +36,9 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Node,
       startX = embeddings.vmap(Axis[Node])(startX),
       startY = embeddings.vmap(Axis[Node])(startY),
       endX = embeddings.vmap(Axis[Node])(endX),
-      endY = embeddings.vmap(Axis[Node])(endY)
+      endY = embeddings.vmap(Axis[Node])(endY),
+      midX = embeddings.vmap(Axis[Node])(midX),
+      midY = embeddings.vmap(Axis[Node])(midY)
     )
 
   /** The scores settled. Settling on [[NodeClass.NoNode]] is where the nodes of a record stop.
@@ -48,13 +52,15 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Node,
     def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).take(Axis[NodeClasses])(nodeClass)
     def placed(scores: Tensor2[Node, Pixel, V], carried: Tensor1[Node, Float32]) =
       Pixels.coordinates(scores.argmax(Axis[Pixel]), canvas) * carried
-    val (drawn, runsOn) = (carries(_.isNode), carries(_.numPoints > 1))
+    val (drawn, runsOn, bends) = (carries(_.isNode), carries(_.numPoints > 1), carries(_.numPoints > 2))
     RecordNodes(
       nodeClass = nodeClass,
       startX = placed(logits.startX, drawn),
       startY = placed(logits.startY, drawn),
       endX = placed(logits.endX, runsOn),
-      endY = placed(logits.endY, runsOn)
+      endY = placed(logits.endY, runsOn),
+      midX = placed(logits.midX, bends),
+      midY = placed(logits.midY, bends)
     )
 
 object NodeHead:
@@ -65,7 +71,9 @@ object NodeHead:
       startX: Tensor2[Node, Pixel, V],
       startY: Tensor2[Node, Pixel, V],
       endX: Tensor2[Node, Pixel, V],
-      endY: Tensor2[Node, Pixel, V]
+      endY: Tensor2[Node, Pixel, V],
+      midX: Tensor2[Node, Pixel, V],
+      midY: Tensor2[Node, Pixel, V]
   )
 
   case class Params[V](
@@ -73,7 +81,9 @@ object NodeHead:
       startX: AffineLayer.Params[Embedding, Pixel, V],
       startY: AffineLayer.Params[Embedding, Pixel, V],
       endX: AffineLayer.Params[Embedding, Pixel, V],
-      endY: AffineLayer.Params[Embedding, Pixel, V]
+      endY: AffineLayer.Params[Embedding, Pixel, V],
+      midX: AffineLayer.Params[Embedding, Pixel, V],
+      midY: AffineLayer.Params[Embedding, Pixel, V]
   )
 
   object Params:

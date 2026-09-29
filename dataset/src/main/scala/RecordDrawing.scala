@@ -25,12 +25,15 @@ object RecordDrawing:
           placed.startY.toSeq.toPythonCopy,
           placed.endX.toSeq.toPythonCopy,
           placed.endY.toSeq.toPythonCopy,
+          placed.midX.toSeq.toPythonCopy,
+          placed.midY.toSeq.toPythonCopy,
           placed.edgeClass.toSeq.toPythonCopy,
           placed.subject.toSeq.toPythonCopy,
           placed.obj.toSeq.toPythonCopy,
           NodeClass.Line.id,
           NodeClass.Annotation.id,
           NodeClass.Circle.id,
+          NodeClass.Arc.id,
           EdgeClass.Connected.id,
           EdgeClass.Annotates.id
         )

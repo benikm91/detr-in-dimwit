@@ -30,6 +30,8 @@ class NodeEmbedder[V: IsFloating](params: NodeEmbedder.Params[V]) extends (Recor
   private val startY = VocabularyEmbedder(params.startY)
   private val endX = VocabularyEmbedder(params.endX)
   private val endY = VocabularyEmbedder(params.endY)
+  private val midX = VocabularyEmbedder(params.midX)
+  private val midY = VocabularyEmbedder(params.midY)
 
   private val project = AffineLayer(params.projection)
 
@@ -38,9 +40,9 @@ class NodeEmbedder[V: IsFloating](params: NodeEmbedder.Params[V]) extends (Recor
 
   override def apply(nodes: RecordNodes[Node]): Tensor2[Node, Embedding, V] =
     def pixels(coordinate: Tensor1[Node, Float32]) = Pixels.of(coordinate, canvas)
-    zipvmap(Axis[Node])(nodes.nodeClass, pixels(nodes.startX), pixels(nodes.startY), pixels(nodes.endX), pixels(nodes.endY)):
-      case (cls, sx, sy, ex, ey) =>
-        val parts = Seq(nodeClass(cls), startX(sx), startY(sy), endX(ex), endY(ey))
+    zipvmap(Axis[Node])(nodes.nodeClass, pixels(nodes.startX), pixels(nodes.startY), pixels(nodes.endX), pixels(nodes.endY), pixels(nodes.midX), pixels(nodes.midY)):
+      case (cls, sx, sy, ex, ey, mx, my) =>
+        val parts = Seq(nodeClass(cls), startX(sx), startY(sy), endX(ex), endY(ey), midX(mx), midY(my))
         project(stack(parts, Axis[NodePart]).flatten((Axis[NodePart], Axis[PartEmbedding])))
 
 object NodeEmbedder:
@@ -51,6 +53,8 @@ object NodeEmbedder:
       startY: VocabularyEmbedder.Params[Pixel, PartEmbedding, V],
       endX: VocabularyEmbedder.Params[Pixel, PartEmbedding, V],
       endY: VocabularyEmbedder.Params[Pixel, PartEmbedding, V],
+      midX: VocabularyEmbedder.Params[Pixel, PartEmbedding, V],
+      midY: VocabularyEmbedder.Params[Pixel, PartEmbedding, V],
       projection: AffineLayer.Params[NodePart |*| PartEmbedding, Embedding, V]
   )
 

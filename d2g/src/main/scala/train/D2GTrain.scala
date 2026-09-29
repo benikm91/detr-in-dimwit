@@ -106,9 +106,9 @@ def trainTranscriber(setup: D2GSetup): Unit =
       asked: Key
   )(params: D2G.Params[Float32]): Tensor0[Float32] =
     val model = D2G(params)
-    zipvmap(Axis[S])(images, records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.edgeClass, records.subject, records.obj):
-      case (image, nodeClass, startX, startY, endX, endY, edgeClass, subject, obj) =>
-        val target = Record(nodeClass, startX, startY, endX, endY, edgeClass, subject, obj)
+    zipvmap(Axis[S])(images, records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY, records.edgeClass, records.subject, records.obj):
+      case (image, nodeClass, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj) =>
+        val target = Record(nodeClass, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj)
         val scored = model.logits(image, target, asked)
         nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target.edges)
     .mean
@@ -138,6 +138,8 @@ def trainTranscriber(setup: D2GSetup): Unit =
         startY = records.startY.shard(mesh, over),
         endX = records.endX.shard(mesh, over),
         endY = records.endY.shard(mesh, over),
+        midX = records.midX.shard(mesh, over),
+        midY = records.midY.shard(mesh, over),
         edgeClass = records.edgeClass.shard(mesh, over),
         subject = records.subject.shard(mesh, over),
         obj = records.obj.shard(mesh, over)

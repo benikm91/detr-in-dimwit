@@ -46,18 +46,22 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int)
 
   /** What every position's scores would cost against every node of the record: its class, and
     * where the *target* node is placed — so that nothing depends on what the model predicts. A
-    * class that runs nowhere is not measured on where it ends.
+    * class that runs nowhere is not measured on where it ends, nor one that does not bend on its
+    * middle.
     */
   private def dissimilarity(logits: NodeLogits[V], target: RecordNodes[Node]): Tensor2[Node, Candidate, V] =
     val candidateClass = target.nodeClass.relabelTo(Axis[Candidate])
     def placed(scores: Tensor2[Node, Pixel, V], coordinate: Tensor1[Node, Float32]) =
       costOfValue(scores, Pixels.of(coordinate, canvas).relabelTo(Axis[Candidate]))
     val runsOn = NodeClass.indicator(vtype)(_.numPoints > 1).take(Axis[NodeClasses])(candidateClass)
+    val bends = NodeClass.indicator(vtype)(_.numPoints > 2).take(Axis[NodeClasses])(candidateClass)
     val ends = placed(logits.endX, target.endX) + placed(logits.endY, target.endY)
+    val middles = placed(logits.midX, target.midX) + placed(logits.midY, target.midY)
     costOfValue(logits.nodeClass, candidateClass) +
       placed(logits.startX, target.startX) +
       placed(logits.startY, target.startY) +
-      ends *! runsOn
+      ends *! runsOn +
+      middles *! bends
 
 /** The same over the relationships of a record, which are predicted the same way — a relationship
   * carries the nodes it links where a node carries its points.

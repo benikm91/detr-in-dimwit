@@ -41,3 +41,4 @@ runs/queue_d2g.sh rectilinear xs
 runs/queue_d2g.sh rectilinear s
 runs/queue_d2g.sh sketch xs
 runs/queue_d2g.sh sketch s
+runs/queue_d2g.sh sketch-xl s-deep

@@ -86,9 +86,9 @@ object Objects:
     Objects(boxes(record), adjacency(record))
 
   def of[S: Label, Node: Label, Edge: Label](records: RecordBatch[S, Node, Edge]): ObjectBatch[S, Node] =
-    val drawn = zipvmap(Axis[S])(records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.edgeClass, records.subject, records.obj):
-      case (nodeClass, startX, startY, endX, endY, edgeClass, subject, obj) =>
-        val objects = of(Record(nodeClass, startX, startY, endX, endY, edgeClass, subject, obj))
+    val drawn = zipvmap(Axis[S])(records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY, records.edgeClass, records.subject, records.obj):
+      case (nodeClass, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj) =>
+        val objects = of(Record(nodeClass, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj))
         (
           centerX = objects.detection.box.centerX,
           centerY = objects.detection.box.centerY,

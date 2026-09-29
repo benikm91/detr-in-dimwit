@@ -76,10 +76,10 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
           nodePosition(query.broadcastTo(takenNodes.shape))
       nodeDecoder.forTraining(encodedDocument, takenNodes, queryNodes)
 
-    val (nodeClass, startX, startY, endX, endY) =
+    val (nodeClass, startX, startY, endX, endY, midX, midY) =
       answeredNodes.vmap(Axis[PoolQuery]): answered =>
         val scored = nodeHead(answered)
-        (scored.nodeClass, scored.startX, scored.startY, scored.endX, scored.endY)
+        (scored.nodeClass, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY)
 
     val (_, answeredEdges) =
       val nodeSource =
@@ -96,7 +96,7 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
         val scored = edgeHead(answered)
         (scored.edgeClass, scored.subject, scored.obj)
 
-    Scores(NodeQueryLogits(nodeClass, startX, startY, endX, endY), EdgeQueryLogits(edgeClass, subject, obj))
+    Scores(NodeQueryLogits(nodeClass, startX, startY, endX, endY, midX, midY), EdgeQueryLogits(edgeClass, subject, obj))
 
 object D2G:
 
@@ -108,14 +108,18 @@ object D2G:
       startX: Tensor3[PoolQuery, Node, Pixel, V],
       startY: Tensor3[PoolQuery, Node, Pixel, V],
       endX: Tensor3[PoolQuery, Node, Pixel, V],
-      endY: Tensor3[PoolQuery, Node, Pixel, V]
+      endY: Tensor3[PoolQuery, Node, Pixel, V],
+      midX: Tensor3[PoolQuery, Node, Pixel, V],
+      midY: Tensor3[PoolQuery, Node, Pixel, V]
   ):
     def at(query: Int): NodeLogits[V] = NodeLogits(
       nodeClass.slice(Axis[PoolQuery].at(query)),
       startX.slice(Axis[PoolQuery].at(query)),
       startY.slice(Axis[PoolQuery].at(query)),
       endX.slice(Axis[PoolQuery].at(query)),
-      endY.slice(Axis[PoolQuery].at(query))
+      endY.slice(Axis[PoolQuery].at(query)),
+      midX.slice(Axis[PoolQuery].at(query)),
+      midY.slice(Axis[PoolQuery].at(query))
     )
 
   object NodeQueryLogits:
@@ -125,7 +129,9 @@ object D2G:
       startX = stack(answered.map(_.startX), Axis[PoolQuery]),
       startY = stack(answered.map(_.startY), Axis[PoolQuery]),
       endX = stack(answered.map(_.endX), Axis[PoolQuery]),
-      endY = stack(answered.map(_.endY), Axis[PoolQuery])
+      endY = stack(answered.map(_.endY), Axis[PoolQuery]),
+      midX = stack(answered.map(_.midX), Axis[PoolQuery]),
+      midY = stack(answered.map(_.midY), Axis[PoolQuery])
     )
 
   /** [[EdgeLogits]] at every query slot. */
@@ -213,17 +219,17 @@ object D2G:
       val nodeExtent = Axis[Node] -> nodes
       val edgeExtent = Axis[Edge] -> edges
       val linkedExtent = Axis[LinkedNode] -> nodes
-      // A node embedding is put together from its class and the four coordinates a class can
+      // A node embedding is put together from its class and the six coordinates a class can
       // place; a relationship embedding from its class and the two nodes it relates.
-      val nodePartExtent = Axis[NodePart |*| PartEmbedding] -> 5 * partExtent.size
+      val nodePartExtent = Axis[NodePart |*| PartEmbedding] -> 7 * partExtent.size
       val edgePartExtent = Axis[EdgePart |*| PartEmbedding] -> 3 * partExtent.size
 
       val (nodeDecoderKey, edgeDecoderKey) = decoderKey.splitToTuple(2)
       val (nodeEmbedderKey, edgeEmbedderKey) = embedderKey.splitToTuple(2)
-      val (startXKey, startYKey, endXKey, endYKey, nodeClassKey, nodeProjectionKey) = nodeEmbedderKey.splitToTuple(6)
+      val (startXKey, startYKey, endXKey, endYKey, midXKey, midYKey, nodeClassKey, nodeProjectionKey) = nodeEmbedderKey.splitToTuple(8)
       val (subjectKey, objKey, edgeClassKey, edgeProjectionKey) = edgeEmbedderKey.splitToTuple(4)
       val (nodeHeadKey, edgeHeadKey) = scorerKey.splitToTuple(2)
-      val (classHeadKey, startXHeadKey, startYHeadKey, endXHeadKey, endYHeadKey) = nodeHeadKey.splitToTuple(5)
+      val (classHeadKey, startXHeadKey, startYHeadKey, endXHeadKey, endYHeadKey, midXHeadKey, midYHeadKey) = nodeHeadKey.splitToTuple(7)
       val (edgeClassHeadKey, subjectHeadKey, objHeadKey) = edgeHeadKey.splitToTuple(3)
       val (nodeTokenKey, edgeTokenKey) = tokenKey.splitToTuple(2)
       val (nodePositionKey, edgePositionKey) = positionKey.splitToTuple(2)
@@ -238,6 +244,8 @@ object D2G:
             startY = VocabularyEmbedder.Params.init(pixelExtent, partExtent, startYKey),
             endX = VocabularyEmbedder.Params.init(pixelExtent, partExtent, endXKey),
             endY = VocabularyEmbedder.Params.init(pixelExtent, partExtent, endYKey),
+            midX = VocabularyEmbedder.Params.init(pixelExtent, partExtent, midXKey),
+            midY = VocabularyEmbedder.Params.init(pixelExtent, partExtent, midYKey),
             projection = AffineLayer.Params.init(nodePartExtent, embeddingExtent, nodeProjectionKey)
           ),
           head = NodeHead.Params(
@@ -245,7 +253,9 @@ object D2G:
             startX = AffineLayer.Params.init(embeddingExtent, pixelExtent, startXHeadKey),
             startY = AffineLayer.Params.init(embeddingExtent, pixelExtent, startYHeadKey),
             endX = AffineLayer.Params.init(embeddingExtent, pixelExtent, endXHeadKey),
-            endY = AffineLayer.Params.init(embeddingExtent, pixelExtent, endYHeadKey)
+            endY = AffineLayer.Params.init(embeddingExtent, pixelExtent, endYHeadKey),
+            midX = AffineLayer.Params.init(embeddingExtent, pixelExtent, midXHeadKey),
+            midY = AffineLayer.Params.init(embeddingExtent, pixelExtent, midYHeadKey)
           ),
           queries = Init.xavierUniform(Axis[PoolQuery] -> queries, embeddingExtent, nodeTokenKey),
           positions = LearnedAbsolutePositionalInjector.Params.lecunNormal(nodeExtent, embeddingExtent, nodePositionKey)

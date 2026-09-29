@@ -159,6 +159,8 @@ class Transcriber(nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: In
         startY = nowhere,
         endX = nowhere,
         endY = nowhere,
+        midX = nowhere,
+        midY = nowhere,
         edgeClass = Tensor(allEdges, VType[Int32]).fill(EdgeClass.NoEdge.id),
         subject = nothing,
         obj = nothing
@@ -176,22 +178,23 @@ class Transcriber(nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: In
       * own, so the answer is the one that slot would have been given on its own.
       */
     def answeredNode(taken: RecordBatch[Drawing, Node, Edge], slot: Int) =
-      zipvmap(Axis[Drawing])(encoded, taken.nodeClass, taken.startX, taken.startY, taken.endX, taken.endY, taken.edgeClass, taken.subject, taken.obj):
-        case (document, nodeClass, startX, startY, endX, endY, edgeClass, subject, obj) =>
-          val scored = model.logitsPerQuery(document, Record(RecordNodes(nodeClass, startX, startY, endX, endY), RecordEdges(edgeClass, subject, obj))).nodes
-          val (saidClass, saidStartX, saidStartY, saidEndX, saidEndY, score) =
-            zipvmap(Axis[PoolQuery])(scored.nodeClass, scored.startX, scored.startY, scored.endX, scored.endY):
-              case (nodeClass, startX, startY, endX, endY) =>
-                answered(model.nodeHead, NodeLogits(nodeClass, startX, startY, endX, endY))
+      zipvmap(Axis[Drawing])(encoded, taken.nodeClass, taken.startX, taken.startY, taken.endX, taken.endY, taken.midX, taken.midY, taken.edgeClass, taken.subject, taken.obj):
+        case (document, nodeClass, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj) =>
+          val scored = model.logitsPerQuery(document, Record(RecordNodes(nodeClass, startX, startY, endX, endY, midX, midY), RecordEdges(edgeClass, subject, obj))).nodes
+          val (saidClass, saidStartX, saidStartY, saidEndX, saidEndY, saidMidX, saidMidY, score) =
+            zipvmap(Axis[PoolQuery])(scored.nodeClass, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY):
+              case (nodeClass, startX, startY, endX, endY, midX, midY) =>
+                answered(model.nodeHead, NodeLogits(nodeClass, startX, startY, endX, endY, midX, midY))
           val here = Axis[Node].at(slot)
           val likeliest = Axis[PoolQuery].at(score.slice(here).argmax(Axis[PoolQuery]))
-          (saidClass.slice(here).slice(likeliest), saidStartX.slice(here).slice(likeliest), saidStartY.slice(here).slice(likeliest), saidEndX.slice(here).slice(likeliest), saidEndY.slice(here).slice(likeliest))
+          def said[W](answers: Tensor2[PoolQuery, Node, W]) = answers.slice(here).slice(likeliest)
+          (said(saidClass), said(saidStartX), said(saidStartY), said(saidEndX), said(saidEndY), said(saidMidX), said(saidMidY))
 
     /** The same for a relationship slot. */
     def answeredEdge(taken: RecordBatch[Drawing, Node, Edge], slot: Int) =
-      zipvmap(Axis[Drawing])(encoded, taken.nodeClass, taken.startX, taken.startY, taken.endX, taken.endY, taken.edgeClass, taken.subject, taken.obj):
-        case (document, nodeClass, startX, startY, endX, endY, edgeClass, subject, obj) =>
-          val scored = model.logitsPerQuery(document, Record(RecordNodes(nodeClass, startX, startY, endX, endY), RecordEdges(edgeClass, subject, obj))).edges
+      zipvmap(Axis[Drawing])(encoded, taken.nodeClass, taken.startX, taken.startY, taken.endX, taken.endY, taken.midX, taken.midY, taken.edgeClass, taken.subject, taken.obj):
+        case (document, nodeClass, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj) =>
+          val scored = model.logitsPerQuery(document, Record(RecordNodes(nodeClass, startX, startY, endX, endY, midX, midY), RecordEdges(edgeClass, subject, obj))).edges
           val (saidClass, saidSubject, saidObj, score) =
             zipvmap(Axis[PoolQuery])(scored.edgeClass, scored.subject, scored.obj):
               case (edgeClass, subject, obj) => answered(model.edgeHead, EdgeLogits(edgeClass, subject, obj))
@@ -207,7 +210,7 @@ class Transcriber(nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: In
       * answers [[NodeClass.NoNode]] stops there, and the slots it would have filled stay empty.
       */
     def writeNode(taken: RecordBatch[Drawing, Node, Edge], writing: Tensor1[Drawing, Bool], slot: Int) =
-      val (said, startX, startY, endX, endY) = answeredNode(taken, slot)
+      val (said, startX, startY, endX, endY, midX, midY) = answeredNode(taken, slot)
       val fills = writing and !(said elementEquals_! NodeClass.NoNode.id)
       val here = Shape2(everyDrawing, nodes)
       val filling = only(nodes, slot).broadcastTo(here) and fills.broadcastTo(here)
@@ -218,7 +221,9 @@ class Transcriber(nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: In
         startX = put(taken.startX, startX),
         startY = put(taken.startY, startY),
         endX = put(taken.endX, endX),
-        endY = put(taken.endY, endY)
+        endY = put(taken.endY, endY),
+        midX = put(taken.midX, midX),
+        midY = put(taken.midY, midY)
       )
       (record, fills)
 
@@ -260,10 +265,11 @@ private def open(setup: D2GSetup, split: Split) =
 /** What one query answered with at every node slot, and the log probability of that answer. */
 private def answered(scorer: NodeHead[Float32], logits: NodeLogits[Float32]) =
   val decided = scorer.decide(logits)
-  val carriesEnd = NodeClass.indicator(VType[Float32])(_.numPoints > 1).take(Axis[NodeClasses])(decided.nodeClass)
+  def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).take(Axis[NodeClasses])(decided.nodeClass)
   val score = chosen(logits.nodeClass) + chosen(logits.startX) + chosen(logits.startY) +
-    (chosen(logits.endX) + chosen(logits.endY)) * carriesEnd
-  (decided.nodeClass, decided.startX, decided.startY, decided.endX, decided.endY, score)
+    (chosen(logits.endX) + chosen(logits.endY)) * carries(_.numPoints > 1) +
+    (chosen(logits.midX) + chosen(logits.midY)) * carries(_.numPoints > 2)
+  (decided.nodeClass, decided.startX, decided.startY, decided.endX, decided.endY, decided.midX, decided.midY, score)
 
 /** The same for a relationship. */
 private def answered(scorer: EdgeHead[Float32], logits: EdgeLogits[Float32]) =

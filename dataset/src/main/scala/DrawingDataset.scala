@@ -44,6 +44,11 @@ enum Corpus(val name: String, val repoId: String, val maxNodes: Int, val maxEdge
     */
   case SketchGraph extends Corpus("sketch", "benikm91/sketch-graph", 16, 0)
 
+  /** The same sketches with arcs too, and every sketch of SketchGraphs that is drawn in lines,
+    * circles and arcs alone rather than a sample of them.
+    */
+  case SketchGraphXL extends Corpus("sketch-xl", "benikm91/sketch-graph-xl", 16, 0)
+
 object Corpus:
 
   /** The corpus a run names on its command line. */
@@ -94,6 +99,7 @@ object DrawingDataset:
       NodeClass.Line.id,
       NodeClass.Annotation.id,
       NodeClass.Circle.id,
+      NodeClass.Arc.id,
       EdgeClass.NoEdge.id,
       EdgeClass.Connected.id,
       EdgeClass.Annotates.id
@@ -108,9 +114,11 @@ object DrawingDataset:
         startY = liftPyTensor[(Drawings, Node), Float32](read(2)),
         endX = liftPyTensor[(Drawings, Node), Float32](read(3)),
         endY = liftPyTensor[(Drawings, Node), Float32](read(4)),
-        edgeClass = liftPyTensor[(Drawings, Edge), Int32](read(5)),
-        subject = liftPyTensor[(Drawings, Edge), Int32](read(6)),
-        obj = liftPyTensor[(Drawings, Edge), Int32](read(7))
+        midX = liftPyTensor[(Drawings, Node), Float32](read(5)),
+        midY = liftPyTensor[(Drawings, Node), Float32](read(6)),
+        edgeClass = liftPyTensor[(Drawings, Edge), Int32](read(7)),
+        subject = liftPyTensor[(Drawings, Edge), Int32](read(8)),
+        obj = liftPyTensor[(Drawings, Edge), Int32](read(9))
       )
     )
 
@@ -164,6 +172,8 @@ final class DrawingDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Labe
       records.startY.slice(drawing),
       records.endX.slice(drawing),
       records.endY.slice(drawing),
+      records.midX.slice(drawing),
+      records.midY.slice(drawing),
       records.edgeClass.slice(drawing),
       records.subject.slice(drawing),
       records.obj.slice(drawing)
@@ -177,6 +187,8 @@ final class DrawingDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Labe
       records.startY.slice(taken).relabel(Axis[Drawings] -> rows.axis),
       records.endX.slice(taken).relabel(Axis[Drawings] -> rows.axis),
       records.endY.slice(taken).relabel(Axis[Drawings] -> rows.axis),
+      records.midX.slice(taken).relabel(Axis[Drawings] -> rows.axis),
+      records.midY.slice(taken).relabel(Axis[Drawings] -> rows.axis),
       records.edgeClass.slice(taken).relabel(Axis[Drawings] -> rows.axis),
       records.subject.slice(taken).relabel(Axis[Drawings] -> rows.axis),
       records.obj.slice(taken).relabel(Axis[Drawings] -> rows.axis)

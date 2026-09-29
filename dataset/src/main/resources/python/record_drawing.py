@@ -3,7 +3,7 @@
 A record has no drawing of its own -- it is what a drawing encodes -- so a
 transcription can only be looked at by drawing it: every line as the segment
 between its end points, every circle around the diameter its points span, every
-annotation as a marker on its point, and every relationship as a dashed
+arc through its three points, every annotation as a marker on its point, and every relationship as a dashed
 connector between the two nodes it relates. The result
 is drawn over the drawing the record was read from, so that the two can be
 compared pixel by pixel.
@@ -14,12 +14,13 @@ import numpy as np
 #: Colours the parts of a record are drawn in, as ``(red, green, blue)``.
 LINE = (20, 60, 190)
 CIRCLE = (20, 130, 200)
+ARC = (200, 40, 60)
 ANNOTATION = (230, 140, 20)
 CONNECTED = (20, 160, 110)
 ANNOTATES = (170, 70, 200)
 
 
-def render(drawing, node_class, start_x, start_y, end_x, end_y, edge_class, subject, obj, line, annotation, circle, connected, annotates):
+def render(drawing, node_class, start_x, start_y, end_x, end_y, mid_x, mid_y, edge_class, subject, obj, line, annotation, circle, arc, connected, annotates):
     """``(width, height, 3)`` uint8 pixels of the record drawn over ``drawing``, which is a
     ``(width, height)`` grey level image of what it was read from."""
     drawing = np.asarray(drawing, dtype=np.uint8)
@@ -27,11 +28,14 @@ def render(drawing, node_class, start_x, start_y, end_x, end_y, edge_class, subj
     node_class, edge_class = np.asarray(node_class, dtype=int), np.asarray(edge_class, dtype=int)
     start_x, start_y = np.asarray(start_x, dtype=float), np.asarray(start_y, dtype=float)
     end_x, end_y = np.asarray(end_x, dtype=float), np.asarray(end_y, dtype=float)
+    mid_x, mid_y = np.asarray(mid_x, dtype=float), np.asarray(mid_y, dtype=float)
     subject, obj = np.asarray(subject, dtype=int), np.asarray(obj, dtype=int)
 
     def anchor(node):
-        """Where a relationship reaches a node: the middle of a line or a circle, the point of an
-        annotation."""
+        """Where a relationship reaches a node: the middle of a line, a circle or an arc, the
+        point of an annotation."""
+        if node_class[node] == arc:
+            return (mid_x[node], mid_y[node])
         if node_class[node] in (line, circle):
             return ((start_x[node] + end_x[node]) / 2, (start_y[node] + end_y[node]) / 2)
         return (start_x[node], start_y[node])
@@ -47,6 +51,8 @@ def render(drawing, node_class, start_x, start_y, end_x, end_y, edge_class, subj
             _segment(image, (start_x[at], start_y[at]), (end_x[at], end_y[at]), LINE)
         elif held == circle:
             _ring(image, (start_x[at], start_y[at]), (end_x[at], end_y[at]), CIRCLE)
+        elif held == arc:
+            _bend(image, (start_x[at], start_y[at]), (mid_x[at], mid_y[at]), (end_x[at], end_y[at]), ARC)
         elif held == annotation:
             _dot(image, start_x[at], start_y[at], ANNOTATION, radius=2)
 
@@ -80,6 +86,32 @@ def _ring(image, left, right, colour):
     steps = 2 * int(np.ceil(2 * np.pi * abs(radius) * canvas)) + 1
     for angle in np.linspace(0, 2 * np.pi, steps):
         _dot(image, centre_x + radius * np.cos(angle), y + radius * np.sin(angle), colour)
+
+
+def _bend(image, start, mid, end, colour):
+    """An arc, from start through mid to end along the circle the three lie on.
+
+    Three points in a line lie on no circle, so they are drawn as the segments between them.
+    """
+    canvas = image.shape[0]
+    (ax, ay), (bx, by), (cx, cy) = start, mid, end
+    twice_area = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(twice_area) < 1e-9:
+        _segment(image, start, mid, colour)
+        _segment(image, mid, end, colour)
+        return
+    squared = lambda x, y: x * x + y * y
+    centre_x = (squared(ax, ay) * (by - cy) + squared(bx, by) * (cy - ay) + squared(cx, cy) * (ay - by)) / twice_area
+    centre_y = (squared(ax, ay) * (cx - bx) + squared(bx, by) * (ax - cx) + squared(cx, cy) * (bx - ax)) / twice_area
+    radius = np.hypot(ax - centre_x, ay - centre_y)
+    angle = lambda x, y: np.arctan2(y - centre_y, x - centre_x)
+    # Swept from start to end whichever way round passes the middle.
+    begin, through, finish = angle(ax, ay), angle(bx, by), angle(cx, cy)
+    turn = lambda to: (to - begin) % (2 * np.pi)
+    sweep = turn(finish) if turn(through) <= turn(finish) else turn(finish) - 2 * np.pi
+    steps = 2 * int(np.ceil(abs(sweep) * radius * canvas)) + 1
+    for at in np.linspace(begin, begin + sweep, steps):
+        _dot(image, centre_x + radius * np.cos(at), centre_y + radius * np.sin(at), colour)
 
 
 def _dot(image, x, y, colour, radius=0):

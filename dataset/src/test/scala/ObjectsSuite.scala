@@ -86,6 +86,18 @@ class ObjectsSuite extends FunSuite:
     assertEquals(relations(0)(2)(RelationClass.Annotates.id), 0f)
     assertEquals(relations.flatten.flatten.sum, 3f)
 
+  test("an arc keeps its middle through being laid out, permuted on the device and read back"):
+    val bent = RecordGraph(
+      Seq(
+        RecordNode(NodeClass.Line, Seq(Point(0.2f, 0.5f), Point(0.6f, 0.5f))),
+        RecordNode(NodeClass.Arc, Seq(Point(0.2f, 0.5f), Point(0.6f, 0.5f), Point(0.4f, 0.3f)))
+      ),
+      Seq.empty
+    )
+    assertEquals(RecordGraph.of(bent.record(nodes, edges)), bent)
+    val permuted = RecordBatch.of(Seq(bent), Axis[Drawing], nodes, edges).permuted(dimwit.Random.Key(3), nodes, edges)
+    assertEquals(RecordGraph.of(permuted).head.nodes.toSet, bent.nodes.toSet)
+
   test("a record survives being permuted, laid out and read back"):
     val random = scala.util.Random(7)
     for _ <- 1 to 20 do

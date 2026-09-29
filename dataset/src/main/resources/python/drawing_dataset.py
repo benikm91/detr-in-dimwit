@@ -25,19 +25,20 @@ def drawings(repo_id, split):
     return np.load(_file(repo_id, split, "images.npy"), mmap_mode="r")
 
 
-def records(repo_id, split, nodes, edges, no_node, line, annotation, circle, no_edge, connected, annotates):
-    """``(node_class, start_x, start_y, end_x, end_y, edge_class, subject, obj)`` of every drawing,
-    padded to ``nodes`` drawn nodes and ``edges`` relationships.
+def records(repo_id, split, nodes, edges, no_node, line, annotation, circle, arc, no_edge, connected, annotates):
+    """``(node_class, start_x, start_y, end_x, end_y, mid_x, mid_y, edge_class, subject, obj)`` of
+    every drawing, padded to ``nodes`` drawn nodes and ``edges`` relationships.
 
-    A node is placed by where it starts and, if it runs somewhere, by where it ends; an annotation
-    ends nowhere and leaves that at zero.
+    A node is placed by where it starts, if it runs somewhere by where it ends, and if it bends by
+    its middle; what a node does not place is left at zero.
     """
     with open(_file(repo_id, split, "labels.jsonl"), encoding="utf-8") as programs:
-        parsed = [_record_of(_actions(program), line, annotation, circle, connected, annotates) for program in programs]
+        parsed = [_record_of(_actions(program), line, annotation, circle, arc, connected, annotates) for program in programs]
 
     node_class = np.full((len(parsed), nodes), no_node, dtype=np.int32)
     start_x, start_y = (np.zeros((len(parsed), nodes), dtype=np.float32) for _ in range(2))
     end_x, end_y = (np.zeros((len(parsed), nodes), dtype=np.float32) for _ in range(2))
+    mid_x, mid_y = (np.zeros((len(parsed), nodes), dtype=np.float32) for _ in range(2))
     edge_class = np.full((len(parsed), edges), no_edge, dtype=np.int32)
     subject, obj = (np.zeros((len(parsed), edges), dtype=np.int32) for _ in range(2))
 
@@ -51,13 +52,15 @@ def records(repo_id, split, nodes, edges, no_node, line, annotation, circle, no_
             start_x[drawing, at], start_y[drawing, at] = node_xs[0], node_ys[0]
             if len(node_xs) > 1:
                 end_x[drawing, at], end_y[drawing, at] = node_xs[1], node_ys[1]
+            if len(node_xs) > 2:
+                mid_x[drawing, at], mid_y[drawing, at] = node_xs[2], node_ys[2]
         for at, (relationship, relates, to) in enumerate(related):
             edge_class[drawing, at], subject[drawing, at], obj[drawing, at] = relationship, relates, to
 
-    return node_class, start_x, start_y, end_x, end_y, edge_class, subject, obj
+    return node_class, start_x, start_y, end_x, end_y, mid_x, mid_y, edge_class, subject, obj
 
 
-def _record_of(actions, line, annotation, circle, connected, annotates):
+def _record_of(actions, line, annotation, circle, arc, connected, annotates):
     """The ``(class, xs, ys)`` nodes and ``(class, subject, object)`` relationships of one program."""
     nodes, related, lines = [], [], []
     for action in actions:
@@ -74,6 +77,11 @@ def _record_of(actions, line, annotation, circle, connected, annotates):
             # a circle and how the corpus already writes it.
             (x1, y1), (x2, y2) = action["coordinates_params"]
             nodes.append((circle, (x1, x2), (y1, y2)))
+        elif action["type"] == "Arc":
+            # Start and end first, where a record holds every node's, and the middle after them.
+            # The corpus already writes an arc clockwise, which is what makes its start its start.
+            (sx, sy), (mx, my), (ex, ey) = action["coordinates_params"]
+            nodes.append((arc, (sx, ex, mx), (sy, ey, my)))
         elif action["type"] == "AnnotationTextRefId":
             ((x, y),) = action["coordinates_params"]
             nodes.append((annotation, (x,), (y,)))
