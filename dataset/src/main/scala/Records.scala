@@ -359,6 +359,23 @@ object RecordGraph:
       )
     )
 
+  /** The nodes alone, for a model that predicts no relationships. */
+  def of[Node: Label](nodes: RecordNodes[Node]): RecordGraph =
+    read(
+      RecordGraph.Placement(
+        nodes.nodeClass.toArray,
+        nodes.startX.toArray,
+        nodes.startY.toArray,
+        nodes.endX.toArray,
+        nodes.endY.toArray,
+        nodes.midX.toArray,
+        nodes.midY.toArray,
+        Array.empty,
+        Array.empty,
+        Array.empty
+      )
+    )
+
   /** Every record of a batch, read to the host — once for the batch, not once per drawing. */
   def of[S: Label, Node: Label, Edge: Label](records: RecordBatch[S, Node, Edge]): Seq[RecordGraph] =
     val (nodeClass, startX, startY) = (records.nodeClass.toArray, records.startX.toArray, records.startY.toArray)

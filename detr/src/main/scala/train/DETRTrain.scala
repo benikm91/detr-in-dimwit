@@ -4,12 +4,10 @@ import detr.*
 import detr.model.*
 import detr.eval.*
 import detr.config.*
-import dataset.Box
-import dataset.Detection
-import dataset.Box
-import dataset.DetectionBatch
-import dataset.ObjectBatch
+import dataset.Canvas
 import dataset.Corpus
+import dataset.RecordBatch
+import dataset.RecordNodes
 import dataset.DrawingDataset
 import dataset.History
 import dataset.DrawingDataset.Split
@@ -72,8 +70,8 @@ def trainDetector(setup: DETRSetup): Unit =
   require(numTotalSteps % checkpointEvery == 0, s"$numTotalSteps steps do not end on a checkpoint, which is where the cooldown ends")
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numTotalSteps steps")
 
-  val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[BoundingBox], Axis[Relationship])(Split.Train)
-  val batches = data.objectBatches(Axis[Batch] -> batchSize)
+  val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train)
+  val batches = data.batches(Axis[Batch] -> batchSize)
 
   /** Warmup, then the rate held, then a cosine cooldown over the last stretch. Adam orbits a
     * solution at a distance the rate sets, which is what the cooldown closes; holding the rate
@@ -90,32 +88,31 @@ def trainDetector(setup: DETRSetup): Unit =
     numHeads = setup.numHeads,
     embedding = setup.embedding,
     numQueries = setup.numQueries,
+    canvas = Canvas,
     key = Random.Key(setup.seed)
   )
 
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
-  val loss = HungarianLoss(VType[Float32])()
+  val loss = HungarianLoss(VType[Float32], Canvas)
 
   def cost(
       imgs: Tensor4[Batch |@| X, Width, Height, Channel, Float32],
-      objects: DetectionBatch[Batch |@| X, BoundingBox, Float32]
+      records: RecordBatch[Batch |@| X, Node, Relationship]
   )(params: DETR.Params[Float32]): Tensor0[Float32] =
     val model = DETR(params)
-    zipvmap(Axis[Batch |@| X])(imgs, objects.box.centerX, objects.box.centerY, objects.box.width, objects.box.height, objects.label):
-      case (img, centerX, centerY, width, height, label) =>
-        val y = Detection(Box(centerX, centerY, width, height), label)
-        val yHat = model.logits(img)
-        loss(yHat, y)
+    zipvmap(Axis[Batch |@| X])(imgs, records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY):
+      case (img, nodeClass, startX, startY, endX, endY, midX, midY) =>
+        loss(model.logits(img), RecordNodes(nodeClass, startX, startY, endX, endY, midX, midY))
     .mean
 
   def gradientStep(
       imgs: Tensor4[Batch |@| X, Width, Height, Channel, Float32],
-      objects: DetectionBatch[Batch |@| X, BoundingBox, Float32],
+      records: RecordBatch[Batch |@| X, Node, Relationship],
       state: TrainState
   ) =
-    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(imgs, objects))(state.params)
+    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(imgs, records))(state.params)
     val clipped = gradients.clipGlobalNorm(setup.maxGradientNorm)
     val (params, optimizerState) = optimizer.update(clipped, state.params, state.optimizerState)
     TrainState(params, optimizerState, state.loss * 0.99f + lastCost * 0.01f)
@@ -123,13 +120,24 @@ def trainDetector(setup: DETRSetup): Unit =
 
   /** The batch with every device holding its share of the drawings; the step sees one axis. */
   def shard(
-      batch: dataset.Batch[Batch, Width, Height, Channel, ObjectBatch[Batch, BoundingBox]]
-  ): (Tensor4[Batch |@| X, Width, Height, Channel, Float32], DetectionBatch[Batch |@| X, BoundingBox, Float32]) =
+      batch: dataset.Batch[Batch, Width, Height, Channel, RecordBatch[Batch, Node, Relationship]]
+  ): (Tensor4[Batch |@| X, Width, Height, Channel, Float32], RecordBatch[Batch |@| X, Node, Relationship]) =
     val over = Axis[Batch] -> MeshAxis[X]
-    val objects = batch.target.detection
+    val records = batch.target
     (
       batch.images.shard(mesh, over),
-      DetectionBatch(objects.box.map(_.shard(mesh, over)), objects.label.shard(mesh, over))
+      RecordBatch(
+        nodeClass = records.nodeClass.shard(mesh, over),
+        startX = records.startX.shard(mesh, over),
+        startY = records.startY.shard(mesh, over),
+        endX = records.endX.shard(mesh, over),
+        endY = records.endY.shard(mesh, over),
+        midX = records.midX.shard(mesh, over),
+        midY = records.midY.shard(mesh, over),
+        edgeClass = records.edgeClass.shard(mesh, over),
+        subject = records.subject.shard(mesh, over),
+        obj = records.obj.shard(mesh, over)
+      )
     )
 
   /** The run's own folder, continued where it already holds checkpoints: a job that runs out
@@ -157,8 +165,8 @@ def trainDetector(setup: DETRSetup): Unit =
   batches
     .scanLeft(initialState):
       case (state, batch) =>
-        val (images, objects) = shard(batch)
-        jitGradientStep(images, objects, state)
+        val (images, records) = shard(batch)
+        jitGradientStep(images, records, state)
     .tapEvery(10):
       case (state, step) => println(monitor.report(taken + step, state))
     .tapEvery(checkpointEvery):

@@ -14,11 +14,10 @@ sbt "detr/runMain detrEval out/detr/…" # … or scores a given run
 
 A checkpoint holds the whole `TrainState`, so training can be resumed from it and both eval
 scripts read the parameters back out of it. `DETR.logits` gives the raw scores the loss works
-on, while `DETR.apply` decides a class per query and returns the same `Detection` type the
-dataset yields, so targets and predictions render — and are scored — through the same code.
+on, while `DETR.apply` settles every query on a node of the [record](../dataset), or on
+`NoNode`, so targets and predictions render — and are scored — through the same code.
 
-`detrEval` reads what is detected back into the [record](../dataset) it stands for and compares it
-with the record the drawing was rendered from — a detector predicts no relationships, so the
+`detrEval` compares the nodes the queries answer with to the record the drawing was rendered from — a detector predicts no relationships, so the
 record it is held against holds none either. It reports recall (`nodes detected`), precision
 (`detections right`) and `drawings fully detected`, which is every node of a drawing found at once
 with nothing spurious. Those are the node lines [`d2gEval`](../d2g/README.md) reports, on the same
@@ -58,40 +57,29 @@ trains with plain Adam at 3e-4 — the model is far smaller and gets far fewer s
 schedule, no clipping and no augmentation, since the dataset generator already randomizes
 translation, mirroring and rotation.
 
-**Task.** Three classes (`NoObject`, `PartLine`, `Text`) instead of 91 COCO classes, and the
-targets come padded to the query count, which is how the paper pads ground truth to `N`, so
-the assignment is square. Boxes are normalized `(cx, cy, w, h)` from a sigmoid head and the
-loss is the paper's: cross entropy with the "no object" class down-weighted by 0.1, plus L1
-and GIoU on matched pairs, weighted 1 / 5 / 2.
+**Nodes instead of boxes.** Every query predicts a node of the record the way the transcriber
+does ([NodeHead.scala](src/main/scala/model/NodeHead.scala), copied from [d2g](../d2g)): a class
+out of `NodeClasses`, `NoNode` standing in for the paper's "no object", and for every point a
+class places — start, end, middle — the pixel it falls on. What a query costs against a node,
+for the matching and the loss alike, is the cross entropy of the node's class and of each of
+those pixels. Only the nodes are matched, so the queries left over are the ones trained towards
+`NoNode`; the class term is averaged over all queries and the placement term over the nodes, as
+the paper averages its class and box terms.
 
-Unchanged from the paper: the encoder/decoder structure, learned object queries, the linear
-class head, the three layer perceptron box head, and the set prediction loss.
+Unchanged from the paper: the encoder/decoder structure, learned object queries, and the set
+prediction loss over an optimal matching.
 
 ## Files
 
 | | |
 |---|---|
-| [Vocabulary.scala](src/main/scala/Vocabulary.scala) | axis labels shared by the model and the dataset |
-| [DETR.scala](src/main/scala/DETR.scala) | the model and its parameters |
+| [DETRVocabulary.scala](src/main/scala/DETRVocabulary.scala) | axis labels, and coordinates as pixels |
+| [DETR.scala](src/main/scala/model/DETR.scala) | the model and its parameters |
+| [NodeHead.scala](src/main/scala/model/NodeHead.scala) | a node of the record out of every query |
 | [Matching.scala](src/main/scala/train/Matching.scala) | optimal assignment, by Optax's Hungarian algorithm |
-| [HungarianLoss.scala](src/main/scala/HungarianLoss.scala) | matching and set prediction loss |
-| [DETRTrain.scala](src/main/scala/DETRTrain.scala) | training loop and checkpointing |
-| [DETREval.scala](src/main/scala/DETREval.scala) | plots and scores a checkpoint |
-| [DetectionScoring.scala](src/main/scala/DetectionScoring.scala) | judging a detection in pixels, and reading a run's checkpoints |
+| [HungarianLoss.scala](src/main/scala/train/HungarianLoss.scala) | matching and set prediction loss |
+| [DETRTrain.scala](src/main/scala/train/DETRTrain.scala) | training loop and checkpointing |
+| [DETREval.scala](src/main/scala/eval/DETREval.scala) | plots and scores a checkpoint |
 
-Box geometry (L1 and GIoU) lives with `Detection` in the dataset module,
-[Box.scala](../dataset/src/main/scala/Box.scala).
-
-## What a model built on this one can read
-
-The [egtr](../egtr) module predicts a scene graph on top of this detector, and needs three things
-out of it that a detection alone does not:
-
-- `DETR.decode` — the decoder's output *and* `DETRDecoder.applyWithSelfAttentionIntermediates`,
-  the queries and keys every block's self-attention read its object queries by. `DETR.logits`
-  does not pay for those.
-- `HungarianLoss.matched` — the assignment itself: which target slot each query answers for, and
-  at what cost. The first permutes anything else predicted over the same slots, the second says
-  how good a detected object is. `HungarianLoss.score` then takes the loss of an assignment
-  already made, so the matching runs once per step however much is predicted on top of it.
-- `DetectionScoring` — so that a node of a graph is judged exactly as an object of a detection is.
+The [egtr](../egtr) module was built on the box detector this one used to be, and does not
+build against it.

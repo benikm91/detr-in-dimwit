@@ -4,11 +4,9 @@ import detr.*
 import detr.train.*
 import detr.eval.*
 import detr.config.*
-import dataset.Box
-import dataset.Detection
-import dataset.ObjectClass
-import deepwit.activation.relu
-import deepwit.activation.sigmoid
+import dataset.NodeClass
+import dataset.NodeClasses
+import dataset.RecordNodes
 import deepwit.base.AffineLayer
 import documentEncoder.DocumentEncoder
 import deepwit.normalization.LayerNorm
@@ -22,31 +20,23 @@ import dimwit.tensor.Tensor4
   * the divergences from the paper.
   *
   * The image is embedded patch by patch and attended over by the encoder. The decoder turns
-  * a fixed set of learned object queries into one embedding per [[BoundingBox]] slot, from
-  * which a linear layer predicts the class and a three layer perceptron the box.
+  * a fixed set of learned object queries into one embedding per [[Query]], from which the
+  * [[NodeHead]] predicts a node of the record, or none.
   */
-class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height, Channel, V] => ObjectDetection[V]):
+class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height, Channel, V] => RecordNodes[Query]):
 
-  import DETR.BoxCoordinate
   import DETR.Decoded
-  import DETR.Embedding
-  import DETR.Prediction
 
   private val encodeDocument = DocumentEncoder(params.encoder)
-  private val decoder = DETRDecoder(Axis[Patch], Axis[BoundingBox], params.decoder)
-  private val classify = AffineLayer(params.classification)
-  private val boxHidden1 = AffineLayer(params.boxHidden1)
-  private val boxHidden2 = AffineLayer(params.boxHidden2)
-  private val boxOutput = AffineLayer(params.boxOutput)
+  private val decoder = DETRDecoder(Axis[Patch], Axis[Query], params.decoder)
+  private val nodeHead = NodeHead(params.nodeHead)
 
-  /** The detected objects: per query the box and its most likely class. */
-  override def apply(image: Tensor3[Width, Height, Channel, V]): ObjectDetection[V] =
-    val prediction = logits(image)
-    Detection(prediction.box, prediction.classLogits.argmax(Axis[ObjectClasses]))
+  /** The node every query answers with, [[NodeClass.NoNode]] where it answers with none. */
+  override def apply(image: Tensor3[Width, Height, Channel, V]): RecordNodes[Query] =
+    nodeHead.decide(logits(image))
 
-  /** What the model scores before deciding: a box and unnormalized class scores per query. */
-  def logits(image: Tensor3[Width, Height, Channel, V]): Prediction[V] =
-    predict(decoder(encodeDocument(image), params.objectQueries))
+  def logits(image: Tensor3[Width, Height, Channel, V]): NodeHead.NodeLogits[V] =
+    nodeHead(decoder(encodeDocument(image), params.objectQueries))
 
   /** What [[logits]] reads, together with the decoder by-products a relation extractor reads.
     *
@@ -57,33 +47,9 @@ class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height
     val (selfAttention, objects) = decoder.applyWithSelfAttentionIntermediates(encodeDocument(image), params.objectQueries)
     Decoded(objects, selfAttention)
 
-  /** The class and box heads, on one embedding per query. */
-  def predict(objects: Tensor2[BoundingBox, Embedding, V]): Prediction[V] =
-    val boxes = objects.vmap(Axis[BoundingBox])(box)
-    Prediction(
-      box = Box(
-        centerX = boxes.slice(Axis[BoxCoordinate].at(0)),
-        centerY = boxes.slice(Axis[BoxCoordinate].at(1)),
-        width = boxes.slice(Axis[BoxCoordinate].at(2)),
-        height = boxes.slice(Axis[BoxCoordinate].at(3))
-      ),
-      classLogits = objects.vmap(Axis[BoundingBox])(classify)
-    )
-
-  private def box(embedding: Tensor1[Embedding, V]): Tensor1[BoxCoordinate, V] =
-    sigmoid(boxOutput(relu(boxHidden2(relu(boxHidden1(embedding))))))
-
 object DETR:
 
   trait Embedding derives Label
-  trait BoxHidden derives Label
-  trait BoxCoordinate derives Label
-
-  /** What the model scores: a [[Box]] and the class scores of every query. */
-  case class Prediction[V](
-      box: Box[Tuple1[BoundingBox], V],
-      classLogits: Tensor2[BoundingBox, ObjectClasses, V]
-  )
 
   /** What the decoder made of the object queries.
     *
@@ -93,18 +59,15 @@ object DETR:
     *                      [[DETRDecoder.applyWithSelfAttentionIntermediates]].
     */
   case class Decoded[V](
-      objects: Tensor2[BoundingBox, Embedding, V],
-      selfAttention: List[MultiHeadAttention.Intermediates[BoundingBox, BoundingBox, V]]
+      objects: Tensor2[Query, Embedding, V],
+      selfAttention: List[MultiHeadAttention.Intermediates[Query, Query, V]]
   )
 
   case class Params[V](
       encoder: DocumentEncoder.Params[Embedding, V],
       decoder: DETRDecoder.Params[Embedding, Embedding, V],
-      objectQueries: Tensor2[BoundingBox, Embedding, V],
-      classification: AffineLayer.Params[Embedding, ObjectClasses, V],
-      boxHidden1: AffineLayer.Params[Embedding, BoxHidden, V],
-      boxHidden2: AffineLayer.Params[BoxHidden, Prime[BoxHidden], V],
-      boxOutput: AffineLayer.Params[Prime[BoxHidden], BoxCoordinate, V]
+      objectQueries: Tensor2[Query, Embedding, V],
+      nodeHead: NodeHead.Params[V]
   )
 
   object Params:
@@ -117,15 +80,15 @@ object DETR:
         numHeads: Int,
         embedding: Int,
         numQueries: Int,
+        canvas: Int,
         key: Key
     ) =
       val (encoderKey, decoderKey, queryKey, headsKey) = key.splitToTuple(4)
-      val (classKey, box1Key, box2Key, box3Key) = headsKey.splitToTuple(4)
-      val boundingBoxExtent = Axis[BoundingBox] -> numQueries
+      val (classKey, startXKey, startYKey, endXKey, endYKey, midXKey, midYKey) = headsKey.splitToTuple(7)
+      val queryExtent = Axis[Query] -> numQueries
       val embeddingExtent = Axis[DETR.Embedding] -> embedding
       val embeddingMixedExtent = Axis[EmbeddingMixed] -> embeddingExtent.size * 4
-      val boxHiddenExtent = Axis[BoxHidden] -> embedding
-      val boxHiddenExtent2 = Axis[Prime[BoxHidden]] -> embedding
+      val pixelExtent = Axis[Pixel] -> canvas
       Params(
         encoder = DocumentEncoder.Params.xavierUniformDepthScaled(
           numLayers,
@@ -142,11 +105,16 @@ object DETR:
           embeddingMixedExtent,
           decoderKey
         ),
-        objectQueries = Init.xavierUniform(boundingBoxExtent, embeddingExtent, queryKey),
-        classification = AffineLayer.Params.xavierUniform(embeddingExtent, Axis[ObjectClasses] -> ObjectClass.values.length, classKey),
-        boxHidden1 = AffineLayer.Params.xavierUniform(embeddingExtent, boxHiddenExtent, box1Key),
-        boxHidden2 = AffineLayer.Params.xavierUniform(boxHiddenExtent, boxHiddenExtent2, box2Key),
-        boxOutput = AffineLayer.Params.xavierUniform(boxHiddenExtent2, Axis[BoxCoordinate] -> 4, box3Key)
+        objectQueries = Init.xavierUniform(queryExtent, embeddingExtent, queryKey),
+        nodeHead = NodeHead.Params(
+          nodeClass = AffineLayer.Params.init(embeddingExtent, Axis[NodeClasses] -> NodeClass.values.length, classKey),
+          startX = AffineLayer.Params.init(embeddingExtent, pixelExtent, startXKey),
+          startY = AffineLayer.Params.init(embeddingExtent, pixelExtent, startYKey),
+          endX = AffineLayer.Params.init(embeddingExtent, pixelExtent, endXKey),
+          endY = AffineLayer.Params.init(embeddingExtent, pixelExtent, endYKey),
+          midX = AffineLayer.Params.init(embeddingExtent, pixelExtent, midXKey),
+          midY = AffineLayer.Params.init(embeddingExtent, pixelExtent, midYKey)
+        )
       )
 
   /** How big a model a run asks for, which is the one thing about the model a run gets to choose.
