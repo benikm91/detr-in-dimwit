@@ -182,3 +182,38 @@ for corpus, compared in scores.groupby("corpus"):
     fig.suptitle(f"{corpus}, {compared['size'].iloc[0]}", x=0.01, ha="left")
     fig.tight_layout()
     plt.show()
+
+# %% Records exactly right on sketch, every run: a run's schedule is its line style, its model its colour
+# Every run takes steps of 128 drawings, so their steps line up; a schedule ends in its cooldown.
+SKETCH_RUNS = {
+    Path("d2g-sketch-s-deep.csv"): ("d2g", "328k-step schedule"),
+    Path("detr-sketch-s-deep.csv"): ("detr", "328k-step schedule"),
+    Path("d2g-sketch-s-deep_1M.csv"): ("d2g", "1M-step schedule"),
+    Path("detr-sketch-s-deep_1M.csv"): ("detr", "1M-step schedule"),
+}
+SCHEDULE_STYLES = {"328k-step schedule": "--", "1M-step schedule": "-"}
+
+sketch = {path: scored(path) for path in SKETCH_RUNS}
+furthest = max(scores.step.max() for scores in sketch.values())
+# At no tolerance at all nothing is ever exactly right, so that panel would be empty.
+tolerances_compared = sorted({tolerance for scores in sketch.values() for tolerance in scores.tolerance.unique() if tolerance > 0})
+
+fig, axes = plt.subplots(1, len(tolerances_compared), sharey=True, figsize=(6 * len(tolerances_compared), 5))
+for ax, tolerance in zip(axes, tolerances_compared):
+    for path, scores in sketch.items():
+        model, schedule = SKETCH_RUNS[path]
+        at = scores[scores.tolerance == tolerance]
+        ax.plot(at.step, at.records_exact, marker="o", markersize=3, color=MODEL_COLOURS[model],
+                linestyle=SCHEDULE_STYLES[schedule], label=f"{model}, {schedule}")
+        end = at.iloc[-1]
+        ax.annotate(f"{end.records_exact:.0f}%", (end.step, end.records_exact), xytext=(8, 0),
+                    textcoords="offset points", va="center", fontsize=9, color="#52514e")
+    ax.set_title(f"{tolerance:.0f} px", loc="left")
+    ax.set_ylim(0, 100)
+    ax.set_xlim(0, furthest * 1.08)
+    step_axis(ax)
+axes[0].set_ylabel(f"{SCORES['records_exact']} (%)")
+axes[0].legend(loc="upper left")
+fig.suptitle("sketch, s-deep — records exactly right", x=0.01, ha="left")
+fig.tight_layout()
+plt.show()
