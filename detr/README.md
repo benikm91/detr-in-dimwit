@@ -47,16 +47,10 @@ through shared heads. Only the final layer is supervised here.
 
 **No dropout.** The paper uses 0.1 throughout the transformer; deepwit has no dropout module.
 
-**The matcher is greedy, not optimal.** The paper solves the assignment exactly with SciPy's
-`linear_sum_assignment`. An augmenting path algorithm needs data dependent control flow,
-which would force the matching out of the traced step and onto the host; instead
-[Matching.scala](src/main/scala/Matching.scala) repeatedly takes the cheapest remaining pair,
-which is a fixed number of steps of plain tensor operations and therefore traces, jits and
-vmaps with everything else. Greedy can be beaten on an ambiguous cost matrix, but keeping the
-matching inside the graph made training about ten times faster, since nothing has to leave
-the device mid-step. Padding slots carry a surcharge derived from the spread of the real
-costs — a constant per column leaves the optimal assignment untouched, and it stops greedy
-from handing its cheapest predictions to slots holding no object.
+**The matcher is optimal, and runs on the device.** The paper solves the assignment with SciPy's
+`linear_sum_assignment` on the host; [Matching.scala](src/main/scala/train/Matching.scala) calls
+Optax's Hungarian algorithm instead, which is written in JAX and so traces, jits and vmaps with
+the rest of the step.
 
 **Training setup.** The paper uses AdamW at 1e-4 (1e-5 for the backbone), weight decay 1e-4,
 gradients clipped at 0.1, a step schedule over 300 epochs and scale/crop augmentation. This
@@ -79,7 +73,7 @@ class head, the three layer perceptron box head, and the set prediction loss.
 |---|---|
 | [Vocabulary.scala](src/main/scala/Vocabulary.scala) | axis labels shared by the model and the dataset |
 | [DETR.scala](src/main/scala/DETR.scala) | the model and its parameters |
-| [Matching.scala](src/main/scala/Matching.scala) | greedy assignment, in tensor operations |
+| [Matching.scala](src/main/scala/train/Matching.scala) | optimal assignment, by Optax's Hungarian algorithm |
 | [HungarianLoss.scala](src/main/scala/HungarianLoss.scala) | matching and set prediction loss |
 | [DETRTrain.scala](src/main/scala/DETRTrain.scala) | training loop and checkpointing |
 | [DETREval.scala](src/main/scala/DETREval.scala) | plots and scores a checkpoint |

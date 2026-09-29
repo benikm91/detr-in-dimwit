@@ -5,44 +5,29 @@ import detr.model.*
 import detr.eval.*
 import detr.config.*
 import dimwit.*
+import dimwit.python.PyBridge.liftPyTensor1
+import dimwit.python.PyBridge.toPyTensor
+import me.shadaj.scalapy.py
 
 import scala.language.implicitConversions
 
 object Matching:
 
-  /** Assigns every row a distinct column, repeatedly taking the cheapest remaining pair.
+  /** Assigns every row a distinct column of a square cost so that the assignment costs the least
+    * in total.
     *
-    * This is greedy rather than optimal, which buys a fixed number of steps of plain tensor
-    * operations: unlike an augmenting path algorithm it has no data dependent control flow,
-    * so it traces, jits and vmaps like the rest of the model.
+    * The Hungarian algorithm of [[https://optax.readthedocs.io/en/latest/api/assignment.html Optax]]
+    * is written in JAX, so it traces, jits and vmaps like the rest of the model.
     */
-  def greedy[Row: Label, Column: Label, V: IsFloating](cost: Tensor2[Row, Column, V]): Tensor1[Row, Int32] =
-    val rows = cost.shape.extent(Axis[Row])
-    val columns = cost.shape.extent(Axis[Column])
-    val rowIndices = indices(rows)
-    val columnIndices = indices(columns)
-    // More than the whole spread of the matrix, so a taken pair always loses to an open one.
-    val taken = (cost.max - cost.min + 1f) * (rows.size + 1).toFloat
+  def optimal[Row: Label, Column: Label, V: IsFloating](cost: Tensor2[Row, Column, V]): Tensor1[Row, Int32] =
+    require(cost.shape(Axis[Row]) == cost.shape(Axis[Column]), s"a cost of ${cost.shape} is not square")
+    // Optax answers column by column: the row each column goes to.
+    val rowOfColumn = liftPyTensor1(Axis[Column], VType[Int32])(
+      py.module("optax.assignment").hungarian_algorithm(toPyTensor(cost)).bracketAccess(0)
+    )
+    rowOfColumn.argsort(Axis[Column]).relabelTo(Axis[Row])
 
-    (0 until rows.size)
-      .foldLeft((cost, Tensor(Shape1(rows), VType[Int32]).fill(0))):
-        case ((remaining, assignment), _) =>
-          val cheapestColumn = remaining.argmin(Axis[Column])
-          val row = remaining.min(Axis[Column]).argmin(Axis[Row])
-          val column = cheapestColumn.slice(Axis[Row].at(row))
-          val isRow = rowIndices.elementEquals(row.broadcastTo(Shape1(rows)))
-          val isColumn = columnIndices.elementEquals(column.broadcastTo(Shape1(columns)))
-          val used = maximum(
-            isRow.asFloat(VType[V]).broadcastTo(cost.shape),
-            isColumn.asFloat(VType[V]).broadcastTo(cost.shape)
-          )
-          (
-            remaining + used *! taken,
-            where(isRow, column.broadcastTo(Shape1(rows)), assignment)
-          )
-      ._2
-
-  /** What each row pays for the column [[greedy]] assigned it. */
+  /** What each row pays for the column [[optimal]] assigned it. */
   def costOf[Row: Label, Column: Label, V: IsFloating](cost: Tensor2[Row, Column, V], assignment: Tensor1[Row, Int32]): Tensor1[Row, V] =
     val isAssigned = indices(cost.shape.extent(Axis[Column]))
       .broadcastTo(cost.shape)

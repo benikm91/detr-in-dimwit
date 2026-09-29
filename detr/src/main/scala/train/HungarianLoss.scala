@@ -52,7 +52,7 @@ class HungarianLoss[V: IsFloating](
   def matched(prediction: DETR.Prediction[V], target: ObjectDetection[V]): HungarianLoss.Match[V] =
     val padded = padToQueries(prediction, target)
     val costs = cost(prediction, padded)
-    val slots = Matching.greedy(costs)
+    val slots = Matching.optimal(costs)
     HungarianLoss.Match(
       targets = Detection(
         box = padded.box.map(_.take(Axis[BoundingBox])(slots)),
@@ -104,13 +104,7 @@ class HungarianLoss[V: IsFloating](
 
     classificationLoss * classWeight + (boxLoss * l1Weight + giouLoss * giouWeight) / numObjects
 
-  /** What every prediction would cost against every target.
-    *
-    * Padding targets carry a surcharge rather than a zero cost: a constant added to a column
-    * leaves the optimal assignment alone, but it keeps a greedy matcher from handing its
-    * cheapest predictions to slots that hold no object. The surcharge is derived from the
-    * spread of the real costs so that it dominates them without swamping their precision.
-    */
+  /** What every prediction would cost against every target. */
   private def cost(prediction: DETR.Prediction[V], target: ObjectDetection[V]): Tensor2[BoundingBox, Target, V] =
     val pairs = Shape2(
       prediction.classLogits.shape.extent(Axis[BoundingBox]),
@@ -121,11 +115,9 @@ class HungarianLoss[V: IsFloating](
     val actual = target.box.map(_.relabelTo(Axis[Target]).broadcastTo(pairs))
     val probability = prediction.classLogits.vapply(Axis[ObjectClasses])(softmax)
     val classCost = -probability.take(Axis[ObjectClasses])(targetClass)
-    val real = classCost *! classWeight +
+    classCost *! classWeight +
       Box.l1(predicted, actual) *! l1Weight +
       (1f -! Box.giou(predicted, actual)) *! giouWeight
-    val padding = (1f -! objectMask(targetClass)).broadcastTo(pairs)
-    real + padding *! (real.max - real.min + 1f)
 
   private def objectMask[L: Label](classes: Tensor1[L, Int32]): Tensor1[L, V] =
     (classes > Tensor.like(classes).fill(ObjectClass.NoObject.id)).asFloat(vtype)

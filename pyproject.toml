@@ -9,6 +9,8 @@ dependencies = [
     "jax[cuda12]>=0.8.2 ; sys_platform == 'linux'",
     "jax>=0.8.2 ; sys_platform != 'linux'",
     "numpy>=2.0",
+    # The Hungarian algorithm DETR matches its queries by, written in JAX.
+    "optax>=0.2.8",
     # Used by src/main/resources/python/l_shape_dataset.py to fetch the dataset;
     # hf-xet makes the ~8.6 GB train split download noticeably faster.
     "huggingface-hub[hf-xet]>=0.36",
