@@ -171,7 +171,7 @@ def trainSceneGraph(setup: EGTRSetup, detectorRun: Option[String] = None): Unit 
   val initialState = if taken == 0 then EGTRTrainState(initialParams, optimizer.init(initialParams), 0f)
     else checkpointer.load[EGTRTrainState](taken).getOrElse(sys.error(s"checkpoint $taken of ${checkpointer.rootPath} will not load"))
   if taken > 0 then println(s"continuing ${checkpointer.rootPath} from step $taken")
-  val history = History()
+  val history = History(checkpointer.rootPath)
   val monitor = Monitor.ConcatMonitor[EGTRTrainState](List(
     Monitor.StepMonitor(),
     Monitor.LossMonitor(_.loss.item),

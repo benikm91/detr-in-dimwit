@@ -159,7 +159,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val initialState = if taken == 0 then D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, 0f)
     else checkpointer.load[D2GTrainState](taken).getOrElse(sys.error(s"checkpoint $taken of ${checkpointer.rootPath} will not load"))
   if taken > 0 then println(s"continuing ${checkpointer.rootPath} from step $taken")
-  val history = History()
+  val history = History(checkpointer.rootPath)
   val monitor = Monitor.ConcatMonitor[D2GTrainState](List(
     Monitor.StepMonitor(),
     Monitor.LossMonitor(_.loss.item),
