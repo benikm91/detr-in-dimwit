@@ -101,8 +101,9 @@ sarus run \
     git clone https://github.com/benikm91/dimwit-sharding
     git clone --branch "$branch" https://github.com/benikm91/detr-in-dimwit
 
+    # Published as the version DeepWit and this repository build against, whatever version the main branch of DimWit is at.
     cd dimwit
-    sbt publishLocal
+    sbt "set ThisBuild / version := \"0.2-SNAPSHOT\"" publishLocal
     cd ..
 
     cd deepwit
