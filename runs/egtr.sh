@@ -4,7 +4,7 @@
 #SBATCH --partition=gpu
 #SBATCH --account=cai_cv
 #SBATCH --gres=gpu:4
-#SBATCH --exclude=sanjose,irvine,salinas
+#SBATCH --exclude=sanjose,irvine,salinas,losangeles
 #SBATCH --time=6:00:00
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/%x_%j.out
 #SBATCH --error=/cluster/home/%u/.logs/slurm/%j/%x_%j.err
@@ -63,7 +63,8 @@ continueLater() {
   echo "time limit approaching: putting ${SLURM_JOB_ID:-this job} back in the queue to carry on"
   scontrol requeue "$SLURM_JOB_ID"
 }
-if [[ $STAGE == train ]]; then trap continueLater USR1; fi
+# Any other stage has nothing to carry on from, so it ignores the warning and runs to the limit.
+if [[ $STAGE == train ]]; then trap continueLater USR1; else trap '' USR1; fi
 
 module load sarus/1.6.4
 
@@ -165,7 +166,7 @@ if [[ $STAGE == train ]]; then
   echo "job finished, checkpoints in $CHECKPOINT_DIR"
   # Scoring is queued from here, so that it reads the checkpoints this run just wrote and runs only
   # if there are any. One GPU is enough: it scores one checkpoint at a time.
-  evalId="$(sbatch --parsable --gres=gpu:1 --time=16:00:00 --job-name="egtr-$CORPUS-$SIZE-eval" runs/egtr.sh eval)"
+  evalId="$(sbatch --parsable --gres=gpu:1 --time=24:00:00 --job-name="egtr-$CORPUS-$SIZE-eval" runs/egtr.sh eval)"
   echo "queued scoring as $evalId"
 else
   echo "job finished, metrics in $OUTPUT_DIR:"

@@ -50,8 +50,8 @@ def plotDetector(setup: DETRSetup): Unit =
 
   display(grid(rows))
 
-/** Scores every checkpoint of the newest run on the whole validation split, and writes what it
-  * finds as [[Metrics]].
+/** Scores every checkpoint of the newest run on the whole validation split, the last checkpoint
+  * first, and writes what it finds as [[Metrics]].
   *
   * What is detected is read back into the record it stands for and compared with the record the
   * drawing was rendered from, which is how [[scoreTranscriber]] scores too — a detector predicts no
@@ -72,11 +72,12 @@ def scoreDetector(setup: DETRSetup, size: String): Unit =
       .map(sample => (RecordGraph.of(sample.target).copy(edges = Seq.empty), RecordGraph.of(detect(sample.image))))
       .toSeq
 
-  val rows = checkpoints.iterations.flatMap: step =>
+  val csv = Metrics.Csv("detr", setup.corpus, size, Runs.parameters(checkpoints.loadLatest[TrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  println(s"writing to ${csv.path}")
+
+  checkpoints.iterations.reverse.foreach: step =>
     println(s"scoring checkpoint $step")
     val drawings = detected(checkpoints.load[TrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
-    Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, found) => RecordScoring.score(target, found, tolerance / Canvas))))
-
-  rows.filter(_.step == checkpoints.iterations.last).foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-  val params = checkpoints.loadLatest[TrainState].get.params
-  println(s"written to ${Metrics.write("detr", setup.corpus, size, Runs.parameters(params), Runs.trainingSeconds(checkpoints.rootPath), rows)}")
+    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, found) => RecordScoring.score(target, found, tolerance / Canvas))))
+    csv.append(measured)
+    if step == checkpoints.iterations.last then measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))

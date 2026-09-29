@@ -34,8 +34,8 @@ import viz.PlotTargets.websocket
 
 import scala.language.implicitConversions
 
-/** Scores every checkpoint of the newest run of a setup on the whole validation split, and writes
-  * the metrics as one CSV.
+/** Scores every checkpoint of the newest run of a setup on the whole validation split, the last
+  * checkpoint first, and writes the metrics as one CSV.
   */
 def scoreTranscriber(setup: D2GSetup, size: String): Unit =
   dimwit.initialize()
@@ -55,14 +55,15 @@ def scoreTranscriber(setup: D2GSetup, size: String): Unit =
       .flatMap(batch => batch.map(sample => RecordGraph.of(sample.target)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val rows = checkpoints.iterations.flatMap: step =>
+  val csv = Metrics.Csv("d2g", setup.corpus, size, Runs.parameters(checkpoints.loadLatest[D2GTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  println(s"writing to ${csv.path}")
+
+  checkpoints.iterations.reverse.foreach: step =>
     println(s"scoring checkpoint $step")
     val drawings = transcribed(checkpoints.load[D2GTrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
-    Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => RecordScoring.score(target, written, tolerance / Canvas))))
-
-  rows.filter(_.step == checkpoints.iterations.last).foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-  val params = checkpoints.loadLatest[D2GTrainState].get.params
-  println(s"written to ${Metrics.write("d2g", setup.corpus, size, Runs.parameters(params), Runs.trainingSeconds(checkpoints.rootPath), rows)}")
+    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => RecordScoring.score(target, written, tolerance / Canvas))))
+    csv.append(measured)
+    if step == checkpoints.iterations.last then measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
 
 /** Plots what a trained model transcribes.
   *

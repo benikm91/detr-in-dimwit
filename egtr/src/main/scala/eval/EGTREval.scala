@@ -23,8 +23,8 @@ import dataset.report
 import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
 
-/** Scores a trained scene graph model on the whole validation split of the corpus its setup
-  * names.
+/** Scores every checkpoint of a trained scene graph model on the whole validation split of the
+  * corpus its setup names, the last checkpoint first.
   *
   * What the model predicts is read back into the record it stands for and compared with the
   * record the drawing was rendered from, by [[RecordScoring]] — the same comparison
@@ -56,17 +56,20 @@ def scoreSceneGraph(setup: EGTRSetup, size: String): Unit =
         (RecordGraph.of(sample.target), Thresholds.map(threshold => threshold -> claimed(threshold)).toMap)
       .toSeq
 
-  val rows = checkpoints.iterations.flatMap: step =>
+  val csv = Metrics.Csv("egtr", setup.corpus, size, Runs.parameters(checkpoints.loadLatest[EGTRTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  println(s"writing to ${csv.path}")
+
+  checkpoints.iterations.reverse.foreach: step =>
     println(s"scoring checkpoint $step")
     val drawings = predicted(checkpoints.load[EGTRTrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
-    for
-      threshold <- Thresholds
-      tolerance <- Tolerances
-    yield Metrics.Row(step, Some(threshold), tolerance, drawings.map((target, at) => RecordScoring.score(target, at(threshold), tolerance / Canvas)))
-
-  rows.filter(row => row.step == checkpoints.iterations.last && row.threshold.contains(0.5f)).foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-  val params = checkpoints.loadLatest[EGTRTrainState].get.params
-  println(s"written to ${Metrics.write("egtr", setup.corpus, size, Runs.parameters(params), Runs.trainingSeconds(checkpoints.rootPath), rows)}")
+    val measured =
+      for
+        threshold <- Thresholds
+        tolerance <- Tolerances
+      yield Metrics.Row(step, Some(threshold), tolerance, drawings.map((target, at) => RecordScoring.score(target, at(threshold), tolerance / Canvas)))
+    csv.append(measured)
+    if step == checkpoints.iterations.last then
+      measured.filter(_.threshold.contains(0.5f)).foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
 
 /** Above which score a relation counts as claimed. A record is a set of relationships, not a
   * ranking of them, so a relation has to be either in or out — and where the line goes is a

@@ -64,15 +64,16 @@ class ObjectsSuite extends FunSuite:
     assertEquals(objects.detection.label.toArray(0), ObjectClass.Circle.id)
     assert(objects.relations.toArray.flatten.flatten.forall(_ == 0f), "nothing relates where nothing is related")
 
-  test("a run's metrics are written one row per checkpoint and tolerance, blank where nothing was measured"):
+  test("a run's metrics are appended one row per checkpoint and tolerance, blank where nothing was measured"):
     val detected = RecordScoring.Scored(nodes = 10, nodesFound = 9, nodesPredicted = 12, nodesExact = false, relationships = 0, relationshipsFound = 0, relationshipsPredicted = 0, isExact = false)
     val rows = Seq(
       Metrics.Row(10000, None, 8f, Seq(detected, detected.copy(nodesExact = true), detected.copy(nodesExact = true, isExact = true))),
       Metrics.Row(20000, Some(0.5f), 8f, Seq(detected))
     )
-    val written = Metrics.write("test", Corpus.LShape, "xs", parameters = 123, trainingSeconds = Some(45), rows)
-    val lines = java.nio.file.Files.readAllLines(written)
-    java.nio.file.Files.delete(written)
+    val csv = Metrics.Csv("test", Corpus.LShape, "xs", parameters = 123, trainingSeconds = Some(45))
+    rows.foreach(row => csv.append(Seq(row)))
+    val lines = java.nio.file.Files.readAllLines(csv.path)
+    java.nio.file.Files.delete(csv.path)
     assertEquals(lines.get(0), "model,corpus,size,step,threshold,tolerance,parameters,training_seconds,node_recall,node_precision,nodes_exact,edge_recall,edge_precision,records_exact")
     assertEquals(lines.get(1), "test,l-shape,xs,10000,,8,123,45,90.00,75.00,66.67,,,33.33")
     assertEquals(lines.get(2), "test,l-shape,xs,20000,0.5,8,123,45,90.00,75.00,0.00,,,0.00")
