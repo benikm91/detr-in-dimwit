@@ -103,7 +103,7 @@ sarus run \
 
     # Published as the version DeepWit and this repository build against, whatever version the main branch of DimWit is at.
     cd dimwit
-    sbt "set ThisBuild / version := \"0.2-SNAPSHOT\"" publishLocal
+    sbt publishLocal
     cd ..
 
     cd deepwit

@@ -10,7 +10,7 @@ ThisBuild / csrConfiguration := csrConfiguration.value
   .withTtl(Some(0.seconds))
   .withCachePolicies(Vector(CachePolicy.LocalOnly))
 
-lazy val dimwit = "ch.contrafactus" %% "dimwit-core" % "0.2-SNAPSHOT" changing ()
+lazy val dimwit = "ch.contrafactus" %% "dimwit-core" % "0.2" changing ()
 lazy val dimwitSharding = "ch.contrafactus" %% "dimwit-sharding" % "0.1.0-SNAPSHOT" changing ()
 lazy val deepwit = "ch.contrafactus" %% "deepwit-core" % "0.2-SNAPSHOT" changing ()
 lazy val scalapy = "dev.scalapy" %% "scalapy-core" % "0.5.3"
