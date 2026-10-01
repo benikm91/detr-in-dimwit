@@ -107,7 +107,7 @@ sarus run \
     cd ..
 
     cd deepwit
-    sbt publishLocal
+    sbt "set ThisBuild / version := \"0.2-SNAPSHOT\"" publishLocal
     cd ..
 
     cd dimwit-sharding
