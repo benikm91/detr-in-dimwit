@@ -183,7 +183,7 @@ for corpus, compared in scores.groupby("corpus"):
     fig.tight_layout()
     plt.show()
 
-# %% Records exactly right on sketch, every run: a run's schedule is its line style, its model its colour
+# %% Nodes and whole records on sketch, every run: a run's schedule is its line style, its model its colour
 # Every run takes steps of 128 drawings, so their steps line up; a schedule ends in its cooldown.
 SKETCH_RUNS = {
     Path("d2g-sketch-s-deep.csv"): ("d2g", "328k-step schedule"),
@@ -192,28 +192,33 @@ SKETCH_RUNS = {
     Path("detr-sketch-s-deep_1M.csv"): ("detr", "1M-step schedule"),
 }
 SCHEDULE_STYLES = {"328k-step schedule": "--", "1M-step schedule": "-"}
+SKETCH_SCORES = ["node_recall", "node_precision", "records_exact"]
 
 sketch = {path: scored(path) for path in SKETCH_RUNS}
 furthest = max(scores.step.max() for scores in sketch.values())
 # At no tolerance at all nothing is ever exactly right, so that panel would be empty.
 tolerances_compared = sorted({tolerance for scores in sketch.values() for tolerance in scores.tolerance.unique() if tolerance > 0})
 
-fig, axes = plt.subplots(1, len(tolerances_compared), sharey=True, figsize=(6 * len(tolerances_compared), 5))
-for ax, tolerance in zip(axes, tolerances_compared):
-    for path, scores in sketch.items():
-        model, schedule = SKETCH_RUNS[path]
-        at = scores[scores.tolerance == tolerance]
-        ax.plot(at.step, at.records_exact, marker="o", markersize=3, color=MODEL_COLOURS[model],
-                linestyle=SCHEDULE_STYLES[schedule], label=f"{model}, {schedule}")
-        end = at.iloc[-1]
-        ax.annotate(f"{end.records_exact:.0f}%", (end.step, end.records_exact), xytext=(8, 0),
-                    textcoords="offset points", va="center", fontsize=9, color="#52514e")
+fig, axes = plt.subplots(len(SKETCH_SCORES), len(tolerances_compared), sharex=True, sharey=True,
+                         figsize=(6 * len(tolerances_compared), 4.5 * len(SKETCH_SCORES)))
+for row, score in zip(axes, SKETCH_SCORES):
+    for ax, tolerance in zip(row, tolerances_compared):
+        for path, scores in sketch.items():
+            model, schedule = SKETCH_RUNS[path]
+            at = scores[scores.tolerance == tolerance]
+            ax.plot(at.step, at[score], marker="o", markersize=3, color=MODEL_COLOURS[model],
+                    linestyle=SCHEDULE_STYLES[schedule], label=f"{model}, {schedule}")
+            end = at.iloc[-1]
+            ax.annotate(f"{end[score]:.0f}%", (end.step, end[score]), xytext=(8, LABEL_NUDGES[model]),
+                        textcoords="offset points", va="center", fontsize=9, color="#52514e")
+        ax.set_ylim(0, 100)
+        ax.set_xlim(0, furthest * 1.08)
+    row[0].set_ylabel(f"{SCORES[score]} (%)")
+for ax, tolerance in zip(axes[0], tolerances_compared):
     ax.set_title(f"{tolerance:.0f} px", loc="left")
-    ax.set_ylim(0, 100)
-    ax.set_xlim(0, furthest * 1.08)
+for ax in axes[-1]:
     step_axis(ax)
-axes[0].set_ylabel(f"{SCORES['records_exact']} (%)")
-axes[0].legend(loc="upper left")
-fig.suptitle("sketch, s-deep — records exactly right", x=0.01, ha="left")
+axes[0, 0].legend(loc="lower right")
+fig.suptitle("sketch, s-deep", x=0.01, ha="left")
 fig.tight_layout()
 plt.show()

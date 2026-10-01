@@ -1,5 +1,5 @@
-"""One picture of what a checkpoint transcribed: drawings in pairs, the record each was rendered
-from beside the record the model wrote down.
+"""One picture of what a checkpoint made of many drawings: each drawing as a few tiles side by
+side, the drawings in rows.
 
 The environment a run trains in has numpy but no image library, so the PNG is written here.
 """

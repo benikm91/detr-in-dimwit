@@ -5,19 +5,15 @@ import d2g.train.D2GTrainState
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
+import dataset.DrawingTiles
 import dataset.Outlines
 import dataset.RecordDrawing
 import dataset.RecordGraph
 import dataset.Runs
 import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
-import dimwit.jax.Jax
-import dimwit.python.PyBridge.toPyTensor
-import me.shadaj.scalapy.py
 
-import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 
 /** Writes what every checkpoint of the newest run transcribed, one picture each:
   * `sbt "d2g/runMain d2gDraw sketch s-deep"`.
@@ -52,7 +48,7 @@ def d2gDraw(corpus: String, size: String): Unit =
     val eachDrawing = documents.zip(written).map: (document, transcribed) =>
       Seq(RecordDrawing(noRecord, document, Axis[Channel]), RecordDrawing(transcribed, emptyCanvas, Axis[Channel]))
     val picture = Path.of(Runs.outputDir, s"d2g-${setup.corpus.name}-$size-$step.png")
-    tiling.write(toPyTensor(stack(eachDrawing.flatten, Axis[Tile])), picture.toString, Rows, Across, eachDrawing.head.size)
+    DrawingTiles.write(eachDrawing, Rows, Across, picture)
     println(s"step $step | ${written.size} drawings written to $picture")
 
 /** The picture: drawings across, rows down, each drawing beside what the model made of it. */
@@ -64,16 +60,3 @@ private val Blank = 255
 
 /** How many drawings are transcribed together, as in the scoring: one traced computation. */
 private val WrittenTogether = 32
-
-/** Axis of the drawings laid out in one picture. */
-private trait Tile derives Label
-
-/** `drawing_tiles.py`, unpacked where the interpreter will find it. */
-private lazy val tiling: py.Dynamic =
-  Jax.np // DimWit configures the interpreter and `sys.path` before any Python object of ours.
-  val directory = Files.createTempDirectory("d2g-drawings")
-  py.module("sys").path.append(directory.toAbsolutePath.toString)
-  val source = Option(classOf[Tile].getResourceAsStream("/python/drawing_tiles.py")).getOrElse(sys.error("drawing_tiles.py is not on the classpath"))
-  try Files.copy(source, directory.resolve("drawing_tiles.py"), StandardCopyOption.REPLACE_EXISTING)
-  finally source.close()
-  py.module("drawing_tiles")
