@@ -20,7 +20,7 @@ case class D2GSetup(
     // Train configuration
     checkpointRoot: String,
     checkpointEverySamples: Int = 20_000 * 128,
-    numSamples: Int = 1_000_000 * 128,
+    numSamples: Int = 500_000 * 128,
     batchSize: Int = 128,
     learningRate: Float = 3e-4f,
     finalLearningRate: Float = 0f,
