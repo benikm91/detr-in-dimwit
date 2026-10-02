@@ -102,6 +102,11 @@ object D2G:
 
   case class Scores[V](nodes: NodeQueryLogits[V], edges: EdgeQueryLogits[V])
 
+  object Scores:
+
+    given tensorTree[V]: TensorTree[Scores[V]] = TensorTree.derived
+    given tree[V]: TreeOf[Scores[V], V] = TreeOf.derived
+
   /** [[NodeLogits]] at every query slot. */
   case class NodeQueryLogits[V](
       nodeClass: Tensor3[PoolQuery, Node, NodeClasses, V],
@@ -123,6 +128,9 @@ object D2G:
     )
 
   object NodeQueryLogits:
+
+    given tensorTree[V]: TensorTree[NodeQueryLogits[V]] = TensorTree.derived
+    given tree[V]: TreeOf[NodeQueryLogits[V], V] = TreeOf.derived
 
     def of[V](answered: Seq[NodeLogits[V]]): NodeQueryLogits[V] = NodeQueryLogits(
       nodeClass = stack(answered.map(_.nodeClass), Axis[PoolQuery]),
@@ -147,6 +155,9 @@ object D2G:
     )
 
   object EdgeQueryLogits:
+
+    given tensorTree[V]: TensorTree[EdgeQueryLogits[V]] = TensorTree.derived
+    given tree[V]: TreeOf[EdgeQueryLogits[V], V] = TreeOf.derived
 
     def of[V](answered: Seq[EdgeLogits[V]]): EdgeQueryLogits[V] = EdgeQueryLogits(
       edgeClass = stack(answered.map(_.edgeClass), Axis[PoolQuery]),

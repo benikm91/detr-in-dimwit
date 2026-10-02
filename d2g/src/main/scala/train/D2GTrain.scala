@@ -12,7 +12,10 @@ import dataset.History
 import dataset.Record
 import dataset.RecordBatch
 import deepwit.checkpointing.TensorTreeCheckpointer
+import deepwit.optimizer.LossScale
+import deepwit.optimizer.allFinite
 import deepwit.optimizer.clipGlobalNorm
+import deepwit.optimizer.select
 import deepwit.training.Monitor
 import deepwit.training.tapEvery
 import dataset.Runs
@@ -29,12 +32,15 @@ import dimwit.optimizer.Adam
 import dimwit.optimizer.AdamState
 import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
+import dimwit.TreeOf.ops.asFloats
 
 import scala.language.implicitConversions
 
 case class D2GTrainState(
     params: D2G.Params[Float32],
     optimizerState: LearningRateSchedulerState[D2G.Params[Float32], AdamState],
+    lossScale: LossScale,
+    skippedSteps: Tensor0[Int32],
     linearization: Key,
     loss: Tensor0[Float32]
 )
@@ -47,6 +53,9 @@ case class D2GTrainState(
   *
   * One implementation serves every corpus. What differs between them is held in the setup, so that
   * a change to how training works cannot reach one corpus and miss another.
+  *
+  * The model runs in Float16 against Float32 master weights, the loss in Float32. A [[LossScale]]
+  * keeps the small gradients from rounding to zero, and a step whose gradients overflow is skipped.
   *
   * The batch is split over the devices: each takes the same step on its share of the drawings, and
   * the gradients are summed before the parameters move. A run on more GPUs therefore holds less per
@@ -105,11 +114,11 @@ def trainTranscriber(setup: D2GSetup): Unit =
       records: RecordBatch[S, Node, Edge],
       asked: Key
   )(params: D2G.Params[Float32]): Tensor0[Float32] =
-    val model = D2G(params)
-    zipvmap(Axis[S])(images, records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY, records.edgeClass, records.subject, records.obj):
+    val model = D2G(params.asFloats(VType[Float16]))
+    zipvmap(Axis[S])(images.asFloat(VType[Float16]), records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY, records.edgeClass, records.subject, records.obj):
       case (image, nodeClass, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj) =>
         val target = Record(nodeClass, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj)
-        val scored = model.logits(image, target, asked)
+        val scored = model.logits(image, target, asked).asFloats(VType[Float32])
         nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target.edges)
     .mean
 
@@ -119,9 +128,21 @@ def trainTranscriber(setup: D2GSetup): Unit =
       state: D2GTrainState
   ) =
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
-    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(images, records.permuted(forThisStep, nodes, edges), forQueries))(state.params)
+    val lossScale = state.lossScale
+    val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
+      (params: D2G.Params[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges), forQueries)(params))
+    )(state.params)
+    val gradients = lossScale.unscaled(scaledGradients)
     val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)
-    D2GTrainState(params, optimizerState, nextLinearization, state.loss * 0.99f + lastCost * 0.01f)
+    val finite = allFinite(gradients)
+    D2GTrainState(
+      select(finite, params, state.params),
+      select(finite, optimizerState, state.optimizerState),
+      lossScale.next(finite),
+      where(finite, state.skippedSteps, state.skippedSteps + 1),
+      nextLinearization,
+      where(finite, state.loss * 0.99f + scaledCost / lossScale.scale * 0.01f, state.loss)
+    )
   val jitGradientStep = jitDonatingUnsafe(gradientStep[Batch |@| X])
 
   /** The batch with every device holding its share of the drawings; the step sees one axis. */
@@ -156,14 +177,19 @@ def trainTranscriber(setup: D2GSetup): Unit =
     case Some(started) => TensorTreeCheckpointer(started.rootPath, overwrite = true)
     case None          => TensorTreeCheckpointer.newIn(setup.checkpointRoot)
   val taken = checkpointer.iterations.maxOption.getOrElse(0)
-  val initialState = if taken == 0 then D2GTrainState(initialParams, optimizer.init(initialParams), dataKey, 0f)
+  val initialState = if taken == 0 then D2GTrainState(initialParams, optimizer.init(initialParams), LossScale.initial(), 0, dataKey, 0f)
     else checkpointer.load[D2GTrainState](taken).getOrElse(sys.error(s"checkpoint $taken of ${checkpointer.rootPath} will not load"))
   if taken > 0 then println(s"continuing ${checkpointer.rootPath} from step $taken")
   val history = History(checkpointer.rootPath)
+  /** Steps skipped all through a run mean the forward pass overflows, which no scale can fix. */
+  val lossScaleMonitor = new Monitor[D2GTrainState]:
+    def report(step: Int, state: D2GTrainState): String =
+      f"Loss scale: 2^${math.log(state.lossScale.scale.item) / math.log(2)}%.0f, ${state.skippedSteps.item} steps skipped"
   val monitor = Monitor.ConcatMonitor[D2GTrainState](List(
     Monitor.StepMonitor(),
     Monitor.LossMonitor(_.loss.item),
     Monitor.LearningRateMonitor(schedule),
+    lossScaleMonitor,
     Monitor.PerformanceMonitor(batchSize)
   ))
 
