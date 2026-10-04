@@ -4,6 +4,8 @@ import d2g.*
 import d2g.train.*
 import d2g.eval.*
 import d2g.config.*
+import d2s.model.*
+import d2s.model.D2S.NodeQueryLogits
 import dataset.EdgeClass
 import dataset.NodeClass
 import dataset.EdgeClasses
@@ -24,32 +26,28 @@ import dimwit.*
 
 import scala.language.implicitConversions
 
-/** Document-to-graph model based on remaining-node prediction.
+/** Document-to-graph model: a [[D2S]] for the nodes, and the relationships on top.
   *
   * 1. The document (or: image) is embedded by a vision transformer to a sequence of patch embeddings.
   * 2. The graph is predicted in two stages:
-  *   a. the nodes based on cross-attenting the document (1)
+  *   a. the nodes based on cross-attenting the document (1), by the [[D2S]]
   *   b. the relationships based on cross-attenting the document (1) and the nodes (2a).
   */
 class D2G[V: IsFloating](params: D2G.Params[V]):
 
   import D2G.EdgeQueryLogits
-  import D2G.NodeQueryLogits
   import D2G.Scores
 
-  val encodeDocument = DocumentEncoder(params.encoder)
-
-  private val embedNodes = NodeEmbedder(params.nodes.embedder)
-  private val nodePosition = LearnedAbsolutePositionalInjector(params.nodes.positions)
-  private val nodeDecoder = NodeDecoder(params.nodes.decoder)
-  val nodeHead = NodeHead(params.nodes.head)
+  private val set = D2S(params.set)
+  val encodeDocument = set.encodeDocument
+  val nodeHead = set.nodeHead
 
   private val embedEdges = EdgeEmbedder(params.edges.embedder)
   private val edgePosition = LearnedAbsolutePositionalInjector(params.edges.positions)
   private val edgeDecoder = EdgeDecoder(params.edges.decoder)
   val edgeHead = EdgeHead(params.edges.head)
 
-  private val pool = params.nodes.queries.shape(Axis[PoolQuery])
+  private val pool = set.pool
 
   /** What two queries of the pool answer. Queries selected randomly. */
   def logits(document: Tensor3[Width, Height, Channel, V], taken: Record[Node, Edge], asked: Key): Scores[V] =
@@ -69,17 +67,7 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
       edgeQueryIds: Tensor1[PoolQuery, Int32]
   ): Scores[V] =
 
-    val (carriedNodes, answeredNodes) =
-      val takenNodes = nodePosition(embedNodes(taken.nodes))
-      val queryNodes = params.nodes.queries.take(Axis[PoolQuery])(nodeQueryIds) // take queries and broadcast along context
-        .vmap(Axis[PoolQuery]): query =>
-          nodePosition(query.broadcastTo(takenNodes.shape))
-      nodeDecoder.forTraining(encodedDocument, takenNodes, queryNodes)
-
-    val (nodeClass, startX, startY, endX, endY, midX, midY) =
-      answeredNodes.vmap(Axis[PoolQuery]): answered =>
-        val scored = nodeHead(answered)
-        (scored.nodeClass, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY)
+    val (carriedNodes, nodes) = set.predict(encodedDocument, taken.nodes, nodeQueryIds)
 
     val (_, answeredEdges) =
       val nodeSource =
@@ -96,7 +84,7 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
         val scored = edgeHead(answered)
         (scored.edgeClass, scored.subject, scored.obj)
 
-    Scores(NodeQueryLogits(nodeClass, startX, startY, endX, endY, midX, midY), EdgeQueryLogits(edgeClass, subject, obj))
+    Scores(nodes, EdgeQueryLogits(edgeClass, subject, obj))
 
 object D2G:
 
@@ -106,41 +94,6 @@ object D2G:
 
     given tensorTree[V]: TensorTree[Scores[V]] = TensorTree.derived
     given tree[V]: TreeOf[Scores[V], V] = TreeOf.derived
-
-  /** [[NodeLogits]] at every query slot. */
-  case class NodeQueryLogits[V](
-      nodeClass: Tensor3[PoolQuery, Node, NodeClasses, V],
-      startX: Tensor3[PoolQuery, Node, Pixel, V],
-      startY: Tensor3[PoolQuery, Node, Pixel, V],
-      endX: Tensor3[PoolQuery, Node, Pixel, V],
-      endY: Tensor3[PoolQuery, Node, Pixel, V],
-      midX: Tensor3[PoolQuery, Node, Pixel, V],
-      midY: Tensor3[PoolQuery, Node, Pixel, V]
-  ):
-    def at(query: Int): NodeLogits[V] = NodeLogits(
-      nodeClass.slice(Axis[PoolQuery].at(query)),
-      startX.slice(Axis[PoolQuery].at(query)),
-      startY.slice(Axis[PoolQuery].at(query)),
-      endX.slice(Axis[PoolQuery].at(query)),
-      endY.slice(Axis[PoolQuery].at(query)),
-      midX.slice(Axis[PoolQuery].at(query)),
-      midY.slice(Axis[PoolQuery].at(query))
-    )
-
-  object NodeQueryLogits:
-
-    given tensorTree[V]: TensorTree[NodeQueryLogits[V]] = TensorTree.derived
-    given tree[V]: TreeOf[NodeQueryLogits[V], V] = TreeOf.derived
-
-    def of[V](answered: Seq[NodeLogits[V]]): NodeQueryLogits[V] = NodeQueryLogits(
-      nodeClass = stack(answered.map(_.nodeClass), Axis[PoolQuery]),
-      startX = stack(answered.map(_.startX), Axis[PoolQuery]),
-      startY = stack(answered.map(_.startY), Axis[PoolQuery]),
-      endX = stack(answered.map(_.endX), Axis[PoolQuery]),
-      endY = stack(answered.map(_.endY), Axis[PoolQuery]),
-      midX = stack(answered.map(_.midX), Axis[PoolQuery]),
-      midY = stack(answered.map(_.midY), Axis[PoolQuery])
-    )
 
   /** [[EdgeLogits]] at every query slot. */
   case class EdgeQueryLogits[V](
@@ -166,8 +119,7 @@ object D2G:
     )
 
   case class Params[V](
-      encoder: DocumentEncoder.Params[Embedding, V],
-      nodes: Params.NodeParams[V],
+      set: D2S.Params[V],
       edges: Params.EdgeParams[V]
   )
 
@@ -175,19 +127,6 @@ object D2G:
 
     given tensorTree: TensorTree[Params[Float32]] = TensorTree.derived
     given tree: TreeOf[Params[Float32], Float32] = TreeOf.derived
-
-    case class NodeParams[V](
-        decoder: NodeDecoder.Params[Embedding, Embedding, V],
-        embedder: NodeEmbedder.Params[V],
-        head: NodeHead.Params[V],
-        queries: Tensor2[PoolQuery, Embedding, V],
-        positions: LearnedAbsolutePositionalInjector.Params[Node, Embedding, V]
-    )
-
-    object NodeParams:
-
-      given tensorTree: TensorTree[NodeParams[Float32]] = TensorTree.derived
-      given tree: TreeOf[NodeParams[Float32], Float32] = TreeOf.derived
 
     case class EdgeParams[V](
         decoder: EdgeDecoder.Params[Embedding, Embedding, V],
@@ -219,58 +158,22 @@ object D2G:
         canvas: Int,
         key: Key
     ): Params[Float32] =
-      val (encoderKey, decoderKey, embedderKey, scorerKey, tokenKey, positionKey) = key.splitToTuple(6)
+      val (setKey, edgeDecoderKey, edgeEmbedderKey, edgeHeadKey, edgeTokenKey, edgePositionKey) = key.splitToTuple(6)
 
       val embeddingExtent = Axis[Embedding] -> embedding
       val embeddingMixedExtent = Axis[EmbeddingMixed] -> embedding * 4
       val partExtent = Axis[PartEmbedding] -> embedding / 8
-      val nodeClassExtent = Axis[dataset.NodeClasses] -> NodeClass.values.length
       val edgeClassExtent = Axis[dataset.EdgeClasses] -> EdgeClass.values.length
-      val pixelExtent = Axis[Pixel] -> canvas
-      val nodeExtent = Axis[Node] -> nodes
       val edgeExtent = Axis[Edge] -> edges
       val linkedExtent = Axis[LinkedNode] -> nodes
-      // A node embedding is put together from its class and the six coordinates a class can
-      // place; a relationship embedding from its class and the two nodes it relates.
-      val nodePartExtent = Axis[NodePart |*| PartEmbedding] -> 7 * partExtent.size
+      // A relationship embedding is put together from its class and the two nodes it relates.
       val edgePartExtent = Axis[EdgePart |*| PartEmbedding] -> 3 * partExtent.size
 
-      val (nodeDecoderKey, edgeDecoderKey) = decoderKey.splitToTuple(2)
-      val (nodeEmbedderKey, edgeEmbedderKey) = embedderKey.splitToTuple(2)
-      val (startXKey, startYKey, endXKey, endYKey, midXKey, midYKey, nodeClassKey, nodeProjectionKey) = nodeEmbedderKey.splitToTuple(8)
       val (subjectKey, objKey, edgeClassKey, edgeProjectionKey) = edgeEmbedderKey.splitToTuple(4)
-      val (nodeHeadKey, edgeHeadKey) = scorerKey.splitToTuple(2)
-      val (classHeadKey, startXHeadKey, startYHeadKey, endXHeadKey, endYHeadKey, midXHeadKey, midYHeadKey) = nodeHeadKey.splitToTuple(7)
       val (edgeClassHeadKey, subjectHeadKey, objHeadKey) = edgeHeadKey.splitToTuple(3)
-      val (nodeTokenKey, edgeTokenKey) = tokenKey.splitToTuple(2)
-      val (nodePositionKey, edgePositionKey) = positionKey.splitToTuple(2)
 
       Params(
-        encoder = DocumentEncoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, Axis[DocumentEncoder.EmbeddingMixed] -> embeddingMixedExtent.size, encoderKey),
-        nodes = NodeParams(
-          decoder = NodeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, nodeDecoderKey),
-          embedder = NodeEmbedder.Params(
-            nodeClass = VocabularyEmbedder.Params.init(nodeClassExtent, partExtent, nodeClassKey),
-            startX = VocabularyEmbedder.Params.init(pixelExtent, partExtent, startXKey),
-            startY = VocabularyEmbedder.Params.init(pixelExtent, partExtent, startYKey),
-            endX = VocabularyEmbedder.Params.init(pixelExtent, partExtent, endXKey),
-            endY = VocabularyEmbedder.Params.init(pixelExtent, partExtent, endYKey),
-            midX = VocabularyEmbedder.Params.init(pixelExtent, partExtent, midXKey),
-            midY = VocabularyEmbedder.Params.init(pixelExtent, partExtent, midYKey),
-            projection = AffineLayer.Params.init(nodePartExtent, embeddingExtent, nodeProjectionKey)
-          ),
-          head = NodeHead.Params(
-            nodeClass = AffineLayer.Params.init(embeddingExtent, nodeClassExtent, classHeadKey),
-            startX = AffineLayer.Params.init(embeddingExtent, pixelExtent, startXHeadKey),
-            startY = AffineLayer.Params.init(embeddingExtent, pixelExtent, startYHeadKey),
-            endX = AffineLayer.Params.init(embeddingExtent, pixelExtent, endXHeadKey),
-            endY = AffineLayer.Params.init(embeddingExtent, pixelExtent, endYHeadKey),
-            midX = AffineLayer.Params.init(embeddingExtent, pixelExtent, midXHeadKey),
-            midY = AffineLayer.Params.init(embeddingExtent, pixelExtent, midYHeadKey)
-          ),
-          queries = Init.xavierUniform(Axis[PoolQuery] -> queries, embeddingExtent, nodeTokenKey),
-          positions = LearnedAbsolutePositionalInjector.Params.lecunNormal(nodeExtent, embeddingExtent, nodePositionKey)
-        ),
+        set = D2S.Params.init(numLayers, numHeads, embedding, nodes, queries, canvas, setKey),
         edges = EdgeParams(
           decoder = EdgeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, edgeDecoderKey),
           embedder = EdgeEmbedder.Params(

@@ -1,18 +1,15 @@
-package d2g.train
+package d2s.train
 
-import d2g.*
-import d2g.model.*
-import d2g.eval.*
-import d2g.config.*
+import d2s.*
 import d2s.model.*
-import d2s.train.*
+import d2s.config.*
 import dataset.Canvas
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
 import dataset.drawingsOf
 import dataset.History
-import dataset.Record
+import dataset.RecordNodes
 import dataset.RecordBatch
 import deepwit.checkpointing.TensorTreeCheckpointer
 import deepwit.optimizer.LossScale
@@ -39,16 +36,16 @@ import dimwit.TreeOf.ops.asFloats
 
 import scala.language.implicitConversions
 
-case class D2GTrainState(
-    params: D2G.Params[Float32],
-    optimizerState: LearningRateSchedulerState[D2G.Params[Float32], AdamState],
+case class D2STrainState(
+    params: D2S.Params[Float32],
+    optimizerState: LearningRateSchedulerState[D2S.Params[Float32], AdamState],
     lossScale: LossScale,
     skippedSteps: Tensor0[Int32],
     linearization: Key,
     loss: Tensor0[Float32]
 )
 
-/** Trains a transcription model on the corpus its [[D2GSetup]] names.
+/** Trains a set transcription model on the corpus its [[D2SSetup]] names.
   *
   * Every step draws a fresh linearization of every drawing's record, so the same drawing is seen
   * with its nodes in a different order each time it comes round — which is the point: an order
@@ -64,7 +61,7 @@ case class D2GTrainState(
   * the gradients are summed before the parameters move. A run on more GPUs therefore holds less per
   * device and takes the same steps — how many GPUs a run gets does not change what it learns.
   */
-def trainTranscriber(setup: D2GSetup): Unit =
+def trainSetTranscriber(setup: D2SSetup): Unit =
   println(s"training $setup")
 
   dimwit.initialize()
@@ -81,8 +78,8 @@ def trainTranscriber(setup: D2GSetup): Unit =
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numTotalSteps steps")
 
   val nodes = Axis[Node] -> setup.nodeSlots
-  val edges = Axis[Edge] -> setup.edgeSlots
-  val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
+  val relationships = Axis[Relationship] -> setup.corpus.maxEdges
+  val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train)
   val batches = data.batches(Axis[Batch] -> batchSize)
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
@@ -93,12 +90,11 @@ def trainTranscriber(setup: D2GSetup): Unit =
       .followBy(CosineDecay(setup.learningRate, setup.finalLearningRate, cooldownSteps))
   val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), setup.weightDecay), schedule)
 
-  val initialParams = D2G.Params.init(
+  val initialParams = D2S.Params.init(
     numLayers = setup.numLayers,
     numHeads = setup.numHeads,
     embedding = setup.embedding,
     nodes = setup.nodeSlots,
-    edges = setup.edgeSlots,
     queries = setup.queryPool,
     canvas = Canvas,
     key = initKey
@@ -109,37 +105,36 @@ def trainTranscriber(setup: D2GSetup): Unit =
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
   val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas)
-  val edgeLoss = RemainingEdgeLoss(VType[Float32])
 
   /** The mean loss over the drawings of a batch, whatever axis `S` they lie along. */
   def cost[S: Label](
       images: Tensor4[S, Width, Height, Channel, Float32],
-      records: RecordBatch[S, Node, Edge],
+      records: RecordBatch[S, Node, Relationship],
       asked: Key
-  )(params: D2G.Params[Float32]): Tensor0[Float32] =
-    val model = D2G(params.asFloats(VType[Float16]))
-    zipvmap(Axis[S])(images.asFloat(VType[Float16]), records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY, records.edgeClass, records.subject, records.obj):
-      case (image, nodeClass, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj) =>
-        val target = Record(nodeClass, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj)
+  )(params: D2S.Params[Float32]): Tensor0[Float32] =
+    val model = D2S(params.asFloats(VType[Float16]))
+    zipvmap(Axis[S])(images.asFloat(VType[Float16]), records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY):
+      case (image, nodeClass, startX, startY, endX, endY, midX, midY) =>
+        val target = RecordNodes(nodeClass, startX, startY, endX, endY, midX, midY)
         val scored = model.logits(image, target, asked).asFloats(VType[Float32])
-        nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target.edges)
+        nodeLoss(scored, target)
     .mean
 
   def gradientStep[S: Label](
       pixels: Tensor3[S, Height, Width, UInt8],
-      records: RecordBatch[S, Node, Edge],
-      state: D2GTrainState
+      records: RecordBatch[S, Node, Relationship],
+      state: D2STrainState
   ) =
     val images = drawingsOf(pixels, Axis[Channel])
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
     val lossScale = state.lossScale
     val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
-      (params: D2G.Params[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges), forQueries)(params))
+      (params: D2S.Params[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, relationships), forQueries)(params))
     )(state.params)
     val gradients = lossScale.unscaled(scaledGradients)
     val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)
     val finite = allFinite(gradients)
-    D2GTrainState(
+    D2STrainState(
       select(finite, params, state.params),
       select(finite, optimizerState, state.optimizerState),
       lossScale.next(finite),
@@ -153,8 +148,8 @@ def trainTranscriber(setup: D2GSetup): Unit =
     * sees one axis.
     */
   def shard(
-      batch: dataset.Batch[Batch, Width, Height, RecordBatch[Batch, Node, Edge]]
-  ): (Tensor3[Batch |@| X, Height, Width, UInt8], RecordBatch[Batch |@| X, Node, Edge]) =
+      batch: dataset.Batch[Batch, Width, Height, RecordBatch[Batch, Node, Relationship]]
+  ): (Tensor3[Batch |@| X, Height, Width, UInt8], RecordBatch[Batch |@| X, Node, Relationship]) =
     val over = Axis[Batch] -> MeshAxis[X]
     val records = batch.target
     (
@@ -183,15 +178,15 @@ def trainTranscriber(setup: D2GSetup): Unit =
     case Some(started) => TensorTreeCheckpointer(started.rootPath, overwrite = true)
     case None          => TensorTreeCheckpointer.newIn(setup.checkpointRoot)
   val taken = checkpointer.iterations.maxOption.getOrElse(0)
-  val initialState = if taken == 0 then D2GTrainState(initialParams, optimizer.init(initialParams), LossScale.initial(), 0, dataKey, 0f)
-    else checkpointer.load[D2GTrainState](taken).getOrElse(sys.error(s"checkpoint $taken of ${checkpointer.rootPath} will not load"))
+  val initialState = if taken == 0 then D2STrainState(initialParams, optimizer.init(initialParams), LossScale.initial(), 0, dataKey, 0f)
+    else checkpointer.load[D2STrainState](taken).getOrElse(sys.error(s"checkpoint $taken of ${checkpointer.rootPath} will not load"))
   if taken > 0 then println(s"continuing ${checkpointer.rootPath} from step $taken")
   val history = History(checkpointer.rootPath)
   /** Steps skipped all through a run mean the forward pass overflows, which no scale can fix. */
-  val lossScaleMonitor = new Monitor[D2GTrainState]:
-    def report(step: Int, state: D2GTrainState): String =
+  val lossScaleMonitor = new Monitor[D2STrainState]:
+    def report(step: Int, state: D2STrainState): String =
       f"Loss scale: 2^${math.log(state.lossScale.scale.item) / math.log(2)}%.0f, ${state.skippedSteps.item} steps skipped"
-  val monitor = Monitor.ConcatMonitor[D2GTrainState](List(
+  val monitor = Monitor.ConcatMonitor[D2STrainState](List(
     Monitor.StepMonitor(),
     Monitor.LossMonitor(_.loss.item),
     Monitor.LearningRateMonitor(schedule),

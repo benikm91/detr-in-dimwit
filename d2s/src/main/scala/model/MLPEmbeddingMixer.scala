@@ -1,4 +1,4 @@
-package d2g.model
+package d2s.model
 
 import dimwit.*
 import dimwit.Label as Λ
