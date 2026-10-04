@@ -91,7 +91,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
     LinearWarmup(setup.learningRate, warmupSteps)
       .followBy(ConstantLearningRate(setup.learningRate, numTotalSteps - warmupSteps - cooldownSteps))
       .followBy(CosineDecay(setup.learningRate, setup.finalLearningRate, cooldownSteps))
-  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr), setup.weightDecay), schedule)
+  val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr, beta2 = setup.adamBeta2), setup.weightDecay), schedule)
 
   val initialParams = D2G.Params.init(
     numLayers = setup.numLayers,
