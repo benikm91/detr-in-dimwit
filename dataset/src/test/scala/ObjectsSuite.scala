@@ -78,6 +78,23 @@ class ObjectsSuite extends FunSuite:
     assertEquals(lines.get(1), "test,l-shape,xs,10000,,8,123,45,90.00,75.00,66.67,,,33.33")
     assertEquals(lines.get(2), "test,l-shape,xs,20000,0.5,8,123,45,90.00,75.00,0.00,,,0.00")
 
+  test("a transcript keeps the predicted nodes in their order and says which target each stands for"):
+    val pixel = 1f / Canvas
+    val target = RecordGraph(
+      Seq(
+        RecordNode(NodeClass.Line, Seq(Point(10 * pixel, 20 * pixel), Point(50 * pixel, 20 * pixel))),
+        RecordNode(NodeClass.Circle, Seq(Point(100 * pixel, 100 * pixel), Point(140 * pixel, 100 * pixel)))
+      ),
+      Seq.empty
+    )
+    val threePixelsOff = RecordNode(NodeClass.Line, Seq(Point(13 * pixel, 20 * pixel), Point(50 * pixel, 20 * pixel)))
+    val written = RecordGraph(Seq(target.nodes(1), threePixelsOff, RecordNode(NodeClass.Circle, Seq(Point(0f, 0f), Point(0.1f, 0f)))), Seq.empty)
+    val path = Transcripts.write("test", Corpus.LShape, "xs", 1000, Seq((target, written)))
+    val line = java.nio.file.Files.readAllLines(path).get(0)
+    java.nio.file.Files.delete(path)
+    assert(line.contains(""""points": [[10.00, 20.00], [50.00, 20.00]]"""), line)
+    assert(line.contains(""""matched": {"0": [1, null, null], "2": [1, null, null], "4": [1, 0, null], "8": [1, 0, null]}"""), line)
+
   test("a symmetric relationship is drawn both ways round, a directed one is not"):
     val relations = Objects.of(record.record(nodes, edges)).relations.toArray
     assertEquals(relations(0)(1)(RelationClass.Connected.id), 1f)

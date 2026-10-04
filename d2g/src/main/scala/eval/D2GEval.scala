@@ -24,6 +24,7 @@ import dataset.RecordGraph
 import dataset.RecordScoring
 import dataset.Runs
 import dataset.Tolerances
+import dataset.Transcripts
 import dataset.at
 import dataset.report
 import deepwit.checkpointing.TensorTreeCheckpointer
@@ -35,7 +36,8 @@ import viz.PlotTargets.websocket
 import scala.language.implicitConversions
 
 /** Scores every checkpoint of the newest run of a setup on the whole validation split, the last
-  * checkpoint first, and writes the metrics as one CSV.
+  * checkpoint first, and writes the metrics as one CSV, and what the last checkpoint wrote down
+  * for every drawing as [[Transcripts]].
   */
 def scoreTranscriber(setup: D2GSetup, size: String): Unit =
   dimwit.initialize()
@@ -63,7 +65,9 @@ def scoreTranscriber(setup: D2GSetup, size: String): Unit =
     val drawings = transcribed(checkpoints.load[D2GTrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
     val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => RecordScoring.score(target, written, tolerance / Canvas))))
     csv.append(measured)
-    if step == checkpoints.iterations.last then measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
+    if step == checkpoints.iterations.last then
+      measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
+      println(s"transcripts written to ${Transcripts.write("d2g", setup.corpus, size, step, drawings)}")
 
 /** Plots what a trained model transcribes.
   *

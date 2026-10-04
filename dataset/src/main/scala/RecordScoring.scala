@@ -44,10 +44,11 @@ object RecordScoring:
       isExact = nodesExact && found.edges.length == present.values.sum && present == wanted
     )
 
-  /** Which found node stands for which target node. Greedy, which is exact here: the nodes of a
-    * drawing are further apart than any tolerance scored, so a target has at most one in reach.
+  /** Which found node stands for which target node, by slot. Greedy, which is exact here: the
+    * nodes of a drawing are further apart than any tolerance scored, so a target has at most one
+    * in reach.
     */
-  private def matching(target: Seq[RecordNode], found: Seq[RecordNode], tolerance: Float): Map[Int, Int] =
+  def matching(target: Seq[RecordNode], found: Seq[RecordNode], tolerance: Float): Map[Int, Int] =
     target.zipWithIndex.foldLeft(Map.empty[Int, Int]):
       case (matched, (node, index)) =>
         found.indices

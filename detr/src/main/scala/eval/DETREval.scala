@@ -15,6 +15,7 @@ import dataset.Runs
 import dataset.Metrics
 import dataset.RecordScoring
 import dataset.Tolerances
+import dataset.Transcripts
 import dataset.at
 import dataset.report
 import deepwit.checkpointing.TensorTreeCheckpointer
@@ -53,7 +54,8 @@ def plotDetector(setup: DETRSetup): Unit =
   display(grid(rows))
 
 /** Scores every checkpoint of the newest run on the whole validation split, the last checkpoint
-  * first, and writes what it finds as [[Metrics]].
+  * first, and writes what it finds as [[Metrics]], and what the last checkpoint found in every
+  * drawing as [[Transcripts]].
   *
   * The nodes the queries answer with are compared with the record the drawing was rendered from,
   * which is how [[scoreTranscriber]] scores too — a detector predicts no relationships, so the
@@ -82,4 +84,6 @@ def scoreDetector(setup: DETRSetup, size: String): Unit =
     val drawings = detected(checkpoints.load[TrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
     val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, found) => RecordScoring.score(target, found, tolerance / Canvas))))
     csv.append(measured)
-    if step == checkpoints.iterations.last then measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
+    if step == checkpoints.iterations.last then
+      measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
+      println(s"transcripts written to ${Transcripts.write("detr", setup.corpus, size, step, drawings)}")
