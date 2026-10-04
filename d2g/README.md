@@ -12,6 +12,9 @@ sbt "d2g/runMain d2gEval"           # scores the newest checkpoint on the whole 
 sbt "d2g/runMain d2gEval out/d2g/…" # … or scores a given run
 ```
 
+The nodes are transcribed by a [d2s](../d2s) model, which this one depends on and adds the
+relationships to.
+
 ## The idea
 
 [detr](../detr) treats the drawing as an object detection problem and recovers the structure

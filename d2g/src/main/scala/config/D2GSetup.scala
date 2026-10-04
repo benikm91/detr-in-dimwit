@@ -4,6 +4,7 @@ import d2g.*
 import d2g.model.*
 import d2g.train.*
 import d2g.eval.*
+import d2s.config.D2SModelConfiguration
 import dataset.Corpus
 import dataset.Runs
 
@@ -38,20 +39,10 @@ case class D2GSetup(
 
 object D2GSetup:
 
-  def apply(corpus: Corpus, size: D2GModelConfiguration): D2GSetup = D2GSetup(
+  def apply(corpus: Corpus, size: D2SModelConfiguration): D2GSetup = D2GSetup(
     corpus = corpus,
     checkpointRoot = s"${Runs.checkpointDir}/d2g/${corpus.name}-${size.name}",
     numLayers = size.numLayers,
     numHeads = size.numHeads,
     embedding = size.embedding
   )
-
-// Model sizes for experiments
-enum D2GModelConfiguration(val name: String, val embedding: Int, val numLayers: Int, val numHeads: Int):
-  case XS extends D2GModelConfiguration("xs", 128, 3, 4)
-  case S extends D2GModelConfiguration("s", 256, 3, 8)
-  case SDeep extends D2GModelConfiguration("s-deep", 256, 6, 8)
-  case MDeep extends D2GModelConfiguration("m-deep", 512, 6, 8)
-
-object D2GModelConfiguration:
-  def named(name: String): D2GModelConfiguration = values.find(_.name == name).getOrElse(sys.error(s"no size named '$name': ${values.map(_.name).mkString(", ")}"))

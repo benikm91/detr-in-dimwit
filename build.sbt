@@ -20,7 +20,7 @@ lazy val munit = "org.scalameta" %% "munit" % "1.0.0" % Test
 
 lazy val root = project
   .in(file("."))
-  .aggregate(dataset, documentEncoder, detr, d2g)
+  .aggregate(dataset, documentEncoder, detr, d2s, d2g)
   .settings(
     name := "detr-root",
     publish / skip := true
@@ -67,8 +67,14 @@ lazy val detr = project
   .settings(name := "detr")
   .settings(modelSettings)
 
+lazy val d2s = project
+  .in(file("d2s"))
+  .dependsOn(dataset, documentEncoder)
+  .settings(name := "d2s")
+  .settings(modelSettings)
+
 lazy val d2g = project
   .in(file("d2g"))
-  .dependsOn(dataset, documentEncoder)
+  .dependsOn(d2s) // D2G is a D2S with relationships on top, so it depends on d2s.
   .settings(name := "d2g")
   .settings(modelSettings)

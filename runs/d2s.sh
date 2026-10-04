@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --export=ALL,SARUS_HOME=TRUE
-#SBATCH --job-name=d2g
+#SBATCH --job-name=d2s
 #SBATCH --partition=gpu
 #SBATCH --account=cai_cv
 #SBATCH --gres=gpu:4
@@ -12,18 +12,18 @@
 #SBATCH --requeue
 #SBATCH --open-mode=append
 #
-# Trains the transcriber on a corpus, scores every checkpoint, and leaves the metrics as one CSV.
+# Trains the set transcriber on a corpus, scores every checkpoint, and leaves the metrics as one CSV.
 # The batch is split over the GPUs the job gets, so `--gres=gpu:N` sets how much of it each GPU
-# holds, not how big it is. `runs/queue_d2g.sh` asks for as many as the model size needs.
+# holds, not how big it is. `runs/queue_d2s.sh` asks for as many as the model size needs.
 #
 #   CORPUS=l-shape SIZE=s \
 #   CACHE_DIR=/cluster/scratch/$USER/corpora \
 #   OUTPUT_DIR=/cluster/scratch/$USER/metrics \
-#     sbatch runs/d2g.sh train
+#     sbatch runs/d2s.sh train
 #
-# `runs/queue_d2g.sh` is the usual way in; `sbatch` hands the environment on to the job.
+# `runs/queue_d2s.sh` is the usual way in; `sbatch` hands the environment on to the job.
 # CACHE_DIR is where the corpora land, so that the next job does not download them again.
-# OUTPUT_DIR is where `d2g-<corpus>-<size>.csv` ends up: what is left of the job once the
+# OUTPUT_DIR is where `d2s-<corpus>-<size>.csv` ends up: what is left of the job once the
 # instance is wiped. CHECKPOINT_DIR is where the checkpoints go, under OUTPUT_DIR unless it is set
 # otherwise: the scoring job reads them back, and they are yours to delete once it has.
 
@@ -46,10 +46,10 @@ export SIZE="${SIZE:-s}"
 export BRANCH="${BRANCH:-main}"
 
 mkdir -p "$CACHE_DIR" "$OUTPUT_DIR" "$CHECKPOINT_DIR"
-echo "running d2g $STAGE on $CORPUS at size $SIZE from branch $BRANCH: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
+echo "running d2s $STAGE on $CORPUS at size $SIZE from branch $BRANCH: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
 
 # Which run this job is, for looking its id up later by what it ran and where it wrote.
-printf '%s\td2g\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CORPUS" "$SIZE" "$STAGE" "$OUTPUT_DIR" "${SLURM_JOB_ID:-none}" \
+printf '%s\td2s\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CORPUS" "$SIZE" "$STAGE" "$OUTPUT_DIR" "${SLURM_JOB_ID:-none}" \
   >>"${SLURM_SUBMIT_DIR:-$PWD}/jobs.txt"
 
 # A run longer than one job puts itself back in the queue shortly before Slurm would kill it.
@@ -132,11 +132,11 @@ JSON
     fi
 
     case "$stage" in
-      train) sbt "d2g/runMain d2gTrain $corpus $size" ;;
-      eval) sbt "d2g/runMain d2gEval $corpus $size" ;;
-      draw) sbt "d2g/runMain d2gDraw $corpus $size" ;;
+      train) sbt "d2s/runMain d2sTrain $corpus $size" ;;
+      eval) sbt "d2s/runMain d2sEval $corpus $size" ;;
+      draw) sbt "d2s/runMain d2sDraw $corpus $size" ;;
     esac
-  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" &
+  ' d2s "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" &
 
 wait $! || trained=$?
 
@@ -150,9 +150,9 @@ if [[ $STAGE == train ]]; then
   echo "job finished, checkpoints in $CHECKPOINT_DIR"
   # Scoring is queued from here, so that it reads the checkpoints this run just wrote and runs only
   # if there are any. One GPU is enough: it scores one checkpoint at a time.
-  evalId="$(sbatch --parsable --gres=gpu:1 --time=24:00:00 --job-name="d2g-$CORPUS-$SIZE-eval" runs/d2g.sh eval)"
+  evalId="$(sbatch --parsable --gres=gpu:1 --time=24:00:00 --job-name="d2s-$CORPUS-$SIZE-eval" runs/d2s.sh eval)"
   echo "queued scoring as $evalId"
 else
   echo "job finished, metrics in $OUTPUT_DIR:"
-  ls -la "$OUTPUT_DIR"/d2g-"$CORPUS"-"$SIZE".csv
+  ls -la "$OUTPUT_DIR"/d2s-"$CORPUS"-"$SIZE".csv
 fi
