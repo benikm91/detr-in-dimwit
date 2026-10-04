@@ -37,7 +37,7 @@ the two is how a record is permuted, compared or written down.
 ## The two views, and the one function between them
 
 ```
-LShapeDataset.samples ─── Record ──Objects.of──▶ Objects ─── detr, egtr
+LShapeDataset.samples ─── Record ──Objects.of──▶ Objects ─── detr
                             │                       │
                             └───────────────────────┘
                                  RecordGraph.of

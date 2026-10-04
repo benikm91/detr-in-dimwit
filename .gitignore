@@ -20,7 +20,6 @@ ide-*.json
 **/target/*
 detr/out
 .claude
-egtr/out
 d2g/out
 jobs.txt
 *.csv

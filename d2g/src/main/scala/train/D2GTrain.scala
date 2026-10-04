@@ -8,6 +8,7 @@ import dataset.Canvas
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
+import dataset.drawingsOf
 import dataset.History
 import dataset.Record
 import dataset.RecordBatch
@@ -123,10 +124,11 @@ def trainTranscriber(setup: D2GSetup): Unit =
     .mean
 
   def gradientStep[S: Label](
-      images: Tensor4[S, Width, Height, Channel, Float32],
+      pixels: Tensor3[S, Height, Width, UInt8],
       records: RecordBatch[S, Node, Edge],
       state: D2GTrainState
   ) =
+    val images = drawingsOf(pixels, Axis[Channel])
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
     val lossScale = state.lossScale
     val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
@@ -145,14 +147,16 @@ def trainTranscriber(setup: D2GSetup): Unit =
     )
   val jitGradientStep = jitDonatingUnsafe(gradientStep[Batch |@| X])
 
-  /** The batch with every device holding its share of the drawings; the step sees one axis. */
+  /** The batch sent from the host with every device holding its share of the drawings; the step
+    * sees one axis.
+    */
   def shard(
-      batch: dataset.Batch[Batch, Width, Height, Channel, RecordBatch[Batch, Node, Edge]]
-  ): (Tensor4[Batch |@| X, Width, Height, Channel, Float32], RecordBatch[Batch |@| X, Node, Edge]) =
+      batch: dataset.Batch[Batch, Width, Height, RecordBatch[Batch, Node, Edge]]
+  ): (Tensor3[Batch |@| X, Height, Width, UInt8], RecordBatch[Batch |@| X, Node, Edge]) =
     val over = Axis[Batch] -> MeshAxis[X]
     val records = batch.target
     (
-      batch.images.shard(mesh, over),
+      batch.pixels.shard(mesh, over),
       RecordBatch(
         nodeClass = records.nodeClass.shard(mesh, over),
         startX = records.startX.shard(mesh, over),

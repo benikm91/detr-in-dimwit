@@ -10,7 +10,6 @@ import dataset.RecordNodes
 import deepwit.base.AffineLayer
 import documentEncoder.DocumentEncoder
 import deepwit.normalization.LayerNorm
-import deepwit.attention.MultiHeadAttention
 import deepwit.init.Init
 import dimwit.*
 import dimwit.tensor.Tensor4
@@ -25,8 +24,6 @@ import dimwit.tensor.Tensor4
   */
 class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height, Channel, V] => RecordNodes[Query]):
 
-  import DETR.Decoded
-
   private val encodeDocument = DocumentEncoder(params.encoder)
   private val decoder = DETRDecoder(Axis[Patch], Axis[Query], params.decoder)
   private val nodeHead = NodeHead(params.nodeHead)
@@ -38,30 +35,9 @@ class DETR[V: IsFloating](params: DETR.Params[V]) extends (Tensor3[Width, Height
   def logits(image: Tensor3[Width, Height, Channel, V]): NodeHead.NodeLogits[V] =
     nodeHead(decoder(encodeDocument(image), params.objectQueries))
 
-  /** What [[logits]] reads, together with the decoder by-products a relation extractor reads.
-    *
-    * Kept apart from [[logits]] because the by-products cost a query and a key projection per
-    * decoder block, which a detection alone has no use for.
-    */
-  def decode(image: Tensor3[Width, Height, Channel, V]): Decoded[V] =
-    val (selfAttention, objects) = decoder.applyWithSelfAttentionIntermediates(encodeDocument(image), params.objectQueries)
-    Decoded(objects, selfAttention)
-
 object DETR:
 
   trait Embedding derives Label
-
-  /** What the decoder made of the object queries.
-    *
-    * @param objects       One embedding per query, what the detection heads read.
-    * @param selfAttention Per decoder block, the queries, keys and values its self-attention
-    *                      read the object queries against each other by — see
-    *                      [[DETRDecoder.applyWithSelfAttentionIntermediates]].
-    */
-  case class Decoded[V](
-      objects: Tensor2[Query, Embedding, V],
-      selfAttention: List[MultiHeadAttention.Intermediates[Query, Query, V]]
-  )
 
   case class Params[V](
       encoder: DocumentEncoder.Params[Embedding, V],

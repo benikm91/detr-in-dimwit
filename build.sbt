@@ -20,7 +20,7 @@ lazy val munit = "org.scalameta" %% "munit" % "1.0.0" % Test
 
 lazy val root = project
   .in(file("."))
-  .aggregate(dataset, documentEncoder, detr, egtr, d2g)
+  .aggregate(dataset, documentEncoder, detr, d2g)
   .settings(
     name := "detr-root",
     publish / skip := true
@@ -65,12 +65,6 @@ lazy val detr = project
   .in(file("detr"))
   .dependsOn(dataset, documentEncoder)
   .settings(name := "detr")
-  .settings(modelSettings)
-
-lazy val egtr = project
-  .in(file("egtr"))
-  .dependsOn(detr) // EGTR builds its scene graph on the detector, so it depends on detr.
-  .settings(name := "egtr")
   .settings(modelSettings)
 
 lazy val d2g = project

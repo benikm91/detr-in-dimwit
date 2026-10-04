@@ -11,6 +11,7 @@ import dataset.RecordNodes
 import dataset.DrawingDataset
 import dataset.History
 import dataset.DrawingDataset.Split
+import dataset.drawingsOf
 import deepwit.checkpointing.TensorTreeCheckpointer
 import deepwit.training.Monitor
 import deepwit.training.tapEvery
@@ -108,24 +109,26 @@ def trainDetector(setup: DETRSetup): Unit =
     .mean
 
   def gradientStep(
-      imgs: Tensor4[Batch |@| X, Width, Height, Channel, Float32],
+      pixels: Tensor3[Batch |@| X, Height, Width, UInt8],
       records: RecordBatch[Batch |@| X, Node, Relationship],
       state: TrainState
   ) =
-    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(imgs, records))(state.params)
+    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(drawingsOf(pixels, Axis[Channel]), records))(state.params)
     val clipped = gradients.clipGlobalNorm(setup.maxGradientNorm)
     val (params, optimizerState) = optimizer.update(clipped, state.params, state.optimizerState)
     TrainState(params, optimizerState, state.loss * 0.99f + lastCost * 0.01f)
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
-  /** The batch with every device holding its share of the drawings; the step sees one axis. */
+  /** The batch sent from the host with every device holding its share of the drawings; the step
+    * sees one axis.
+    */
   def shard(
-      batch: dataset.Batch[Batch, Width, Height, Channel, RecordBatch[Batch, Node, Relationship]]
-  ): (Tensor4[Batch |@| X, Width, Height, Channel, Float32], RecordBatch[Batch |@| X, Node, Relationship]) =
+      batch: dataset.Batch[Batch, Width, Height, RecordBatch[Batch, Node, Relationship]]
+  ): (Tensor3[Batch |@| X, Height, Width, UInt8], RecordBatch[Batch |@| X, Node, Relationship]) =
     val over = Axis[Batch] -> MeshAxis[X]
     val records = batch.target
     (
-      batch.images.shard(mesh, over),
+      batch.pixels.shard(mesh, over),
       RecordBatch(
         nodeClass = records.nodeClass.shard(mesh, over),
         startX = records.startX.shard(mesh, over),

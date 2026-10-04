@@ -15,9 +15,19 @@ val Canvas = 256
 final case class Sample[W, H, C, Target](image: Tensor3[W, H, C, Float32], target: Target):
   def map[T](f: Target => T): Sample[W, H, C, T] = Sample(image, f(target))
 
-/** A batch of drawings and what is to be predicted in them. */
-final case class Batch[S, W, H, C, Target](images: Tensor4[S, W, H, C, Float32], target: Target):
-  def map[T](f: Target => T): Batch[S, W, H, C, T] = Batch(images, f(target))
+/** A batch of drawings and what is to be predicted in them, both still on the host as the corpus
+  * stores them, so that sharding the batch is its one transfer to the devices. [[drawingsOf]]
+  * turns the pixels into what a model reads.
+  */
+final case class Batch[S, W, H, Target](pixels: Tensor3[S, H, W, UInt8], target: Target):
+  def map[T](f: Target => T): Batch[S, W, H, T] = Batch(pixels, f(target))
+
+/** Drawings as a corpus stores them — rows first, one byte a pixel — as a model reads them: x
+  * first, with a channel axis, ink on a white canvas in `[0, 1]`. Cheap enough to run inside a
+  * jitted step, which is where a training batch is turned.
+  */
+def drawingsOf[S: Label, W: Label, H: Label, C: Label](pixels: Tensor3[S, H, W, UInt8], channel: Axis[C]): Tensor4[S, W, H, C, Float32] =
+  pixels.swap(Axis[H], Axis[W]).appendAxis(channel).asFloat(VType[Float32]) /! 255f
 
 /** Axis of the drawings of a split. */
 private trait Drawings derives Label
@@ -108,6 +118,7 @@ object DrawingDataset:
     new DrawingDataset(
       corpus,
       module.drawings(corpus.repoId, split.fileName),
+      parsed,
       RecordBatch(
         nodeClass = liftPyTensor[(Drawings, Node), Int32](read(0)),
         startX = liftPyTensor[(Drawings, Node), Float32](read(1)),
@@ -128,6 +139,8 @@ object DrawingDataset:
 final class DrawingDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Label] private[dataset] (
     val corpus: Corpus,
     private val images: py.Dynamic,
+    /** The records as parsed, on the host, which is where a training batch is cut from. */
+    private val parsed: py.Dynamic,
     private val records: RecordBatch[Drawings, Node, Edge]
 ):
 
@@ -138,31 +151,30 @@ final class DrawingDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Labe
     (0 until numSamples).iterator.map: at =>
       Sample(drawn(Axis[Drawings] -> 1, at).slice(Axis[Drawings].at(0)), recordAt(at))
 
-  /** Batches of drawings, for as long as they are asked for. The drawings were generated
-    * independently of one another, so reading them in order is already a shuffle.
+  /** Batches of drawings, for as long as they are asked for, on the host. The drawings were
+    * generated independently of one another, so reading them in order is already a shuffle.
     */
-  def batches[S: Label](batch: AxisExtent[S]): Iterator[Batch[S, W, H, C, RecordBatch[S, Node, Edge]]] =
+  def batches[S: Label](batch: AxisExtent[S]): Iterator[Batch[S, W, H, RecordBatch[S, Node, Edge]]] =
     require(batch.size <= numSamples, s"a batch of ${batch.size} exceeds the $numSamples drawings of the split")
     val starts = 0 to numSamples - batch.size by batch.size
-    Iterator.continually(starts).flatten.map(from => Batch(drawn(batch, from), recordsIn(batch, from)))
+    Iterator.continually(starts).flatten.map(from => Batch(stored(batch, from), recordsIn(batch, from)))
 
   /** The same drawings as something to detect. */
   def objects: Iterator[Sample[W, H, C, Objects[Node]]] = samples.map(_.map(Objects.of))
 
-  def objectBatches[S: Label](batch: AxisExtent[S]): Iterator[Batch[S, W, H, C, ObjectBatch[S, Node]]] =
+  def objectBatches[S: Label](batch: AxisExtent[S]): Iterator[Batch[S, W, H, ObjectBatch[S, Node]]] =
     batches(batch).map(_.map(Objects.of))
 
   override def toString: String = s"DrawingDataset(${corpus.repoId}, drawings=$numSamples, nodes=${corpus.maxNodes})"
 
-  /** The drawings from `from` on, as ink on a white canvas in `[0, 1]`. They are stored row major
-    * — row index = y — so the axes are swapped to put x first, as a record's coordinates are.
-    */
+  /** The drawings from `from` on, as stored — row major, row index = y — and still on the host. */
+  private def stored[S: Label](rows: AxisExtent[S], from: Int): Tensor3[S, H, W, UInt8] =
+    liftPyTensor[(S, H, W), UInt8](images.applyDynamic("__getitem__")(py.Dynamic.global.slice(from, from + rows.size)))
+
+  /** The drawings from `from` on, on the device, as a model reads them. */
   private def drawn[S: Label](rows: AxisExtent[S], from: Int): Tensor4[S, W, H, C, Float32] =
     val pixels = images.applyDynamic("__getitem__")(py.Dynamic.global.slice(from, from + rows.size))
-    liftPyTensor[(S, H, W), UInt8](Jax.jnp.asarray(pixels))
-      .swap(Axis[H], Axis[W])
-      .appendAxis(Axis[C])
-      .asFloat(VType[Float32]) /! 255f
+    drawingsOf(liftPyTensor[(S, H, W), UInt8](Jax.jnp.asarray(pixels)), Axis[C])
 
   private def recordAt(at: Int): Record[Node, Edge] =
     val drawing = Axis[Drawings].at(at)
@@ -179,17 +191,19 @@ final class DrawingDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Labe
       records.obj.slice(drawing)
     )
 
+  /** The records of the drawings from `from` on, cut from the parsed ones and still on the host. */
   private def recordsIn[S: Label](rows: AxisExtent[S], from: Int): RecordBatch[S, Node, Edge] =
-    val taken = Axis[Drawings].at(from until from + rows.size)
+    val taken = py.Dynamic.global.slice(from, from + rows.size)
+    def cut(at: Int) = parsed.applyDynamic("__getitem__")(at).applyDynamic("__getitem__")(taken)
     RecordBatch(
-      records.nodeClass.slice(taken).relabel(Axis[Drawings] -> rows.axis),
-      records.startX.slice(taken).relabel(Axis[Drawings] -> rows.axis),
-      records.startY.slice(taken).relabel(Axis[Drawings] -> rows.axis),
-      records.endX.slice(taken).relabel(Axis[Drawings] -> rows.axis),
-      records.endY.slice(taken).relabel(Axis[Drawings] -> rows.axis),
-      records.midX.slice(taken).relabel(Axis[Drawings] -> rows.axis),
-      records.midY.slice(taken).relabel(Axis[Drawings] -> rows.axis),
-      records.edgeClass.slice(taken).relabel(Axis[Drawings] -> rows.axis),
-      records.subject.slice(taken).relabel(Axis[Drawings] -> rows.axis),
-      records.obj.slice(taken).relabel(Axis[Drawings] -> rows.axis)
+      nodeClass = liftPyTensor[(S, Node), Int32](cut(0)),
+      startX = liftPyTensor[(S, Node), Float32](cut(1)),
+      startY = liftPyTensor[(S, Node), Float32](cut(2)),
+      endX = liftPyTensor[(S, Node), Float32](cut(3)),
+      endY = liftPyTensor[(S, Node), Float32](cut(4)),
+      midX = liftPyTensor[(S, Node), Float32](cut(5)),
+      midY = liftPyTensor[(S, Node), Float32](cut(6)),
+      edgeClass = liftPyTensor[(S, Edge), Int32](cut(7)),
+      subject = liftPyTensor[(S, Edge), Int32](cut(8)),
+      obj = liftPyTensor[(S, Edge), Int32](cut(9))
     )

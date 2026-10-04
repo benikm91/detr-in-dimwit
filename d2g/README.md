@@ -14,8 +14,8 @@ sbt "d2g/runMain d2gEval out/d2g/…" # … or scores a given run
 
 ## The idea
 
-[detr](../detr) and [egtr](../egtr) treat the drawing as an object detection problem and recover
-the structure afterwards. This model does not detect anything: it **transcribes the drawing into
+[detr](../detr) treats the drawing as an object detection problem and recovers the structure
+afterwards. This model does not detect anything: it **transcribes the drawing into
 its record** — the graph the drawing was rendered from — one node at a time. A part line is
 predicted as a line, not as a box around a line, and a corner is predicted as a node of the record
 that names the two lines meeting in it.
@@ -164,7 +164,7 @@ they cover and the pass-through term by the number of nodes, so a drawing with s
 counts as much as one with none.
 
 **Training setup.** AdamW at 3e-4, weight decay 1e-4, gradients clipped at 0.1, batches of 32 —
-the setup [egtr](../egtr) uses, not the paper's 1e-4 AdamW over 40 epochs, since this model is far
+not the paper's 1e-4 AdamW over 40 epochs, since this model is far
 smaller than the paper's 65 M parameters.
 
 ## Files

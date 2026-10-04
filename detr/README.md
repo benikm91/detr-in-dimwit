@@ -80,6 +80,3 @@ prediction loss over an optimal matching.
 | [HungarianLoss.scala](src/main/scala/train/HungarianLoss.scala) | matching and set prediction loss |
 | [DETRTrain.scala](src/main/scala/train/DETRTrain.scala) | training loop and checkpointing |
 | [DETREval.scala](src/main/scala/eval/DETREval.scala) | plots and scores a checkpoint |
-
-The [egtr](../egtr) module was built on the box detector this one used to be, and does not
-build against it.
