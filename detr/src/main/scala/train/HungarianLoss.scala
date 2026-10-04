@@ -17,8 +17,12 @@ import scala.language.implicitConversions
   * is trained towards [[NodeClass.NoNode]]. What a query costs against a node is what the
   * transcriber's node head pays for it: the cross entropy of the node's class, and of the pixel of
   * every point that class places.
+  *
+  * @param noNodeWeight What a query left over counts for in the classification, against 1 for a
+  *                     query that answers a node: most queries are left over, which DETR evens out
+  *                     with 0.1.
   */
-class HungarianLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((NodeLogits[V], RecordNodes[Node]) => Tensor0[V]):
+class HungarianLoss[V: IsFloating](vtype: VType[V], canvas: Int, noNodeWeight: Float) extends ((NodeLogits[V], RecordNodes[Node]) => Tensor0[V]):
 
   override def apply(logits: NodeLogits[V], target: RecordNodes[Node]): Tensor0[V] =
     val queries = logits.nodeClass.shape.extent(Axis[Query])
@@ -32,7 +36,8 @@ class HungarianLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((NodeL
     val answersNothing = 1f -! answers.sum(Axis[Node])
 
     val stops = costOfClass(logits.nodeClass, NodeClass.NoNode.id)
-    val classification = ((classCost * answers).sum + (stops * answersNothing).sum) / queries.size.toFloat
+    val classification =
+      ((classCost * answers).sum + (stops * answersNothing).sum * noNodeWeight) / (answers.sum + answersNothing.sum * noNodeWeight)
     val placed = (placementCost * answers).sum / maximum(holdsNode.sum, 1f)
     classification + placed
 

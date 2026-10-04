@@ -14,7 +14,7 @@ class HungarianLossSuite extends FunSuite:
 
   private val canvas = 8
   private val queries = 4
-  private val loss = HungarianLoss(VType[Float32], canvas)
+  private val loss = HungarianLoss(VType[Float32], canvas, noNodeWeight = 1f)
 
   /** A record of one line, from (2, 4) to (6, 4) in pixels, and one slot holding no node. */
   private val oneLine = RecordNodes(

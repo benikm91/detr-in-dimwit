@@ -106,7 +106,7 @@ def trainDetector(setup: DETRSetup): Unit =
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
-  val loss = HungarianLoss(VType[Float32], Canvas)
+  val loss = HungarianLoss(VType[Float32], Canvas, setup.noNodeWeight)
 
   def cost(
       imgs: Tensor4[Batch |@| X, Width, Height, Channel, Float32],

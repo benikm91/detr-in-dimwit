@@ -45,6 +45,9 @@ case class DETRSetup(
     finalLearningRate: Float = 0f,
     weightDecay: Float = 1e-4f,
 
+    /** What a query left over counts for in the classification, as in DETR. */
+    noNodeWeight: Float = 0.1f,
+
     /** Global L2 norm the gradients are rescaled to, as in the DETR paper. The set loss reassigns
       * which query is responsible for which object from step to step, so a batch that reshuffles
       * the matching produces a far larger gradient than a batch that confirms it; clipping keeps
