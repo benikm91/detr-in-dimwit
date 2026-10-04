@@ -22,7 +22,7 @@ case class D2GSetup(
     checkpointEverySamples: Int = 20_000 * 128,
     numSamples: Int = 500_000 * 128,
     batchSize: Int = 512,
-    learningRate: Float = 3e-4f,
+    learningRate: Float = 6e-4f,
     finalLearningRate: Float = 0f,
     weightDecay: Float = 1e-4f,
     maxGradientNorm: Float = 1f,

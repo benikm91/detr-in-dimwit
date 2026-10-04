@@ -39,7 +39,7 @@ case class DETRSetup(
     checkpointEverySamples: Int = 20_000 * 128,
     numSamples: Int = 500_000 * 128,
     batchSize: Int = 512,
-    learningRate: Float = 3e-4f,
+    learningRate: Float = 6e-4f,
 
     /** Where the cosine bottoms out. Aligned with the other models. */
     finalLearningRate: Float = 0f,
