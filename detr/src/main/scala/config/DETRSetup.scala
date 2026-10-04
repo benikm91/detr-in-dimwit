@@ -33,12 +33,12 @@ case class DETRSetup(
     numHeads: Int = 4,
     embedding: Int = 128,
 
-    /** The same run as the transcriber's, so that the two are compared on it: 500k steps of 128
-      * drawings, the last 100k of them the cooldown.
+    /** The same run as the transcriber's, so that the two are compared on it: 64M drawings in
+      * batches of 512, the last 12.8M of them the cooldown.
       */
     checkpointEverySamples: Int = 20_000 * 128,
     numSamples: Int = 500_000 * 128,
-    batchSize: Int = 128,
+    batchSize: Int = 512,
     learningRate: Float = 3e-4f,
 
     /** Where the cosine bottoms out. Aligned with the other models. */

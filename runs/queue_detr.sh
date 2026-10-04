@@ -20,10 +20,7 @@ if [[ $# -eq 2 ]]; then
   mkdir -p "$OUTPUT_DIR"
 
   # Enough GPUs that a device's share of the batch fits in memory, and enough time for the steps.
-  case $SIZE in
-    s-deep) gpus=4; time=20:00:00 ;;
-    *) gpus=2; time=10:00:00 ;;
-  esac
+  gpus=2; time=10:00:00
   jobId="$(sbatch --parsable --gres=gpu:$gpus --time=$time --job-name="$MODEL-$CORPUS-$SIZE-train" "runs/$MODEL.sh" train)"
   echo "queued $MODEL on $CORPUS at size $SIZE as $jobId: metrics in $OUTPUT_DIR"
   exit 0

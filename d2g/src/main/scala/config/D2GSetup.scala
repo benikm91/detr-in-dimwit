@@ -21,7 +21,7 @@ case class D2GSetup(
     checkpointRoot: String,
     checkpointEverySamples: Int = 20_000 * 128,
     numSamples: Int = 500_000 * 128,
-    batchSize: Int = 128,
+    batchSize: Int = 512,
     learningRate: Float = 3e-4f,
     finalLearningRate: Float = 0f,
     weightDecay: Float = 1e-4f,
