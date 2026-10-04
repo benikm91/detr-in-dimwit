@@ -91,5 +91,5 @@ object DETRSetup:
   def queries(corpus: Corpus): Int = corpus match
     case Corpus.LShape           => 32
     case Corpus.Rectilinear6to18 => 64
-    case Corpus.SketchGraph      => 48
-    case Corpus.SketchGraphXL    => 48
+    case Corpus.SketchGraph      => 96
+    case Corpus.SketchGraphXL    => 96
