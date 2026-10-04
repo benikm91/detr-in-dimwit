@@ -72,6 +72,11 @@ object NodeHead:
       midY: Tensor2[Query, Pixel, V]
   )
 
+  object NodeLogits:
+
+    given tensorTree[V]: TensorTree[NodeLogits[V]] = TensorTree.derived
+    given tree[V]: TreeOf[NodeLogits[V], V] = TreeOf.derived
+
   case class Params[V](
       nodeClass: AffineLayer.Params[DETR.Embedding, NodeClasses, V],
       startX: AffineLayer.Params[DETR.Embedding, Pixel, V],

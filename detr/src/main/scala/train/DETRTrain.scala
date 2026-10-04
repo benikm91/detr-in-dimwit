@@ -19,7 +19,10 @@ import deepwit.attention.Head
 import deepwit.attention.HeadKey
 import deepwit.attention.HeadQuery
 import deepwit.attention.HeadValue
+import deepwit.optimizer.LossScale
+import deepwit.optimizer.allFinite
 import deepwit.optimizer.clipGlobalNorm
+import deepwit.optimizer.select
 import dataset.Runs
 import dimwit.*
 import dimwit.jax.Jax
@@ -34,6 +37,7 @@ import dimwit.optimizer.Adam
 import dimwit.optimizer.AdamState
 import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
+import dimwit.TreeOf.ops.asFloats
 
 import scala.language.implicitConversions
 
@@ -48,10 +52,16 @@ trait Parameter derives Label
 case class TrainState(
     params: DETR.Params[Float32],
     optimizerState: LearningRateSchedulerState[DETR.Params[Float32], AdamState],
+    lossScale: LossScale,
+    skippedSteps: Tensor0[Int32],
     loss: Tensor0[Float32]
 )
 
 /** Trains a detector on the corpus its [[DETRSetup]] names.
+  *
+  * The model runs in Float16 against Float32 master weights, the loss and its matching in
+  * Float32. A [[LossScale]] keeps the small gradients from rounding to zero, and a step whose
+  * gradients overflow is skipped.
   *
   * The batch is split over the devices: each takes the same step on its share of the drawings, and
   * the gradients are summed before the parameters move. A run on more GPUs therefore holds less per
@@ -102,10 +112,10 @@ def trainDetector(setup: DETRSetup): Unit =
       imgs: Tensor4[Batch |@| X, Width, Height, Channel, Float32],
       records: RecordBatch[Batch |@| X, Node, Relationship]
   )(params: DETR.Params[Float32]): Tensor0[Float32] =
-    val model = DETR(params)
-    zipvmap(Axis[Batch |@| X])(imgs, records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY):
+    val model = DETR(params.asFloats(VType[Float16]))
+    zipvmap(Axis[Batch |@| X])(imgs.asFloat(VType[Float16]), records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY):
       case (img, nodeClass, startX, startY, endX, endY, midX, midY) =>
-        loss(model.logits(img), RecordNodes(nodeClass, startX, startY, endX, endY, midX, midY))
+        loss(model.logits(img).asFloats(VType[Float32]), RecordNodes(nodeClass, startX, startY, endX, endY, midX, midY))
     .mean
 
   def gradientStep(
@@ -113,10 +123,20 @@ def trainDetector(setup: DETRSetup): Unit =
       records: RecordBatch[Batch |@| X, Node, Relationship],
       state: TrainState
   ) =
-    val (lastCost, gradients) = Autodiff.valueAndGrad(cost(drawingsOf(pixels, Axis[Channel]), records))(state.params)
-    val clipped = gradients.clipGlobalNorm(setup.maxGradientNorm)
-    val (params, optimizerState) = optimizer.update(clipped, state.params, state.optimizerState)
-    TrainState(params, optimizerState, state.loss * 0.99f + lastCost * 0.01f)
+    val lossScale = state.lossScale
+    val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
+      (params: DETR.Params[Float32]) => lossScale.scaled(cost(drawingsOf(pixels, Axis[Channel]), records)(params))
+    )(state.params)
+    val gradients = lossScale.unscaled(scaledGradients)
+    val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)
+    val finite = allFinite(gradients)
+    TrainState(
+      select(finite, params, state.params),
+      select(finite, optimizerState, state.optimizerState),
+      lossScale.next(finite),
+      where(finite, state.skippedSteps, state.skippedSteps + 1),
+      where(finite, state.loss * 0.99f + scaledCost / lossScale.scale * 0.01f, state.loss)
+    )
   val jitGradientStep = jitDonatingUnsafe(gradientStep)
 
   /** The batch sent from the host with every device holding its share of the drawings; the step
@@ -153,14 +173,19 @@ def trainDetector(setup: DETRSetup): Unit =
     case Some(started) => TensorTreeCheckpointer(started.rootPath, overwrite = true)
     case None          => TensorTreeCheckpointer.newIn(setup.checkpointRoot)
   val taken = checkpointer.iterations.maxOption.getOrElse(0)
-  val initialState = if taken == 0 then TrainState(initialParams, optimizer.init(initialParams), 0f)
+  val initialState = if taken == 0 then TrainState(initialParams, optimizer.init(initialParams), LossScale.initial(), 0, 0f)
     else checkpointer.load[TrainState](taken).getOrElse(sys.error(s"checkpoint $taken of ${checkpointer.rootPath} will not load"))
   if taken > 0 then println(s"continuing ${checkpointer.rootPath} from step $taken")
   val history = History(checkpointer.rootPath)
+  /** Steps skipped all through a run mean the forward pass overflows, which no scale can fix. */
+  val lossScaleMonitor = new Monitor[TrainState]:
+    def report(step: Int, state: TrainState): String =
+      f"Loss scale: 2^${math.log(state.lossScale.scale.item) / math.log(2)}%.0f, ${state.skippedSteps.item} steps skipped"
   val monitor = Monitor.ConcatMonitor[TrainState](List(
     Monitor.StepMonitor(),
     Monitor.LossMonitor(_.loss.item),
     Monitor.LearningRateMonitor(schedule),
+    lossScaleMonitor,
     Monitor.PerformanceMonitor(batchSize)
   ))
 
@@ -170,7 +195,7 @@ def trainDetector(setup: DETRSetup): Unit =
       case (state, batch) =>
         val (images, records) = shard(batch)
         jitGradientStep(images, records, state)
-    .tapEvery(10):
+    .tapEvery(100):
       case (state, step) => println(monitor.report(taken + step, state))
     .tapEvery(checkpointEvery):
       case (state, step) =>
