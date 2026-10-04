@@ -59,7 +59,7 @@ case class DETRSetup(
     seed: Int = 0
 ):
   require(
-    numQueries > corpus.maxNodes,
+    numQueries >= corpus.maxNodes,
     s"$numQueries queries cannot answer for a drawing of up to ${corpus.maxNodes} objects"
   )
 
@@ -88,5 +88,5 @@ object DETRSetup:
   def queries(corpus: Corpus): Int = corpus match
     case Corpus.LShape           => 32
     case Corpus.Rectilinear6to18 => 64
-    case Corpus.SketchGraph      => 48
-    case Corpus.SketchGraphXL    => 48
+    case Corpus.SketchGraph      => 16
+    case Corpus.SketchGraphXL    => 16
