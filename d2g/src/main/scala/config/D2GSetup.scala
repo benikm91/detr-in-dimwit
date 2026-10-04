@@ -51,6 +51,7 @@ enum D2GModelConfiguration(val name: String, val embedding: Int, val numLayers: 
   case XS extends D2GModelConfiguration("xs", 128, 3, 4)
   case S extends D2GModelConfiguration("s", 256, 3, 8)
   case SDeep extends D2GModelConfiguration("s-deep", 256, 6, 8)
+  case MDeep extends D2GModelConfiguration("m-deep", 512, 6, 8)
 
 object D2GModelConfiguration:
   def named(name: String): D2GModelConfiguration = values.find(_.name == name).getOrElse(sys.error(s"no size named '$name': ${values.map(_.name).mkString(", ")}"))

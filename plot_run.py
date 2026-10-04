@@ -11,6 +11,8 @@ RUNS = [
     Path("detr-rectilinear-s-deep.csv"),
     Path("d2g-sketch-s-deep.csv"),
     Path("detr-sketch-s-deep.csv"),
+    Path("d2g-sketch-xl-s-deep.csv"),
+    Path("detr-sketch-xl-s-deep.csv"),
 ]
 
 # A model that decides by a threshold is scored at several; read it at this one. None for a
