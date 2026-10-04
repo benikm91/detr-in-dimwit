@@ -8,7 +8,7 @@ import dataset.Canvas
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
-import dataset.Outlines
+import dataset.greyLevels
 import dataset.RecordDrawing
 import dataset.RecordGraph
 import dataset.Runs
@@ -42,7 +42,7 @@ def plotDetector(setup: DETRSetup): Unit =
       .take(3)
       .zipWithIndex
       .map: (sample, index) =>
-        val drawing = Outlines.greyLevels(sample.image)
+        val drawing = greyLevels(sample.image)
         def drawn(record: RecordGraph) = RecordDrawing(record, drawing, Axis[Channel])
         Seq(
           plots.imagePlot(drawing, _.title := s"${split.fileName} $index"),

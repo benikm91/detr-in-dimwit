@@ -6,7 +6,7 @@ import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
 import dataset.DrawingTiles
-import dataset.Outlines
+import dataset.greyLevels
 import dataset.RecordDrawing
 import dataset.RecordGraph
 import dataset.Runs
@@ -36,7 +36,7 @@ def d2gDraw(corpus: String, size: String): Unit =
   val transcriber = Transcriber(Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots, WrittenTogether)
 
   /** The drawings as they were drawn, read once since they do not change. */
-  val documents = drawings.map(sample => Outlines.greyLevels(sample.image))
+  val documents = drawings.map(sample => greyLevels(sample.image))
 
   /** An empty canvas holds a transcription on its own; an empty record leaves a drawing as it is. */
   val emptyCanvas = Tensor.like(documents.head).fill(Blank)
@@ -55,7 +55,7 @@ def d2gDraw(corpus: String, size: String): Unit =
 private val Rows = 16
 private val Across = 16
 
-/** An empty canvas, as [[dataset.Outlines]] reads one. */
+/** An empty canvas, as [[dataset.greyLevels]] gives one. */
 private val Blank = 255
 
 /** How many drawings are transcribed together, as in the scoring: one traced computation. */

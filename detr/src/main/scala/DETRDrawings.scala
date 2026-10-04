@@ -6,7 +6,7 @@ import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
 import dataset.DrawingTiles
-import dataset.Outlines
+import dataset.greyLevels
 import dataset.RecordDrawing
 import dataset.RecordGraph
 import dataset.Runs
@@ -33,7 +33,7 @@ def detrDraw(corpus: String, size: String): Unit =
   val drawings = data.samples.take(Rows * Across).toSeq
 
   /** The drawings as they were drawn, read once since they do not change. */
-  val documents = drawings.map(sample => Outlines.greyLevels(sample.image))
+  val documents = drawings.map(sample => greyLevels(sample.image))
 
   /** An empty canvas holds a detection on its own; an empty record leaves a drawing as it is. */
   val emptyCanvas = Tensor.like(documents.head).fill(Blank)
@@ -51,5 +51,5 @@ def detrDraw(corpus: String, size: String): Unit =
 private val Rows = 16
 private val Across = 16
 
-/** An empty canvas, as [[dataset.Outlines]] reads one. */
+/** An empty canvas, as [[dataset.greyLevels]] gives one. */
 private val Blank = 255

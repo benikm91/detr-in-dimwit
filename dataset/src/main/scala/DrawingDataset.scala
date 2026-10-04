@@ -29,6 +29,10 @@ final case class Batch[S, W, H, Target](pixels: Tensor3[S, H, W, UInt8], target:
 def drawingsOf[S: Label, W: Label, H: Label, C: Label](pixels: Tensor3[S, H, W, UInt8], channel: Axis[C]): Tensor4[S, W, H, C, Float32] =
   pixels.swap(Axis[H], Axis[W]).appendAxis(channel).asFloat(VType[Float32]) /! 255f
 
+/** A drawing as a model reads it, back as the 8 bit grey levels [[plotwit]] plots. */
+def greyLevels[W: Label, H: Label, C: Label, V: IsFloating](image: Tensor3[W, H, C, V]): Tensor2[W, H, UInt8] =
+  (image.squeeze(Axis[C]).asFloat32 *! 255f).asInt(VType[UInt8])
+
 /** Axis of the drawings of a split. */
 private trait Drawings derives Label
 
@@ -68,9 +72,7 @@ object Corpus:
 /** DimWit wrapper around the drawing datasets, backed by ScalaPy.
   *
   * [[DrawingDataset.samples]] and [[DrawingDataset.batches]] hand out the [[Record]] every drawing
-  * was rendered from. [[DrawingDataset.objects]] and [[DrawingDataset.objectBatches]] hand out the
-  * same drawings as something to detect, which is that very data through [[Objects.of]] and
-  * nothing else.
+  * was rendered from.
   *
   * Call `dimwit.initialize()` once before using this loader.
   *
@@ -79,7 +81,6 @@ object Corpus:
   *
   * val data = DrawingDataset.open(Corpus.LShape)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
   * val record = data.samples.next().target
-  * val detected = data.objectBatches(Axis[Drawings] -> 16).next().target
   * }}}
   */
 object DrawingDataset:
@@ -158,12 +159,6 @@ final class DrawingDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Labe
     require(batch.size <= numSamples, s"a batch of ${batch.size} exceeds the $numSamples drawings of the split")
     val starts = 0 to numSamples - batch.size by batch.size
     Iterator.continually(starts).flatten.map(from => Batch(stored(batch, from), recordsIn(batch, from)))
-
-  /** The same drawings as something to detect. */
-  def objects: Iterator[Sample[W, H, C, Objects[Node]]] = samples.map(_.map(Objects.of))
-
-  def objectBatches[S: Label](batch: AxisExtent[S]): Iterator[Batch[S, W, H, ObjectBatch[S, Node]]] =
-    batches(batch).map(_.map(Objects.of))
 
   override def toString: String = s"DrawingDataset(${corpus.repoId}, drawings=$numSamples, nodes=${corpus.maxNodes})"
 

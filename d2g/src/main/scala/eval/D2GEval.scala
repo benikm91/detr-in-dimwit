@@ -14,7 +14,7 @@ import dataset.EdgeClass
 import dataset.Metrics
 import dataset.NodeClass
 import dataset.NodeClasses
-import dataset.Outlines
+import dataset.greyLevels
 import dataset.Record
 import dataset.RecordBatch
 import dataset.RecordEdges
@@ -90,7 +90,7 @@ def plotTranscriber(setup: D2GSetup): Unit =
       .take(3)
       .zipWithIndex
       .map: (sample, index) =>
-        val document = Outlines.greyLevels(sample.image)
+        val document = greyLevels(sample.image)
         val target = RecordGraph.of(sample.target)
         val transcribed = transcriber(params, sample.image)
         println(s"${split.fileName} $index target:      ${describe(target)}")

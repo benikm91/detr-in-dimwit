@@ -4,8 +4,8 @@ import dataset.DrawingDataset.Split
 import dimwit.*
 import munit.FunSuite
 
-/** The two views of a drawing, and that neither loses what the other holds. */
-class ObjectsSuite extends FunSuite:
+/** Records: laid out, permuted, read back, drawn, scored and written down without losing what they hold. */
+class RecordsSuite extends FunSuite:
 
   override def beforeAll(): Unit = dimwit.initialize()
 
@@ -33,36 +33,6 @@ class ObjectsSuite extends FunSuite:
       RecordEdge(EdgeClass.Annotates, 2, 0)
     )
   )
-
-  test("a line is drawn as the box between its end points, an annotation as a box around it"):
-    val objects = Objects.of(record.record(nodes, edges))
-    val box = objects.detection.box
-    assertEquals(objects.detection.label.toArray.toSeq, Seq(1, 1, 2, 0, 0, 0, 0, 0))
-    assertEqualsFloat(box.centerX.toArray(0), 0.5f, 1e-6f)
-    assertEqualsFloat(box.width.toArray(0), 0.6f, 1e-6f)
-    assertEqualsFloat(box.height.toArray(0), 4f / Canvas, 1e-6f)
-    assertEqualsFloat(box.width.toArray(2), 12f / Canvas, 1e-6f)
-    assert(box.width.toArray.drop(3).forall(_ == 0f), "a relationship is not drawn")
-
-  test("a circle is boxed around the diameter its points span, and read back as a circle"):
-    val circled = RecordGraph(Seq(RecordNode(NodeClass.Circle, Seq(Point(0.2f, 0.5f), Point(0.6f, 0.5f)))), Seq.empty)
-    val box = Objects.of(circled.record(nodes, edges)).detection.box
-    assertEqualsFloat(box.centerX.toArray(0), 0.4f, 1e-6f)
-    assertEqualsFloat(box.centerY.toArray(0), 0.5f, 1e-6f)
-    assertEqualsFloat(box.width.toArray(0), 0.4f, 1e-6f)
-    assertEqualsFloat(box.height.toArray(0), 0.4f, 1e-6f)
-
-    val readBack = RecordGraph.of(Objects.of(circled.record(nodes, edges)).detection).nodes
-    assertEquals(readBack.map(_.nodeClass), Seq(NodeClass.Circle))
-    readBack.head.points.zip(circled.nodes.head.points).foreach: (found, wanted) =>
-      assertEqualsFloat(found.x, wanted.x, 1e-6f)
-      assertEqualsFloat(found.y, wanted.y, 1e-6f)
-
-  test("a corpus that holds no relationships still boxes what it draws"):
-    val sketch = RecordGraph(Seq(RecordNode(NodeClass.Circle, Seq(Point(0.2f, 0.5f), Point(0.6f, 0.5f)))), Seq.empty)
-    val objects = Objects.of(sketch.record(nodes, Axis[Edge] -> 0))
-    assertEquals(objects.detection.label.toArray(0), ObjectClass.Circle.id)
-    assert(objects.relations.toArray.flatten.flatten.forall(_ == 0f), "nothing relates where nothing is related")
 
   test("a run's metrics are appended one row per checkpoint and tolerance, blank where nothing was measured"):
     val detected = RecordScoring.Scored(nodes = 10, nodesFound = 9, nodesPredicted = 12, nodesExact = false, relationships = 0, relationshipsFound = 0, relationshipsPredicted = 0, isExact = false)
@@ -94,14 +64,6 @@ class ObjectsSuite extends FunSuite:
     java.nio.file.Files.delete(path)
     assert(line.contains(""""points": [[10.00, 20.00], [50.00, 20.00]]"""), line)
     assert(line.contains(""""matched": {"0": [1, null, null], "2": [1, null, null], "4": [1, 0, null], "8": [1, 0, null]}"""), line)
-
-  test("a symmetric relationship is drawn both ways round, a directed one is not"):
-    val relations = Objects.of(record.record(nodes, edges)).relations.toArray
-    assertEquals(relations(0)(1)(RelationClass.Connected.id), 1f)
-    assertEquals(relations(1)(0)(RelationClass.Connected.id), 1f)
-    assertEquals(relations(2)(0)(RelationClass.Annotates.id), 1f)
-    assertEquals(relations(0)(2)(RelationClass.Annotates.id), 0f)
-    assertEquals(relations.flatten.flatten.sum, 3f)
 
   test("an arc keeps its middle through being laid out, permuted on the device and read back"):
     val bent = RecordGraph(
@@ -150,7 +112,7 @@ class ObjectsSuite extends FunSuite:
 
   test("a record is drawn as the picture it stands for"):
     val canvas = 32
-    val blank = Outlines.greyLevels(Tensor3(Axis[Width] -> canvas, Axis[Height] -> canvas, Axis[Channel] -> 1, VType[Float32]).fill(1f))
+    val blank = greyLevels(Tensor3(Axis[Width] -> canvas, Axis[Height] -> canvas, Axis[Channel] -> 1, VType[Float32]).fill(1f))
     val drawn = RecordDrawing(record, blank, Axis[Channel]).asInt(VType[Int32]).toArray
     assertEquals(drawn.length, canvas)
     assertEquals(drawn.head.head.toSeq, Seq(255, 255, 255), "a corner the record does not reach stays blank")
@@ -160,7 +122,7 @@ class ObjectsSuite extends FunSuite:
   test("a record is drawn where the drawing it was read from has its ink"):
     val data = DrawingDataset.open(Corpus.LShape)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation)
     data.samples.take(3).zipWithIndex.foreach: (sample, index) =>
-      val drawing = Outlines.greyLevels(sample.image)
+      val drawing = greyLevels(sample.image)
       val drawn = RecordDrawing(RecordGraph.of(sample.target), drawing, Axis[Channel]).asInt(VType[Int32]).toArray
       val ink = drawing.asInt(VType[Int32]).toArray
       def inked(x: Int, y: Int) = ink.isDefinedAt(x) && ink(x).isDefinedAt(y) && ink(x)(y) < 128
@@ -173,16 +135,6 @@ class ObjectsSuite extends FunSuite:
       assert(onLine.nonEmpty, s"sample $index: a record of lines drew none")
       assertEquals(onLine.count(identity), onLine.size, s"sample $index: a line is drawn where the drawing has no ink near it")
 
-  test("the objects of a record hold the record"):
-    assertSameRecord(Objects.record(Objects.of(record.record(nodes, edges)), edges), record.record(nodes, edges))
-
-  Split.values.foreach: split =>
-    test(s"the objects of every record of the ${split.fileName} split hold that record"):
-      val data = DrawingDataset.open(Corpus.LShape)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
-      val edgeSlots = Axis[Edge] -> Corpus.LShape.maxEdges
-      data.samples.take(200).zipWithIndex.foreach: (sample, index) =>
-        assertSameRecord(Objects.record(Objects.of(sample.target), edgeSlots), sample.target, s"sample $index")
-
   /** What a record's relationships say in terms of its nodes rather than of their slots. A
     * symmetric relationship says nothing by which of its two nodes comes first.
     */
@@ -191,19 +143,6 @@ class ObjectsSuite extends FunSuite:
       val ends = Seq(record.nodes(edge.subject), record.nodes(edge.obj))
       if edge.edgeClass.isSymmetric then (edge.edgeClass, ends.toSet, Seq.empty) else (edge.edgeClass, Set.empty[RecordNode], ends)
     .toSet
-
-  private def assertSameRecord(actual: Record[Node, Edge], expected: Record[Node, Edge], clue: String = ""): Unit =
-    assertEquals(actual.nodeClass.toArray.toSeq, expected.nodeClass.toArray.toSeq, clue)
-    assertEquals(actual.edgeClass.toArray.toSeq, expected.edgeClass.toArray.toSeq, clue)
-    assertEquals(actual.subject.toArray.toSeq, expected.subject.toArray.toSeq, clue)
-    assertEquals(actual.obj.toArray.toSeq, expected.obj.toArray.toSeq, clue)
-    Seq(
-      (actual.startX, expected.startX),
-      (actual.startY, expected.startY),
-      (actual.endX, expected.endX),
-      (actual.endY, expected.endY)
-    ).foreach: (found, wanted) =>
-      found.toArray.zip(wanted.toArray).zipWithIndex.foreach((placed, node) => assertEqualsFloat(placed._1, placed._2, 1e-5f, s"$clue node $node"))
 
   /** Everything a permuted batch holds, as the host sees it. */
   private def read(records: RecordBatch[Drawing, Node, Edge]) =
