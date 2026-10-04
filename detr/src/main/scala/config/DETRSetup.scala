@@ -40,6 +40,11 @@ case class DETRSetup(
     numSamples: Int = 500_000 * 128,
     batchSize: Int = 512,
     learningRate: Float = 3e-4f,
+    /** Adam's memory of how large the gradients are, about 1 / (1 − β₂) steps. Short enough that a
+      * sudden growth of the gradients is caught up with within a few dozen steps, rather than
+      * taking steps several times the learning rate for hundreds of them.
+      */
+    adamBeta2: Float = 0.98f,
 
     /** Where the cosine bottoms out. Aligned with the other models. */
     finalLearningRate: Float = 0f,

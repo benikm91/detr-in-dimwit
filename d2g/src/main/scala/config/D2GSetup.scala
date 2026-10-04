@@ -24,6 +24,11 @@ case class D2GSetup(
     numSamples: Int = 500_000 * 128,
     batchSize: Int = 512,
     learningRate: Float = 3e-4f,
+    /** Adam's memory of how large the gradients are, about 1 / (1 − β₂) steps. Short enough that a
+      * sudden growth of the gradients is caught up with within a few dozen steps, rather than
+      * taking steps several times the learning rate for hundreds of them.
+      */
+    adamBeta2: Float = 0.98f,
     finalLearningRate: Float = 0f,
     weightDecay: Float = 1e-4f,
     maxGradientNorm: Float = 1f,
