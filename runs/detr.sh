@@ -67,7 +67,9 @@ if [[ $STAGE == train ]]; then trap continueLater USR1; else trap '' USR1; fi
 
 module load sarus/1.6.4
 
-IMAGE="benikm91/dimwit-gpu:snapshot"
+# DimWit, DeepWit, PlotWit and dimwit-sharding come published inside the image, at the versions
+# build.sbt asks for. A new release of any of them needs a new image.
+IMAGE="benikm91/dimwit-gpu:deepwit-0.2.1"
 sarus pull "$IMAGE"
 
 sarus run \
@@ -94,27 +96,8 @@ sarus run \
     export CHECKPOINT_DIR=/checkpoints
     export OUTPUT_DIR=/output
 
-    # DimWit and DeepWit from source. The sharding the training script splits its batch over is on
-    # a branch of DimWit rather than in a release.
     cd /usr/src
-    git clone https://github.com/dimwit-dev/dimwit
-    git clone https://github.com/dimwit-dev/deepwit
-    git clone https://github.com/benikm91/dimwit-sharding
     git clone --branch "$branch" https://github.com/benikm91/detr-in-dimwit
-
-    # Published as the version DeepWit and this repository build against, whatever version the main branch of DimWit is at.
-    cd dimwit
-    sbt publishLocal
-    cd ..
-
-    cd deepwit
-    sbt "set ThisBuild / version := \"0.2-SNAPSHOT\"" publishLocal
-    cd ..
-
-    cd dimwit-sharding
-    sbt publishLocal
-    cd ..
-
     cd detr-in-dimwit
 
     # The image points DimWit at its own Python. Ours comes from pyproject.toml instead: DimWit runs uv sync and uses the venv that gives.
@@ -139,9 +122,10 @@ sarus run \
   "branch": "$branch",
   "commits": {
     "detr-in-dimwit": "$(git -C /usr/src/detr-in-dimwit rev-parse HEAD)",
-    "dimwit": "$(git -C /usr/src/dimwit rev-parse HEAD)",
-    "deepwit": "$(git -C /usr/src/deepwit rev-parse HEAD)",
-    "dimwit-sharding": "$(git -C /usr/src/dimwit-sharding rev-parse HEAD)"
+    "dimwit": "$(git -C /opt/wit/src/dimwit rev-parse HEAD)",
+    "deepwit": "$(git -C /opt/wit/src/deepwit rev-parse HEAD)",
+    "plotwit": "$(git -C /opt/wit/src/plotwit rev-parse HEAD)",
+    "dimwit-sharding": "$(git -C /opt/wit/src/dimwit-sharding rev-parse HEAD)"
   }
 }
 JSON
