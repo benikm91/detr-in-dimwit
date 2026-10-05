@@ -6,6 +6,7 @@ import detr.eval.*
 import detr.config.*
 import dataset.NodeClass
 import dataset.NodeClasses
+import dataset.IsConstruction
 import dataset.RecordNodes
 import deepwit.base.AffineLayer
 import documentEncoder.DocumentEncoder
@@ -60,7 +61,7 @@ object DETR:
         key: Key
     ) =
       val (encoderKey, decoderKey, queryKey, headsKey) = key.splitToTuple(4)
-      val (classKey, startXKey, startYKey, endXKey, endYKey, midXKey, midYKey) = headsKey.splitToTuple(7)
+      val (classKey, constructionKey, startXKey, startYKey, endXKey, endYKey, midXKey, midYKey) = headsKey.splitToTuple(8)
       val queryExtent = Axis[Query] -> numQueries
       val embeddingExtent = Axis[DETR.Embedding] -> embedding
       val embeddingMixedExtent = Axis[EmbeddingMixed] -> embeddingExtent.size * 4
@@ -84,6 +85,7 @@ object DETR:
         objectQueries = Init.xavierUniform(queryExtent, embeddingExtent, queryKey),
         nodeHead = NodeHead.Params(
           nodeClass = AffineLayer.Params.init(embeddingExtent, Axis[NodeClasses] -> NodeClass.values.length, classKey),
+          construction = AffineLayer.Params.init(embeddingExtent, Axis[IsConstruction] -> 2, constructionKey),
           startX = AffineLayer.Params.init(embeddingExtent, pixelExtent, startXKey),
           startY = AffineLayer.Params.init(embeddingExtent, pixelExtent, startYKey),
           endX = AffineLayer.Params.init(embeddingExtent, pixelExtent, endXKey),

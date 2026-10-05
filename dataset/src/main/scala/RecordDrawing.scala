@@ -21,6 +21,7 @@ object RecordDrawing:
         module.render(
           toPyTensor(over),
           placed.nodeClass.toSeq.toPythonCopy,
+          placed.construction.toSeq.toPythonCopy,
           placed.startX.toSeq.toPythonCopy,
           placed.startY.toSeq.toPythonCopy,
           placed.endX.toSeq.toPythonCopy,
@@ -34,6 +35,7 @@ object RecordDrawing:
           NodeClass.Annotation.id,
           NodeClass.Circle.id,
           NodeClass.Arc.id,
+          NodeClass.Point.id,
           EdgeClass.Connected.id,
           EdgeClass.Annotates.id
         )

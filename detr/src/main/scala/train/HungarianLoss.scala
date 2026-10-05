@@ -15,8 +15,8 @@ import scala.language.implicitConversions
   *
   * Every node is answered by the query the optimal matching gives it, and every query left over
   * is trained towards [[NodeClass.NoNode]]. What a query costs against a node is what the
-  * transcriber's node head pays for it: the cross entropy of the node's class, and of the pixel of
-  * every point that class places.
+  * transcriber's node head pays for it: the cross entropy of the node's class, of whether it is
+  * construction geometry, and of the pixel of every point that class places.
   */
 class HungarianLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((NodeLogits[V], RecordNodes[Node]) => Tensor0[V]):
 
@@ -24,7 +24,7 @@ class HungarianLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((NodeL
     val queries = logits.nodeClass.shape.extent(Axis[Query])
     val holdsNode = NodeClass.indicator(vtype)(_.isNode).take(Axis[NodeClasses])(target.nodeClass)
     val classCost = costOfValue(logits.nodeClass, target.nodeClass)
-    val placementCost = placement(logits, target)
+    val placementCost = costOfValue(logits.construction, target.construction) + placement(logits, target)
 
     // A slot holding no node costs every query the same, so only the nodes decide the matching.
     val answering = Matching.optimal((classCost + placementCost) *! holdsNode)

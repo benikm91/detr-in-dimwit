@@ -38,10 +38,10 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int)
     // Both queries are charged, so the total is halved to stay on the scale of one answer.
     ((guessed * asked).sum + (stops * ended).sum) / ((taken + 1f) * 2f)
 
-  /** What every position's scores would cost against every node of the record: its class, and
-    * where the *target* node is placed — so that nothing depends on what the model predicts. A
-    * class that runs nowhere is not measured on where it ends, nor one that does not bend on its
-    * middle.
+  /** What every position's scores would cost against every node of the record: its class, whether
+    * it is construction geometry, and where the *target* node is placed — so that nothing depends
+    * on what the model predicts. A class that runs nowhere is not measured on where it ends, nor
+    * one that does not bend on its middle.
     */
   private def dissimilarity(logits: NodeLogits[V], target: RecordNodes[Node]): Tensor2[Node, Candidate, V] =
     val candidateClass = target.nodeClass.relabelTo(Axis[Candidate])
@@ -52,6 +52,7 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int)
     val ends = placed(logits.endX, target.endX) + placed(logits.endY, target.endY)
     val middles = placed(logits.midX, target.midX) + placed(logits.midY, target.midY)
     costOfValue(logits.nodeClass, candidateClass) +
+      costOfValue(logits.construction, target.construction.relabelTo(Axis[Candidate])) +
       placed(logits.startX, target.startX) +
       placed(logits.startY, target.startY) +
       ends *! runsOn +

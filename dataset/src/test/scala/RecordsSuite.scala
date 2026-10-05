@@ -24,9 +24,9 @@ class RecordsSuite extends FunSuite:
 
   private val record = RecordGraph(
     nodes = Seq(
-      RecordNode(NodeClass.Line, Seq(Point(0.2f, 0.4f), Point(0.8f, 0.4f))),
-      RecordNode(NodeClass.Line, Seq(Point(0.8f, 0.4f), Point(0.8f, 0.9f))),
-      RecordNode(NodeClass.Annotation, Seq(Point(0.5f, 0.3f)))
+      RecordNode(NodeClass.Line, false, Seq(Point(0.2f, 0.4f), Point(0.8f, 0.4f))),
+      RecordNode(NodeClass.Line, false, Seq(Point(0.8f, 0.4f), Point(0.8f, 0.9f))),
+      RecordNode(NodeClass.Annotation, false, Seq(Point(0.5f, 0.3f)))
     ),
     edges = Seq(
       RecordEdge(EdgeClass.Connected, 0, 1),
@@ -49,16 +49,16 @@ class RecordsSuite extends FunSuite:
     assertEquals(lines.get(2), "test,l-shape,xs,20000,0.5,8,123,45,90.00,75.00,0.00,,,0.00")
 
   test("a transcript keeps the predicted nodes in their order and says which target each stands for"):
-    val pixel = 1f / Canvas
+    val pixel = 1f / Corpus.SketchGraph.canvas
     val target = RecordGraph(
       Seq(
-        RecordNode(NodeClass.Line, Seq(Point(10 * pixel, 20 * pixel), Point(50 * pixel, 20 * pixel))),
-        RecordNode(NodeClass.Circle, Seq(Point(100 * pixel, 100 * pixel), Point(140 * pixel, 100 * pixel)))
+        RecordNode(NodeClass.Line, false, Seq(Point(10 * pixel, 20 * pixel), Point(50 * pixel, 20 * pixel))),
+        RecordNode(NodeClass.Circle, false, Seq(Point(100 * pixel, 100 * pixel), Point(140 * pixel, 100 * pixel)))
       ),
       Seq.empty
     )
-    val threePixelsOff = RecordNode(NodeClass.Line, Seq(Point(13 * pixel, 20 * pixel), Point(50 * pixel, 20 * pixel)))
-    val written = RecordGraph(Seq(target.nodes(1), threePixelsOff, RecordNode(NodeClass.Circle, Seq(Point(0f, 0f), Point(0.1f, 0f)))), Seq.empty)
+    val threePixelsOff = RecordNode(NodeClass.Line, false, Seq(Point(13 * pixel, 20 * pixel), Point(50 * pixel, 20 * pixel)))
+    val written = RecordGraph(Seq(target.nodes(1), threePixelsOff, RecordNode(NodeClass.Circle, false, Seq(Point(0f, 0f), Point(0.1f, 0f)))), Seq.empty)
     val path = Transcripts.write("test", Corpus.LShape, "xs", 1000, Seq((target, written)))
     val line = java.nio.file.Files.readAllLines(path).get(0)
     java.nio.file.Files.delete(path)
@@ -68,14 +68,22 @@ class RecordsSuite extends FunSuite:
   test("an arc keeps its middle through being laid out, permuted on the device and read back"):
     val bent = RecordGraph(
       Seq(
-        RecordNode(NodeClass.Line, Seq(Point(0.2f, 0.5f), Point(0.6f, 0.5f))),
-        RecordNode(NodeClass.Arc, Seq(Point(0.2f, 0.5f), Point(0.6f, 0.5f), Point(0.4f, 0.3f)))
+        RecordNode(NodeClass.Line, false, Seq(Point(0.2f, 0.5f), Point(0.6f, 0.5f))),
+        RecordNode(NodeClass.Arc, false, Seq(Point(0.2f, 0.5f), Point(0.6f, 0.5f), Point(0.4f, 0.3f)))
       ),
       Seq.empty
     )
     assertEquals(RecordGraph.of(bent.record(nodes, edges)), bent)
     val permuted = RecordBatch.of(Seq(bent), Axis[Drawing], nodes, edges).permuted(dimwit.Random.Key(3), nodes, edges)
     assertEquals(RecordGraph.of(permuted).head.nodes.toSet, bent.nodes.toSet)
+
+  test("construction geometry stays construction geometry, and is only found as such"):
+    val dashed = RecordNode(NodeClass.Line, true, Seq(Point(0.2f, 0.5f), Point(0.6f, 0.5f)))
+    val sketch = RecordGraph(Seq(dashed, RecordNode(NodeClass.Point, false, Seq(Point(0.4f, 0.5f)))), Seq.empty)
+    val permuted = RecordBatch.of(Seq(sketch), Axis[Drawing], nodes, Axis[Edge] -> 0).permuted(dimwit.Random.Key(5), nodes, Axis[Edge] -> 0)
+    assertEquals(RecordGraph.of(permuted).head.nodes.toSet, sketch.nodes.toSet)
+    val drawnSolid = sketch.copy(nodes = Seq(dashed.copy(isConstruction = false), sketch.nodes(1)))
+    assertEquals(RecordScoring.score(sketch, drawnSolid, tolerance = 0f).nodesFound, 1)
 
   test("a record survives being permuted, laid out and read back"):
     val random = scala.util.Random(7)

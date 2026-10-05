@@ -3,6 +3,7 @@ package d2s.model
 import d2s.*
 import dataset.NodeClass
 import dataset.NodeClasses
+import dataset.IsConstruction
 import dataset.RecordNodes
 import deepwit.base.AffineLayer
 import documentEncoder.DocumentEncoder
@@ -56,18 +57,19 @@ class D2S[V: IsFloating](params: D2S.Params[V]):
           nodePosition(query.broadcastTo(takenNodes.shape))
       nodeDecoder.forTraining(encodedDocument, takenNodes, queryNodes)
 
-    val (nodeClass, startX, startY, endX, endY, midX, midY) =
+    val (nodeClass, construction, startX, startY, endX, endY, midX, midY) =
       answeredNodes.vmap(Axis[PoolQuery]): answered =>
         val scored = nodeHead(answered)
-        (scored.nodeClass, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY)
+        (scored.nodeClass, scored.construction, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY)
 
-    (carriedNodes, NodeQueryLogits(nodeClass, startX, startY, endX, endY, midX, midY))
+    (carriedNodes, NodeQueryLogits(nodeClass, construction, startX, startY, endX, endY, midX, midY))
 
 object D2S:
 
   /** [[NodeLogits]] at every query slot. */
   case class NodeQueryLogits[V](
       nodeClass: Tensor3[PoolQuery, Node, NodeClasses, V],
+      construction: Tensor3[PoolQuery, Node, IsConstruction, V],
       startX: Tensor3[PoolQuery, Node, Pixel, V],
       startY: Tensor3[PoolQuery, Node, Pixel, V],
       endX: Tensor3[PoolQuery, Node, Pixel, V],
@@ -77,6 +79,7 @@ object D2S:
   ):
     def at(query: Int): NodeLogits[V] = NodeLogits(
       nodeClass.slice(Axis[PoolQuery].at(query)),
+      construction.slice(Axis[PoolQuery].at(query)),
       startX.slice(Axis[PoolQuery].at(query)),
       startY.slice(Axis[PoolQuery].at(query)),
       endX.slice(Axis[PoolQuery].at(query)),
@@ -92,6 +95,7 @@ object D2S:
 
     def of[V](answered: Seq[NodeLogits[V]]): NodeQueryLogits[V] = NodeQueryLogits(
       nodeClass = stack(answered.map(_.nodeClass), Axis[PoolQuery]),
+      construction = stack(answered.map(_.construction), Axis[PoolQuery]),
       startX = stack(answered.map(_.startX), Axis[PoolQuery]),
       startY = stack(answered.map(_.startY), Axis[PoolQuery]),
       endX = stack(answered.map(_.endX), Axis[PoolQuery]),
@@ -144,13 +148,15 @@ object D2S:
       val embeddingMixedExtent = Axis[EmbeddingMixed] -> embedding * 4
       val partExtent = Axis[PartEmbedding] -> embedding / 8
       val nodeClassExtent = Axis[dataset.NodeClasses] -> NodeClass.values.length
+      val constructionExtent = Axis[IsConstruction] -> 2
       val pixelExtent = Axis[Pixel] -> canvas
       val nodeExtent = Axis[Node] -> nodes
-      // A node embedding is put together from its class and the six coordinates a class can place.
-      val nodePartExtent = Axis[NodePart |*| PartEmbedding] -> 7 * partExtent.size
+      // A node embedding is put together from its class, whether it is construction geometry, and
+      // the six coordinates a class can place.
+      val nodePartExtent = Axis[NodePart |*| PartEmbedding] -> 8 * partExtent.size
 
-      val (startXKey, startYKey, endXKey, endYKey, midXKey, midYKey, nodeClassKey, nodeProjectionKey) = nodeEmbedderKey.splitToTuple(8)
-      val (classHeadKey, startXHeadKey, startYHeadKey, endXHeadKey, endYHeadKey, midXHeadKey, midYHeadKey) = nodeHeadKey.splitToTuple(7)
+      val (startXKey, startYKey, endXKey, endYKey, midXKey, midYKey, nodeClassKey, constructionKey, nodeProjectionKey) = nodeEmbedderKey.splitToTuple(9)
+      val (classHeadKey, constructionHeadKey, startXHeadKey, startYHeadKey, endXHeadKey, endYHeadKey, midXHeadKey, midYHeadKey) = nodeHeadKey.splitToTuple(8)
 
       Params(
         encoder = DocumentEncoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, Axis[DocumentEncoder.EmbeddingMixed] -> embeddingMixedExtent.size, encoderKey),
@@ -158,6 +164,7 @@ object D2S:
           decoder = NodeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, nodeDecoderKey),
           embedder = NodeEmbedder.Params(
             nodeClass = VocabularyEmbedder.Params.init(nodeClassExtent, partExtent, nodeClassKey),
+            construction = VocabularyEmbedder.Params.init(constructionExtent, partExtent, constructionKey),
             startX = VocabularyEmbedder.Params.init(pixelExtent, partExtent, startXKey),
             startY = VocabularyEmbedder.Params.init(pixelExtent, partExtent, startYKey),
             endX = VocabularyEmbedder.Params.init(pixelExtent, partExtent, endXKey),
@@ -168,6 +175,7 @@ object D2S:
           ),
           head = NodeHead.Params(
             nodeClass = AffineLayer.Params.init(embeddingExtent, nodeClassExtent, classHeadKey),
+            construction = AffineLayer.Params.init(embeddingExtent, constructionExtent, constructionHeadKey),
             startX = AffineLayer.Params.init(embeddingExtent, pixelExtent, startXHeadKey),
             startY = AffineLayer.Params.init(embeddingExtent, pixelExtent, startYHeadKey),
             endX = AffineLayer.Params.init(embeddingExtent, pixelExtent, endXHeadKey),

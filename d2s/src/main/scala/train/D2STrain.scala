@@ -3,7 +3,6 @@ package d2s.train
 import d2s.*
 import d2s.model.*
 import d2s.config.*
-import dataset.Canvas
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
@@ -96,7 +95,7 @@ def trainSetTranscriber(setup: D2SSetup): Unit =
     embedding = setup.embedding,
     nodes = setup.nodeSlots,
     queries = setup.queryPool,
-    canvas = Canvas,
+    canvas = setup.corpus.canvas,
     key = initKey
   )
 
@@ -104,7 +103,7 @@ def trainSetTranscriber(setup: D2SSetup): Unit =
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
-  val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas)
+  val nodeLoss = RemainingNodeLoss(VType[Float32], setup.corpus.canvas)
 
   /** The mean loss over the drawings of a batch, whatever axis `S` they lie along. */
   def cost[S: Label](
@@ -113,9 +112,9 @@ def trainSetTranscriber(setup: D2SSetup): Unit =
       asked: Key
   )(params: D2S.Params[Float32]): Tensor0[Float32] =
     val model = D2S(params.asFloats(VType[Float16]))
-    zipvmap(Axis[S])(images.asFloat(VType[Float16]), records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY):
-      case (image, nodeClass, startX, startY, endX, endY, midX, midY) =>
-        val target = RecordNodes(nodeClass, startX, startY, endX, endY, midX, midY)
+    zipvmap(Axis[S])(images.asFloat(VType[Float16]), records.nodeClass, records.construction, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY):
+      case (image, nodeClass, construction, startX, startY, endX, endY, midX, midY) =>
+        val target = RecordNodes(nodeClass, construction, startX, startY, endX, endY, midX, midY)
         val scored = model.logits(image, target, asked).asFloats(VType[Float32])
         nodeLoss(scored, target)
     .mean
@@ -156,6 +155,7 @@ def trainSetTranscriber(setup: D2SSetup): Unit =
       batch.pixels.shard(mesh, over),
       RecordBatch(
         nodeClass = records.nodeClass.shard(mesh, over),
+        construction = records.construction.shard(mesh, over),
         startX = records.startX.shard(mesh, over),
         startY = records.startY.shard(mesh, over),
         endX = records.endX.shard(mesh, over),

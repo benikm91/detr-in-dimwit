@@ -6,10 +6,16 @@ so that two models are compared by the same code and not merely by the same word
 
 ## The corpora
 
-A [`Corpus`](src/main/scala/DrawingDataset.scala) is a Hugging Face repository of 256×256
-drawings and the drawing programs they were rendered from: `l-shape`, `rectilinear`, `sketch` and
-`sketch-xl`. They differ in what they draw and in nothing else, so a corpus carries only where it
-is published and how many nodes and relationships its largest record holds.
+A [`Corpus`](src/main/scala/DrawingDataset.scala) is a Hugging Face repository of drawings and
+the labels they were rendered from:
+
+- `l-shape`, `rectilinear`, `sketch` and `sketch-xl`: 256 × 256, labelled by drawing programs;
+- `vitruvion-primitives`: 128 × 128, the SketchGraphs sketches as Vitruvion selected and rendered
+  them, in their own splits, labelled by their primitives. The constraints the same files hold are
+  not read.
+
+A corpus carries where it is published, the side of its drawings, and how many nodes and
+relationships its largest record holds.
 
 ```scala
 val data = DrawingDataset.open(Corpus.SketchGraph)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
@@ -26,8 +32,9 @@ another, or shuffled when the corpus was built, so reading them in order already
 ## The record
 
 A drawing is rendered from a **record**: the graph its drawing program spells out. A node is a
-line, a circle, an arc or an annotation, placed by the points its class names; a relationship
-links two nodes, `Connected` corners and `Annotates` dimensions.
+line, a circle, an arc, an annotation or a point, placed by the points its class names, and
+construction geometry or not; a relationship links two nodes, `Connected` corners and `Annotates`
+dimensions.
 
 Nothing in a record has an order. [`Record`](src/main/scala/Records.scala) is one *layout* of it
 along the node and edge axes, for the device; [`RecordGraph`](src/main/scala/Records.scala) is the

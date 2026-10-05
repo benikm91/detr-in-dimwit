@@ -5,11 +5,9 @@ import d2s.model.*
 import d2s.train.*
 import d2s.config.*
 import NodeHead.NodeLogits
-import dataset.Canvas
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
-import dataset.EdgeClass
 import dataset.Metrics
 import dataset.NodeClass
 import dataset.NodeClasses
@@ -63,7 +61,7 @@ def scoreSetTranscriber(setup: D2SSetup, size: String): Unit =
   checkpoints.iterations.reverse.foreach: step =>
     println(s"scoring checkpoint $step")
     val drawings = transcribed(checkpoints.load[D2STrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
-    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => RecordScoring.score(target, written, tolerance / Canvas))))
+    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => RecordScoring.score(target, written, tolerance / setup.corpus.canvas))))
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
@@ -152,13 +150,12 @@ class Transcriber(nodes: AxisExtent[Node], drawings: Int = 1):
 
     /** Nothing written yet: every slot of every drawing empty. */
     val nothingWritten =
-      // One empty relationship slot rather than none: DimWit's `toArray` drops the drawings of a
-      // tensor whose relationship axis is empty.
-      val (allNodes, noRelationships) = (Shape2(everyDrawing, nodes), Shape2(everyDrawing, Axis[Relationship] -> 1))
+      val (allNodes, noRelationships) = (Shape2(everyDrawing, nodes), Shape2(everyDrawing, Axis[Relationship] -> 0))
       def nowhere = Tensor(allNodes, VType[Float32]).fill(0f)
-      def nothing = Tensor(noRelationships, VType[Int32]).fill(EdgeClass.NoEdge.id)
+      def nothing = Tensor(noRelationships, VType[Int32]).fill(0)
       RecordBatch[Drawing, Node, Relationship](
         nodeClass = Tensor(allNodes, VType[Int32]).fill(NodeClass.NoNode.id),
+        construction = Tensor(allNodes, VType[Int32]).fill(0),
         startX = nowhere,
         startY = nowhere,
         endX = nowhere,
@@ -180,17 +177,17 @@ class Transcriber(nodes: AxisExtent[Node], drawings: Int = 1):
       * own, so the answer is the one that slot would have been given on its own.
       */
     def answeredNode(taken: RecordBatch[Drawing, Node, Relationship], slot: Int) =
-      zipvmap(Axis[Drawing])(encoded, taken.nodeClass, taken.startX, taken.startY, taken.endX, taken.endY, taken.midX, taken.midY):
-        case (document, nodeClass, startX, startY, endX, endY, midX, midY) =>
-          val scored = model.logitsPerQuery(document, RecordNodes(nodeClass, startX, startY, endX, endY, midX, midY))
-          val (saidClass, saidStartX, saidStartY, saidEndX, saidEndY, saidMidX, saidMidY, score) =
-            zipvmap(Axis[PoolQuery])(scored.nodeClass, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY):
-              case (nodeClass, startX, startY, endX, endY, midX, midY) =>
-                answered(model.nodeHead, NodeLogits(nodeClass, startX, startY, endX, endY, midX, midY))
+      zipvmap(Axis[Drawing])(encoded, taken.nodeClass, taken.construction, taken.startX, taken.startY, taken.endX, taken.endY, taken.midX, taken.midY):
+        case (document, nodeClass, construction, startX, startY, endX, endY, midX, midY) =>
+          val scored = model.logitsPerQuery(document, RecordNodes(nodeClass, construction, startX, startY, endX, endY, midX, midY))
+          val (saidClass, saidConstruction, saidStartX, saidStartY, saidEndX, saidEndY, saidMidX, saidMidY, score) =
+            zipvmap(Axis[PoolQuery])(scored.nodeClass, scored.construction, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY):
+              case (nodeClass, construction, startX, startY, endX, endY, midX, midY) =>
+                answered(model.nodeHead, NodeLogits(nodeClass, construction, startX, startY, endX, endY, midX, midY))
           val here = Axis[Node].at(slot)
           val likeliest = Axis[PoolQuery].at(score.slice(here).argmax(Axis[PoolQuery]))
           def said[W](answers: Tensor2[PoolQuery, Node, W]) = answers.slice(here).slice(likeliest)
-          (said(saidClass), said(saidStartX), said(saidStartY), said(saidEndX), said(saidEndY), said(saidMidX), said(saidMidY))
+          (said(saidClass), said(saidConstruction), said(saidStartX), said(saidStartY), said(saidEndX), said(saidEndY), said(saidMidX), said(saidMidY))
 
     /** The slot a step fills, as a mask over the record's slots. */
     def only[L: Label](slots: AxisExtent[L], slot: Int) =
@@ -200,7 +197,7 @@ class Transcriber(nodes: AxisExtent[Node], drawings: Int = 1):
       * answers [[NodeClass.NoNode]] stops there, and the slots it would have filled stay empty.
       */
     def writeNode(taken: RecordBatch[Drawing, Node, Relationship], writing: Tensor1[Drawing, Bool], slot: Int) =
-      val (said, startX, startY, endX, endY, midX, midY) = answeredNode(taken, slot)
+      val (said, construction, startX, startY, endX, endY, midX, midY) = answeredNode(taken, slot)
       val fills = writing and !(said elementEquals_! NodeClass.NoNode.id)
       val here = Shape2(everyDrawing, nodes)
       val filling = only(nodes, slot).broadcastTo(here) and fills.broadcastTo(here)
@@ -208,6 +205,7 @@ class Transcriber(nodes: AxisExtent[Node], drawings: Int = 1):
         where_!(filling, now, old)
       val record = taken.copy(
         nodeClass = put(taken.nodeClass, said),
+        construction = put(taken.construction, construction),
         startX = put(taken.startX, startX),
         startY = put(taken.startY, startY),
         endX = put(taken.endX, endX),
@@ -238,10 +236,10 @@ private def open(setup: D2SSetup, split: Split) =
 def answered(scorer: NodeHead[Float32], logits: NodeLogits[Float32]) =
   val decided = scorer.decide(logits)
   def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).take(Axis[NodeClasses])(decided.nodeClass)
-  val score = chosen(logits.nodeClass) + chosen(logits.startX) + chosen(logits.startY) +
+  val score = chosen(logits.nodeClass) + chosen(logits.construction) + chosen(logits.startX) + chosen(logits.startY) +
     (chosen(logits.endX) + chosen(logits.endY)) * carries(_.numPoints > 1) +
     (chosen(logits.midX) + chosen(logits.midY)) * carries(_.numPoints > 2)
-  (decided.nodeClass, decided.startX, decided.startY, decided.endX, decided.endY, decided.midX, decided.midY, score)
+  (decided.nodeClass, decided.construction, decided.startX, decided.startY, decided.endX, decided.endY, decided.midX, decided.midY, score)
 
 /** The log probability of the value a position's scores are highest for. */
 def chosen[Slot: Label, L: Label](logits: Tensor2[Slot, L, Float32]): Tensor1[Slot, Float32] =

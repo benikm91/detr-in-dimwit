@@ -5,6 +5,7 @@ import dataset.EdgeClass
 import dataset.EdgeClasses
 import dataset.NodeClass
 import dataset.NodeClasses
+import dataset.IsConstruction
 import dataset.RecordEdges
 import dataset.RecordNodes
 import deepwit.base.AffineLayer
@@ -20,6 +21,7 @@ trait PartEmbedding derives Label // An embedding of a [[NodePart]] or a [[EdgeP
 class NodeEmbedder[V: IsFloating](params: NodeEmbedder.Params[V]) extends (RecordNodes[Node] => Tensor2[Node, Embedding, V]):
 
   private val nodeClass = VocabularyEmbedder(params.nodeClass)
+  private val construction = VocabularyEmbedder(params.construction)
 
   // Coordinate vocabulary could be shared, yet we keep them separate just in case, preferring guaranteed capacity over slight speed gains.
   private val startX = VocabularyEmbedder(params.startX)
@@ -36,15 +38,16 @@ class NodeEmbedder[V: IsFloating](params: NodeEmbedder.Params[V]) extends (Recor
 
   override def apply(nodes: RecordNodes[Node]): Tensor2[Node, Embedding, V] =
     def pixels(coordinate: Tensor1[Node, Float32]) = Pixels.of(coordinate, canvas)
-    zipvmap(Axis[Node])(nodes.nodeClass, pixels(nodes.startX), pixels(nodes.startY), pixels(nodes.endX), pixels(nodes.endY), pixels(nodes.midX), pixels(nodes.midY)):
-      case (cls, sx, sy, ex, ey, mx, my) =>
-        val parts = Seq(nodeClass(cls), startX(sx), startY(sy), endX(ex), endY(ey), midX(mx), midY(my))
+    zipvmap(Axis[Node])(nodes.nodeClass, nodes.construction, pixels(nodes.startX), pixels(nodes.startY), pixels(nodes.endX), pixels(nodes.endY), pixels(nodes.midX), pixels(nodes.midY)):
+      case (cls, isConstruction, sx, sy, ex, ey, mx, my) =>
+        val parts = Seq(nodeClass(cls), construction(isConstruction), startX(sx), startY(sy), endX(ex), endY(ey), midX(mx), midY(my))
         project(stack(parts, Axis[NodePart]).flatten((Axis[NodePart], Axis[PartEmbedding])))
 
 object NodeEmbedder:
 
   case class Params[V](
       nodeClass: VocabularyEmbedder.Params[NodeClasses, PartEmbedding, V],
+      construction: VocabularyEmbedder.Params[IsConstruction, PartEmbedding, V],
       startX: VocabularyEmbedder.Params[Pixel, PartEmbedding, V],
       startY: VocabularyEmbedder.Params[Pixel, PartEmbedding, V],
       endX: VocabularyEmbedder.Params[Pixel, PartEmbedding, V],

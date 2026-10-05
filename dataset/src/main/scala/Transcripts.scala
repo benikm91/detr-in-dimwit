@@ -11,7 +11,7 @@ import java.nio.file.Path
   *
   * {{{
   * {"drawing": 0,
-  *  "target":    {"nodes": [{"class": "line", "points": [[12.0, 40.0], [80.0, 40.0]]}, ...], "edges": [...]},
+  *  "target":    {"nodes": [{"class": "line", "construction": false, "points": [[12.0, 40.0], [80.0, 40.0]]}, ...], "edges": [...]},
   *  "predicted": {"nodes": [...], "edges": [{"class": "connected", "subject": 0, "obj": 3}, ...]},
   *  "matched":   {"0": [null, ...], "2": [1, ...], "4": [1, ...], "8": [1, ...]}}
   * }}}
@@ -24,8 +24,8 @@ object Transcripts:
 
   def write(model: String, corpus: Corpus, size: String, step: Int, drawings: Seq[(RecordGraph, RecordGraph)]): Path =
     def node(at: RecordNode) =
-      val points = at.points.map(point => f"[${point.x * Canvas}%.2f, ${point.y * Canvas}%.2f]").mkString("[", ", ", "]")
-      s"""{"class": "${at.nodeClass.toString.toLowerCase}", "points": $points}"""
+      val points = at.points.map(point => f"[${point.x * corpus.canvas}%.2f, ${point.y * corpus.canvas}%.2f]").mkString("[", ", ", "]")
+      s"""{"class": "${at.nodeClass.toString.toLowerCase}", "construction": ${at.isConstruction}, "points": $points}"""
     def edge(at: RecordEdge) =
       s"""{"class": "${at.edgeClass.toString.toLowerCase}", "subject": ${at.subject}, "obj": ${at.obj}}"""
     def record(at: RecordGraph) =
@@ -34,7 +34,7 @@ object Transcripts:
     val lines = drawings.zipWithIndex.map:
       case ((target, predicted), drawing) =>
         val matched = Tolerances.map: tolerance =>
-          val standsFor = RecordScoring.matching(target.nodes, predicted.nodes, tolerance / Canvas)
+          val standsFor = RecordScoring.matching(target.nodes, predicted.nodes, tolerance / corpus.canvas)
           val perNode = predicted.nodes.indices.map(standsFor.get(_).fold("null")(_.toString)).mkString("[", ", ", "]")
           s""""${tolerance.toInt}": $perNode"""
         s"""{"drawing": $drawing, "target": ${record(target)}, "predicted": ${record(predicted)}, "matched": ${matched.mkString("{", ", ", "}")}}"""

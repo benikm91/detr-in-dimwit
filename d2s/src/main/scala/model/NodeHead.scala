@@ -5,6 +5,7 @@ import dataset.EdgeClass
 import dataset.EdgeClasses
 import dataset.NodeClass
 import dataset.NodeClasses
+import dataset.IsConstruction
 import dataset.RecordEdges
 import dataset.RecordNodes
 import deepwit.base.AffineLayer
@@ -18,6 +19,7 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Node,
   import NodeHead.NodeLogits
 
   private val nodeClass = AffineLayer(params.nodeClass)
+  private val construction = AffineLayer(params.construction)
   private val startX = AffineLayer(params.startX)
   private val startY = AffineLayer(params.startY)
   private val endX = AffineLayer(params.endX)
@@ -30,6 +32,7 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Node,
   override def apply(embeddings: Tensor2[Node, Embedding, V]): NodeLogits[V] =
     NodeLogits(
       nodeClass = embeddings.vmap(Axis[Node])(nodeClass),
+      construction = embeddings.vmap(Axis[Node])(construction),
       startX = embeddings.vmap(Axis[Node])(startX),
       startY = embeddings.vmap(Axis[Node])(startY),
       endX = embeddings.vmap(Axis[Node])(endX),
@@ -52,6 +55,7 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Node,
     val (drawn, runsOn, bends) = (carries(_.isNode), carries(_.numPoints > 1), carries(_.numPoints > 2))
     RecordNodes(
       nodeClass = nodeClass,
+      construction = logits.construction.argmax(Axis[IsConstruction]) * drawn.asInt(VType[Int32]),
       startX = placed(logits.startX, drawn),
       startY = placed(logits.startY, drawn),
       endX = placed(logits.endX, runsOn),
@@ -62,9 +66,12 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Node,
 
 object NodeHead:
 
-  /** A record's nodes, scored: a class, and a pixel for every coordinate a class can place. */
+  /** A record's nodes, scored: a class, whether it is construction geometry, and a pixel for every
+    * coordinate a class can place.
+    */
   case class NodeLogits[V](
       nodeClass: Tensor2[Node, NodeClasses, V],
+      construction: Tensor2[Node, IsConstruction, V],
       startX: Tensor2[Node, Pixel, V],
       startY: Tensor2[Node, Pixel, V],
       endX: Tensor2[Node, Pixel, V],
@@ -75,6 +82,7 @@ object NodeHead:
 
   case class Params[V](
       nodeClass: AffineLayer.Params[Embedding, NodeClasses, V],
+      construction: AffineLayer.Params[Embedding, IsConstruction, V],
       startX: AffineLayer.Params[Embedding, Pixel, V],
       startY: AffineLayer.Params[Embedding, Pixel, V],
       endX: AffineLayer.Params[Embedding, Pixel, V],

@@ -4,7 +4,6 @@ import detr.*
 import detr.model.*
 import detr.eval.*
 import detr.config.*
-import dataset.Canvas
 import dataset.Corpus
 import dataset.RecordBatch
 import dataset.RecordNodes
@@ -99,23 +98,23 @@ def trainDetector(setup: DETRSetup): Unit =
     numHeads = setup.numHeads,
     embedding = setup.embedding,
     numQueries = setup.numQueries,
-    canvas = Canvas,
+    canvas = setup.corpus.canvas,
     key = Random.Key(setup.seed)
   )
 
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
-  val loss = HungarianLoss(VType[Float32], Canvas)
+  val loss = HungarianLoss(VType[Float32], setup.corpus.canvas)
 
   def cost(
       imgs: Tensor4[Batch |@| X, Width, Height, Channel, Float32],
       records: RecordBatch[Batch |@| X, Node, Relationship]
   )(params: DETR.Params[Float32]): Tensor0[Float32] =
     val model = DETR(params.asFloats(VType[Float16]))
-    zipvmap(Axis[Batch |@| X])(imgs.asFloat(VType[Float16]), records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY):
-      case (img, nodeClass, startX, startY, endX, endY, midX, midY) =>
-        loss(model.logits(img).asFloats(VType[Float32]), RecordNodes(nodeClass, startX, startY, endX, endY, midX, midY))
+    zipvmap(Axis[Batch |@| X])(imgs.asFloat(VType[Float16]), records.nodeClass, records.construction, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY):
+      case (img, nodeClass, construction, startX, startY, endX, endY, midX, midY) =>
+        loss(model.logits(img).asFloats(VType[Float32]), RecordNodes(nodeClass, construction, startX, startY, endX, endY, midX, midY))
     .mean
 
   def gradientStep(
@@ -151,6 +150,7 @@ def trainDetector(setup: DETRSetup): Unit =
       batch.pixels.shard(mesh, over),
       RecordBatch(
         nodeClass = records.nodeClass.shard(mesh, over),
+        construction = records.construction.shard(mesh, over),
         startX = records.startX.shard(mesh, over),
         startY = records.startY.shard(mesh, over),
         endX = records.endX.shard(mesh, over),

@@ -8,9 +8,6 @@ import me.shadaj.scalapy.py
 
 import scala.language.implicitConversions
 
-/** The side of a drawing, in pixels. Every corpus renders onto the same canvas. */
-val Canvas = 256
-
 /** One drawing and what is to be predicted in it. */
 final case class Sample[W, H, C, Target](image: Tensor3[W, H, C, Float32], target: Target):
   def map[T](f: Target => T): Sample[W, H, C, T] = Sample(image, f(target))
@@ -38,13 +35,13 @@ private trait Drawings derives Label
 
 /** A corpus of drawings, and how much room a record of it needs.
   *
-  * The corpora differ in what they draw and in nothing else: the same drawing vocabulary, the same
-  * canvas, the same files. So the only thing a corpus has to carry beyond where it is published is
-  * how many nodes and relationships the largest record of it holds — which is what every slot in
-  * this codebase is sized from, and the one number that must not be guessed. Both are measured
-  * over the training split, which is the wider of the two.
+  * The corpora differ in what they draw and in little else: the same record, the same files. So a
+  * corpus carries where it is published, the side of its drawings in pixels, and how many nodes
+  * and relationships the largest record of it holds — which is what every slot in this codebase is
+  * sized from, and the one number that must not be guessed. Both are measured over the training
+  * split, which is the widest.
   */
-enum Corpus(val name: String, val repoId: String, val maxNodes: Int, val maxEdges: Int):
+enum Corpus(val name: String, val repoId: String, val maxNodes: Int, val maxEdges: Int, val canvas: Int = 256, val folder: String = ""):
 
   /** Six lines forming an L, and up to six annotations of them. */
   case LShape extends Corpus("l-shape", "benikm91/l-shape", 12, 12)
@@ -62,6 +59,13 @@ enum Corpus(val name: String, val repoId: String, val maxNodes: Int, val maxEdge
     * circles and arcs alone rather than a sample of them.
     */
   case SketchGraphXL extends Corpus("sketch-xl", "benikm91/sketch-graph-xl", 16, 0)
+
+  /** The sketches of SketchGraphs as [[https://arxiv.org/abs/2109.14124 Vitruvion]] selected them,
+    * in Vitruvion's own renders and splits, which PICASSO and DAVINCI are measured on: lines,
+    * circles, arcs and points, construction geometry among them. Their primitives alone — the
+    * constraints the same files hold are left out.
+    */
+  case VitruvionPrimitives extends Corpus("vitruvion-primitives", "benikm91/sketch-graph-vitruvion", 16, 0, canvas = 128, folder = "records")
 
 object Corpus:
 
@@ -88,6 +92,7 @@ object DrawingDataset:
   enum Split(val fileName: String):
     case Train extends Split("train")
     case Validation extends Split("val")
+    case Test extends Split("test")
 
   /** Opens a split of a corpus, downloading the repository files on first use.
     *
@@ -103,7 +108,9 @@ object DrawingDataset:
   )(split: Split): DrawingDataset[W, H, C, Node, Edge] =
     val parsed = module.records(
       corpus.repoId,
+      corpus.folder,
       split.fileName,
+      corpus.canvas,
       corpus.maxNodes,
       corpus.maxEdges,
       NodeClass.NoNode.id,
@@ -111,6 +118,7 @@ object DrawingDataset:
       NodeClass.Annotation.id,
       NodeClass.Circle.id,
       NodeClass.Arc.id,
+      NodeClass.Point.id,
       EdgeClass.NoEdge.id,
       EdgeClass.Connected.id,
       EdgeClass.Annotates.id
@@ -118,19 +126,20 @@ object DrawingDataset:
     def read(at: Int) = Jax.jnp.asarray(parsed.applyDynamic("__getitem__")(at))
     new DrawingDataset(
       corpus,
-      module.drawings(corpus.repoId, split.fileName),
+      module.drawings(corpus.repoId, corpus.folder, split.fileName),
       parsed,
       RecordBatch(
         nodeClass = liftPyTensor[(Drawings, Node), Int32](read(0)),
-        startX = liftPyTensor[(Drawings, Node), Float32](read(1)),
-        startY = liftPyTensor[(Drawings, Node), Float32](read(2)),
-        endX = liftPyTensor[(Drawings, Node), Float32](read(3)),
-        endY = liftPyTensor[(Drawings, Node), Float32](read(4)),
-        midX = liftPyTensor[(Drawings, Node), Float32](read(5)),
-        midY = liftPyTensor[(Drawings, Node), Float32](read(6)),
-        edgeClass = liftPyTensor[(Drawings, Edge), Int32](read(7)),
-        subject = liftPyTensor[(Drawings, Edge), Int32](read(8)),
-        obj = liftPyTensor[(Drawings, Edge), Int32](read(9))
+        construction = liftPyTensor[(Drawings, Node), Int32](read(1)),
+        startX = liftPyTensor[(Drawings, Node), Float32](read(2)),
+        startY = liftPyTensor[(Drawings, Node), Float32](read(3)),
+        endX = liftPyTensor[(Drawings, Node), Float32](read(4)),
+        endY = liftPyTensor[(Drawings, Node), Float32](read(5)),
+        midX = liftPyTensor[(Drawings, Node), Float32](read(6)),
+        midY = liftPyTensor[(Drawings, Node), Float32](read(7)),
+        edgeClass = liftPyTensor[(Drawings, Edge), Int32](read(8)),
+        subject = liftPyTensor[(Drawings, Edge), Int32](read(9)),
+        obj = liftPyTensor[(Drawings, Edge), Int32](read(10))
       )
     )
 
@@ -175,6 +184,7 @@ final class DrawingDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Labe
     val drawing = Axis[Drawings].at(at)
     Record(
       records.nodeClass.slice(drawing),
+      records.construction.slice(drawing),
       records.startX.slice(drawing),
       records.startY.slice(drawing),
       records.endX.slice(drawing),
@@ -192,13 +202,14 @@ final class DrawingDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Labe
     def cut(at: Int) = parsed.applyDynamic("__getitem__")(at).applyDynamic("__getitem__")(taken)
     RecordBatch(
       nodeClass = liftPyTensor[(S, Node), Int32](cut(0)),
-      startX = liftPyTensor[(S, Node), Float32](cut(1)),
-      startY = liftPyTensor[(S, Node), Float32](cut(2)),
-      endX = liftPyTensor[(S, Node), Float32](cut(3)),
-      endY = liftPyTensor[(S, Node), Float32](cut(4)),
-      midX = liftPyTensor[(S, Node), Float32](cut(5)),
-      midY = liftPyTensor[(S, Node), Float32](cut(6)),
-      edgeClass = liftPyTensor[(S, Edge), Int32](cut(7)),
-      subject = liftPyTensor[(S, Edge), Int32](cut(8)),
-      obj = liftPyTensor[(S, Edge), Int32](cut(9))
+      construction = liftPyTensor[(S, Node), Int32](cut(1)),
+      startX = liftPyTensor[(S, Node), Float32](cut(2)),
+      startY = liftPyTensor[(S, Node), Float32](cut(3)),
+      endX = liftPyTensor[(S, Node), Float32](cut(4)),
+      endY = liftPyTensor[(S, Node), Float32](cut(5)),
+      midX = liftPyTensor[(S, Node), Float32](cut(6)),
+      midY = liftPyTensor[(S, Node), Float32](cut(7)),
+      edgeClass = liftPyTensor[(S, Edge), Int32](cut(8)),
+      subject = liftPyTensor[(S, Edge), Int32](cut(9)),
+      obj = liftPyTensor[(S, Edge), Int32](cut(10))
     )

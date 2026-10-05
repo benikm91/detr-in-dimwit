@@ -56,7 +56,7 @@ object RecordScoring:
           .fold(matched)(slot => matched + (slot -> index))
 
   private def isFound(target: RecordNode, found: RecordNode, tolerance: Float): Boolean =
-    target.nodeClass == found.nodeClass &&
+    target.nodeClass == found.nodeClass && target.isConstruction == found.isConstruction &&
       target.points.zip(found.points).forall((wanted, at) => (wanted.x - at.x).abs <= tolerance && (wanted.y - at.y).abs <= tolerance)
 
   /** A found relationship over the target's nodes, or nothing when it names a node that was not

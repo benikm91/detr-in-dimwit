@@ -7,6 +7,11 @@ import scala.util.Random
 /** Axis over the [[NodeClass]] values a node of a record is classified into. */
 trait NodeClasses derives Label
 
+/** Axis over whether a node is construction geometry: 0 for part of the outline, 1 for a reference
+  * the outline is constrained by, which a sketch draws dashed.
+  */
+trait IsConstruction derives Label
+
 /** Axis over the [[EdgeClass]] values a relationship of a record is classified into. */
 trait EdgeClasses derives Label
 
@@ -28,6 +33,9 @@ enum NodeClass(val id: Int, val pointNames: Seq[String]):
     * along it.
     */
   case Arc extends NodeClass(4, Seq("start", "end", "mid"))
+
+  /** A point of a sketch, drawn as a dot: a reference for constraints, such as a hole's centre. */
+  case Point extends NodeClass(5, Seq("at"))
 
   def numPoints: Int = pointNames.length
 
@@ -77,9 +85,11 @@ case class Point(x: Float, y: Float)
   * bends by its middle — a line by start and end, a circle by the ends of its diameter, an arc by
   * all three, an annotation by its start alone. What a class does not place is left at zero, and
   * the positions a record does not reach hold [[NodeClass.NoNode]] and are placed nowhere.
+  * `construction` is one where a node is construction geometry, along [[IsConstruction]].
   */
 case class RecordNodes[Node](
     nodeClass: Tensor1[Node, Int32],
+    construction: Tensor1[Node, Int32],
     startX: Tensor1[Node, Float32],
     startY: Tensor1[Node, Float32],
     endX: Tensor1[Node, Float32],
@@ -102,13 +112,14 @@ case class RecordEdges[Edge](
 /** What a drawing encodes: the nodes it draws, and the relationships between them. */
 case class Record[Node, Edge](nodes: RecordNodes[Node], edges: RecordEdges[Edge]):
 
-  export nodes.{nodeClass, startX, startY, endX, endY, midX, midY}
+  export nodes.{nodeClass, construction, startX, startY, endX, endY, midX, midY}
   export edges.{edgeClass, subject, obj}
 
 object Record:
 
   def apply[Node, Edge](
       nodeClass: Tensor1[Node, Int32],
+      construction: Tensor1[Node, Int32],
       startX: Tensor1[Node, Float32],
       startY: Tensor1[Node, Float32],
       endX: Tensor1[Node, Float32],
@@ -119,11 +130,12 @@ object Record:
       subject: Tensor1[Edge, Int32],
       obj: Tensor1[Edge, Int32]
   ): Record[Node, Edge] =
-    Record(RecordNodes(nodeClass, startX, startY, endX, endY, midX, midY), RecordEdges(edgeClass, subject, obj))
+    Record(RecordNodes(nodeClass, construction, startX, startY, endX, endY, midX, midY), RecordEdges(edgeClass, subject, obj))
 
 /** [[Record]] for a batch of drawings along the axis `S`. */
 case class RecordBatch[S, Node, Edge](
     nodeClass: Tensor2[S, Node, Int32],
+    construction: Tensor2[S, Node, Int32],
     startX: Tensor2[S, Node, Float32],
     startY: Tensor2[S, Node, Float32],
     endX: Tensor2[S, Node, Float32],
@@ -148,15 +160,15 @@ case class RecordBatch[S, Node, Edge](
     val padded = paddedTo(nodeSlots, edgeSlots, drawings)
     val (forNodes, forEdges) = key.split2()
     val (nodeKeys, edgeKeys) = (forNodes.splitToTensor(drawings), forEdges.splitToTensor(drawings))
-    val (classes, startXs, startYs, endXs, endYs, midXs, midYs, nodeOrders) =
-      zipvmap(Axis[S])(padded.nodeClass, padded.startX, padded.startY, padded.endX, padded.endY, padded.midX, padded.midY, nodeKeys):
-        case (nodeClass, startX, startY, endX, endY, midX, midY, key) =>
-          RecordBatch.permutedNodes(RecordNodes(nodeClass, startX, startY, endX, endY, midX, midY), key.item)
+    val (classes, constructions, startXs, startYs, endXs, endYs, midXs, midYs, nodeOrders) =
+      zipvmap(Axis[S])(padded.nodeClass, padded.construction, padded.startX, padded.startY, padded.endX, padded.endY, padded.midX, padded.midY, nodeKeys):
+        case (nodeClass, construction, startX, startY, endX, endY, midX, midY, key) =>
+          RecordBatch.permutedNodes(RecordNodes(nodeClass, construction, startX, startY, endX, endY, midX, midY), key.item)
     val (edgeClasses, subjects, objs) =
       zipvmap(Axis[S])(padded.edgeClass, padded.subject, padded.obj, nodeOrders, edgeKeys):
         case (edgeClass, subject, obj, nodeOrder, key) =>
           RecordBatch.permutedEdges(RecordEdges(edgeClass, subject, obj), nodeOrder, key.item)
-    RecordBatch(classes, startXs, startYs, endXs, endYs, midXs, midYs, edgeClasses, subjects, objs)
+    RecordBatch(classes, constructions, startXs, startYs, endXs, endYs, midXs, midYs, edgeClasses, subjects, objs)
 
   /** The same records in as many positions, the ones they do not reach holding nothing. */
   private def paddedTo(nodeSlots: AxisExtent[Node], edgeSlots: AxisExtent[Edge], drawings: AxisExtent[S])(using Label[S], Label[Node], Label[Edge]): RecordBatch[S, Node, Edge] =
@@ -170,6 +182,7 @@ case class RecordBatch[S, Node, Edge](
       concatenate(named, Tensor(Shape(drawings, emptyEdges), VType[Int32]).fill(0), Axis[Edge])
     RecordBatch(
       nodeClass = concatenate(nodeClass, Tensor(Shape(drawings, emptyNodes), VType[Int32]).fill(NodeClass.NoNode.id), Axis[Node]),
+      construction = concatenate(construction, Tensor(Shape(drawings, emptyNodes), VType[Int32]).fill(0), Axis[Node]),
       startX = nowhere(startX),
       startY = nowhere(startY),
       endX = nowhere(endX),
@@ -188,6 +201,7 @@ object RecordBatch:
     */
   private def permutedNodes[Node: Label](nodes: RecordNodes[Node], key: Key): (
       Tensor1[Node, Int32],
+      Tensor1[Node, Int32],
       Tensor1[Node, Float32],
       Tensor1[Node, Float32],
       Tensor1[Node, Float32],
@@ -200,6 +214,7 @@ object RecordBatch:
     def reordered[V](placed: Tensor1[Node, V]) = placed.take(Axis[Node])(order)
     (
       reordered(nodes.nodeClass),
+      reordered(nodes.construction),
       reordered(nodes.startX),
       reordered(nodes.startY),
       reordered(nodes.endX),
@@ -249,6 +264,7 @@ object RecordBatch:
     val placed = records.map(_.placed(nodes.size, edges.size))
     RecordBatch(
       nodeClass = Tensor2(batch, nodes.axis, VType[Int32]).fromArray(placed.map(_.nodeClass).toArray),
+      construction = Tensor2(batch, nodes.axis, VType[Int32]).fromArray(placed.map(_.construction).toArray),
       startX = Tensor2(batch, nodes.axis, VType[Float32]).fromArray(placed.map(_.startX).toArray),
       startY = Tensor2(batch, nodes.axis, VType[Float32]).fromArray(placed.map(_.startY).toArray),
       endX = Tensor2(batch, nodes.axis, VType[Float32]).fromArray(placed.map(_.endX).toArray),
@@ -261,7 +277,7 @@ object RecordBatch:
     )
 
 /** One drawn node of a record. */
-case class RecordNode(nodeClass: NodeClass, points: Seq[Point])
+case class RecordNode(nodeClass: NodeClass, isConstruction: Boolean, points: Seq[Point])
 
 /** One relationship of a record, by the index of the [[RecordNode]]s it links. */
 case class RecordEdge(edgeClass: EdgeClass, subject: Int, obj: Int)
@@ -282,6 +298,7 @@ case class RecordGraph(nodes: Seq[RecordNode], edges: Seq[RecordEdge]):
     def named(read: RecordGraph.Placement => Array[Int]) = Tensor1(edges.axis, VType[Int32]).fromArray(read(laidOut))
     Record(
       nodeClass = Tensor1(nodes.axis, VType[Int32]).fromArray(laidOut.nodeClass),
+      construction = Tensor1(nodes.axis, VType[Int32]).fromArray(laidOut.construction),
       startX = placedAt(_.startX),
       startY = placedAt(_.startY),
       endX = placedAt(_.endX),
@@ -313,6 +330,7 @@ case class RecordGraph(nodes: Seq[RecordNode], edges: Seq[RecordEdge]):
     def named(end: Int) = Array.tabulate(edgeSlots)(slot => related.lift(slot).flatMap(_._2.lift(end)).getOrElse(0))
     RecordGraph.Placement(
       nodeClass = Array.tabulate(nodeSlots)(slot => nodes.lift(slot).fold(NodeClass.NoNode)(_.nodeClass).id),
+      construction = Array.tabulate(nodeSlots)(slot => if nodes.lift(slot).exists(_.isConstruction) then 1 else 0),
       startX = placedAt(_.x, 0),
       startY = placedAt(_.y, 0),
       endX = placedAt(_.x, 1),
@@ -329,6 +347,7 @@ object RecordGraph:
   /** A record laid out along its two axes, ready to be uploaded. */
   private[dataset] case class Placement(
       nodeClass: Array[Int],
+      construction: Array[Int],
       startX: Array[Float],
       startY: Array[Float],
       endX: Array[Float],
@@ -347,6 +366,7 @@ object RecordGraph:
     read(
       RecordGraph.Placement(
         record.nodeClass.toArray,
+        record.construction.toArray,
         record.startX.toArray,
         record.startY.toArray,
         record.endX.toArray,
@@ -364,6 +384,7 @@ object RecordGraph:
     read(
       RecordGraph.Placement(
         nodes.nodeClass.toArray,
+        nodes.construction.toArray,
         nodes.startX.toArray,
         nodes.startY.toArray,
         nodes.endX.toArray,
@@ -378,14 +399,19 @@ object RecordGraph:
 
   /** Every record of a batch, read to the host — once for the batch, not once per drawing. */
   def of[S: Label, Node: Label, Edge: Label](records: RecordBatch[S, Node, Edge]): Seq[RecordGraph] =
-    val (nodeClass, startX, startY) = (records.nodeClass.toArray, records.startX.toArray, records.startY.toArray)
+    val (nodeClass, construction) = (records.nodeClass.toArray, records.construction.toArray)
+    val (startX, startY) = (records.startX.toArray, records.startY.toArray)
     val (endX, endY) = (records.endX.toArray, records.endY.toArray)
     val (midX, midY) = (records.midX.toArray, records.midY.toArray)
-    val (edgeClass, subject, obj) = (records.edgeClass.toArray, records.subject.toArray, records.obj.toArray)
+    // DimWit's `toArray` returns no rows at all for a tensor whose second axis is empty.
+    def perDrawing(named: Tensor2[S, Edge, Int32]) =
+      if named.shape(Axis[Edge]) == 0 then Array.fill(nodeClass.length)(Array.empty[Int]) else named.toArray
+    val (edgeClass, subject, obj) = (perDrawing(records.edgeClass), perDrawing(records.subject), perDrawing(records.obj))
     nodeClass.indices.map: drawing =>
       read(
         RecordGraph.Placement(
           nodeClass(drawing),
+          construction(drawing),
           startX(drawing),
           startY(drawing),
           endX(drawing),
@@ -405,7 +431,7 @@ object RecordGraph:
     def placedAt(at: Int) =
       Seq(Point(placed.startX(at), placed.startY(at)), Point(placed.endX(at), placed.endY(at)), Point(placed.midX(at), placed.midY(at)))
     RecordGraph(
-      nodes = nodeAt.keys.toSeq.sorted.map(at => RecordNode(nodeClass(at), placedAt(at).take(nodeClass(at).numPoints))),
+      nodes = nodeAt.keys.toSeq.sorted.map(at => RecordNode(nodeClass(at), placed.construction(at) == 1, placedAt(at).take(nodeClass(at).numPoints))),
       edges = edgeClass.indices.filter(edgeClass(_).isEdge).flatMap: at =>
         for
           subject <- nodeAt.get(placed.subject(at))
