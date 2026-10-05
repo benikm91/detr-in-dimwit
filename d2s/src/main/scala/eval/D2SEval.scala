@@ -9,6 +9,7 @@ import dataset.Canvas
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
+import dataset.EdgeClass
 import dataset.Metrics
 import dataset.NodeClass
 import dataset.NodeClasses
@@ -151,9 +152,11 @@ class Transcriber(nodes: AxisExtent[Node], drawings: Int = 1):
 
     /** Nothing written yet: every slot of every drawing empty. */
     val nothingWritten =
-      val (allNodes, noRelationships) = (Shape2(everyDrawing, nodes), Shape2(everyDrawing, Axis[Relationship] -> 0))
+      // One empty relationship slot rather than none: DimWit's `toArray` drops the drawings of a
+      // tensor whose relationship axis is empty.
+      val (allNodes, noRelationships) = (Shape2(everyDrawing, nodes), Shape2(everyDrawing, Axis[Relationship] -> 1))
       def nowhere = Tensor(allNodes, VType[Float32]).fill(0f)
-      def nothing = Tensor(noRelationships, VType[Int32]).fill(0)
+      def nothing = Tensor(noRelationships, VType[Int32]).fill(EdgeClass.NoEdge.id)
       RecordBatch[Drawing, Node, Relationship](
         nodeClass = Tensor(allNodes, VType[Int32]).fill(NodeClass.NoNode.id),
         startX = nowhere,
