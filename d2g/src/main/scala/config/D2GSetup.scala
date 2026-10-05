@@ -30,7 +30,10 @@ case class D2GSetup(
       */
     adamBeta2: Float = 0.98f,
     finalLearningRate: Float = 0f,
-    weightDecay: Float = 1e-4f,
+    /** AdamW's decoupled weight decay, taken per step times the learning rate. Strong enough to keep
+      * the weights, and with them the logits and activations, from growing without bound.
+      */
+    weightDecay: Float = 0.05f,
     maxGradientNorm: Float = 1f,
     warmupSamples: Int = 1_000 * 128,
     cooldownSamples: Int = 100_000 * 128,

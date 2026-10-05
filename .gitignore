@@ -23,3 +23,5 @@ detr/out
 d2g/out
 jobs.txt
 *.csv
+results/runs/
+sync_results.sh

@@ -48,7 +48,10 @@ case class DETRSetup(
 
     /** Where the cosine bottoms out. Aligned with the other models. */
     finalLearningRate: Float = 0f,
-    weightDecay: Float = 1e-4f,
+    /** AdamW's decoupled weight decay, taken per step times the learning rate. Strong enough to keep
+      * the weights, and with them the logits and activations, from growing without bound.
+      */
+    weightDecay: Float = 0.05f,
 
     /** Global L2 norm the gradients are rescaled to, as in the DETR paper. The set loss reassigns
       * which query is responsible for which object from step to step, so a batch that reshuffles
