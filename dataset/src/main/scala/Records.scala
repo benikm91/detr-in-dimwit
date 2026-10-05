@@ -49,32 +49,82 @@ object NodeClass:
   def indicator[V: IsFloating](vtype: VType[V])(holds: NodeClass => Boolean): Tensor1[NodeClasses, V] =
     Tensor1(Axis[NodeClasses], vtype).fromArray(values.map(nodeClass => if holds(nodeClass) then 1f else 0f))
 
+/** Where a constraint of a sketch takes hold of a node: the node as a whole, or one of its points. */
+enum Part:
+  case Whole, Start, End, Centre
+
 /** What a relationship of a record is, which a record holds as a node of its own so that a graph
   * is a set.
   *
-  * [[NoEdge]] marks a position the record does not reach, which is also where a transcription of
-  * its relationships stops.
+  * [[EdgeClass.NoEdge]] marks a position the record does not reach, which is also where a
+  * transcription of its relationships stops. A relationship that is not directed is held with its
+  * two nodes in ascending order: held the other way round, it is its [[mirrored]] class, which says
+  * the same of the two nodes swapped — `coincident end-start` of A and B is `coincident start-end`
+  * of B and A.
   */
-enum EdgeClass(val id: Int, val isSymmetric: Boolean):
-
-  case NoEdge extends EdgeClass(0, false)
-
-  /** Two lines meeting in a corner, held once with the two it links in ascending order. */
-  case Connected extends EdgeClass(1, true)
-
-  case Annotates extends EdgeClass(2, false)
+final case class EdgeClass private (id: Int, name: String, isDirected: Boolean, mirrorName: String):
 
   def isEdge: Boolean = this != EdgeClass.NoEdge
 
   def numLinks: Int = if isEdge then 2 else 0
 
+  def mirrored: EdgeClass = EdgeClass.named(mirrorName)
+
+  override def toString: String = name
+
 object EdgeClass:
 
+  /** The constraints of a CAD sketch, as SketchGraphs names them, each with the parts of its two
+    * nodes it joins. One that holds a single node joins that node to itself.
+    */
+  private val constraints: Seq[(String, Seq[(Part, Part)])] =
+    val anyParts = for first <- Part.values.toSeq; second <- Part.values.toSeq yield (first, second)
+    val wholes = Seq((Part.Whole, Part.Whole))
+    Seq(
+      "coincident" -> anyParts,
+      "concentric" -> anyParts,
+      "horizontal" -> anyParts,
+      "vertical" -> anyParts,
+      "midpoint" -> anyParts.filter((first, second) => first == Part.Whole || second == Part.Whole),
+      "fix" -> Part.values.toSeq.map(part => (part, part)),
+      "parallel" -> wholes,
+      "perpendicular" -> wholes,
+      "equal" -> wholes,
+      "tangent" -> wholes,
+      "normal" -> wholes
+    )
+
+  /** The name of a constraint joining two parts, as the labels of a sketch spell it. */
+  def constraint(kind: String, first: Part, second: Part): String =
+    s"$kind ${first.toString.toLowerCase}-${second.toString.toLowerCase}"
+
+  val values: IndexedSeq[EdgeClass] =
+    val held = Seq(("no edge", false, "no edge"), ("connected", false, "connected"), ("annotates", true, "annotates")) ++
+      constraints.flatMap: (kind, joins) =>
+        joins.map((first, second) => (constraint(kind, first, second), false, constraint(kind, second, first)))
+    held.zipWithIndex.map:
+      case ((name, isDirected, mirrorName), id) => EdgeClass(id, name, isDirected, mirrorName)
+    .toIndexedSeq
+
+  val NoEdge: EdgeClass = named("no edge")
+
+  /** Two lines meeting in a corner. */
+  val Connected: EdgeClass = named("connected")
+
+  val Annotates: EdgeClass = named("annotates")
+
+  def named(name: String): EdgeClass =
+    values.find(_.name == name).getOrElse(throw IllegalArgumentException(s"no edge class named '$name'"))
+
   def fromId(id: Int): EdgeClass =
-    values.find(_.id == id).getOrElse(throw IllegalArgumentException(s"unknown edge class id: $id"))
+    values.lift(id).getOrElse(throw IllegalArgumentException(s"unknown edge class id: $id"))
 
   def indicator[V: IsFloating](vtype: VType[V])(holds: EdgeClass => Boolean): Tensor1[EdgeClasses, V] =
-    Tensor1(Axis[EdgeClasses], vtype).fromArray(values.map(edgeClass => if holds(edgeClass) then 1f else 0f))
+    Tensor1(Axis[EdgeClasses], vtype).fromArray(values.map(edgeClass => if holds(edgeClass) then 1f else 0f).toArray)
+
+  /** The [[mirrored]] class of every class, by id. */
+  def mirrors: Tensor1[EdgeClasses, Int32] =
+    Tensor1(Axis[EdgeClasses], VType[Int32]).fromArray(values.map(_.mirrored.id).toArray)
 
 /** A point of the canvas, normalized to it. */
 case class Point(x: Float, y: Float)
@@ -242,13 +292,14 @@ object RecordBatch:
     def is(holds: EdgeClass => Boolean) =
       val marked = EdgeClass.indicator(VType[Float32])(holds).take(Axis[EdgeClasses])(classes)
       marked > Tensor.like(marked).fill(0f)
-    // A symmetric relationship names the two it relates in ascending order, and a position
-    // holding no relationship relates nothing.
+    // A relationship that is not directed names the two it relates in ascending order, as its
+    // mirror where that swaps them, and a position holding no relationship relates nothing.
+    val swapped = !is(_.isDirected) and subject > obj
     val nothing = Tensor.like(subject).fill(0)
     (
-      classes,
-      where(is(_.isEdge), where(is(_.isSymmetric), minimum(subject, obj), subject), nothing),
-      where(is(_.isEdge), where(is(_.isSymmetric), maximum(subject, obj), obj), nothing)
+      where(swapped, EdgeClass.mirrors.take(Axis[EdgeClasses])(classes), classes),
+      where(is(_.isEdge), where(swapped, obj, subject), nothing),
+      where(is(_.isEdge), where(swapped, subject, obj), nothing)
     )
 
   /** The order that reads the positions `holds` marks first, shuffled, and the empty ones after
@@ -323,8 +374,8 @@ case class RecordGraph(nodes: Seq[RecordNode], edges: Seq[RecordEdge]):
     require(nodes.size <= nodeSlots, s"a record of ${nodes.size} nodes does not fit in $nodeSlots")
     require(edges.size <= edgeSlots, s"a record of ${edges.size} relationships does not fit in $edgeSlots")
     val related = edges.map: edge =>
-      val ends = Seq(edge.subject, edge.obj)
-      (edge.edgeClass, if edge.edgeClass.isSymmetric then ends.sorted else ends)
+      if !edge.edgeClass.isDirected && edge.subject > edge.obj then (edge.edgeClass.mirrored, Seq(edge.obj, edge.subject))
+      else (edge.edgeClass, Seq(edge.subject, edge.obj))
     def placedAt(of: Point => Float, at: Int) =
       Array.tabulate(nodeSlots)(slot => nodes.lift(slot).flatMap(_.points.lift(at)).fold(0f)(of))
     def named(end: Int) = Array.tabulate(edgeSlots)(slot => related.lift(slot).flatMap(_._2.lift(end)).getOrElse(0))

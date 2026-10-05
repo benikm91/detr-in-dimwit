@@ -98,4 +98,4 @@ object DETRSetup:
     case Corpus.Rectilinear6to18 => 64
     case Corpus.SketchGraph      => 48
     case Corpus.SketchGraphXL    => 48
-    case Corpus.VitruvionPrimitives => 48
+    case Corpus.Vitruvion | Corpus.VitruvionPrimitives => 48

@@ -5,6 +5,7 @@ import dimwit.jax.Jax
 import dimwit.python.PyBridge.liftPyTensor
 import dimwit.tensor.Tensor4
 import me.shadaj.scalapy.py
+import me.shadaj.scalapy.py.SeqConverters
 
 import scala.language.implicitConversions
 
@@ -62,9 +63,12 @@ enum Corpus(val name: String, val repoId: String, val maxNodes: Int, val maxEdge
 
   /** The sketches of SketchGraphs as [[https://arxiv.org/abs/2109.14124 Vitruvion]] selected them,
     * in Vitruvion's own renders and splits, which PICASSO and DAVINCI are measured on: lines,
-    * circles, arcs and points, construction geometry among them. Their primitives alone — the
-    * constraints the same files hold are left out.
+    * circles, arcs and points, construction geometry among them, and the constraints between them
+    * that join two nodes, or one node to itself.
     */
+  case Vitruvion extends Corpus("vitruvion", "benikm91/sketch-graph-vitruvion", 16, 64, canvas = 128, folder = "records")
+
+  /** The same sketches, their primitives alone. */
   case VitruvionPrimitives extends Corpus("vitruvion-primitives", "benikm91/sketch-graph-vitruvion", 16, 0, canvas = 128, folder = "records")
 
 object Corpus:
@@ -121,7 +125,8 @@ object DrawingDataset:
       NodeClass.Point.id,
       EdgeClass.NoEdge.id,
       EdgeClass.Connected.id,
-      EdgeClass.Annotates.id
+      EdgeClass.Annotates.id,
+      EdgeClass.values.map(_.name).toPythonCopy
     )
     def read(at: Int) = Jax.jnp.asarray(parsed.applyDynamic("__getitem__")(at))
     new DrawingDataset(
