@@ -39,7 +39,7 @@ case class DETRSetup(
     checkpointEverySamples: Int = 20_000 * 128,
     numSamples: Int = 500_000 * 128,
     batchSize: Int = 512,
-    learningRate: Float = 3e-4f,
+    learningRate: Float = 6e-4f,
     /** Adam's memory of how large the gradients are, about 1 / (1 − β₂) steps. Short enough that a
       * sudden growth of the gradients is caught up with within a few dozen steps, rather than
       * taking steps several times the learning rate for hundreds of them.
@@ -67,7 +67,7 @@ case class DETRSetup(
     seed: Int = 0
 ):
   require(
-    numQueries > corpus.maxNodes,
+    numQueries >= corpus.maxNodes,
     s"$numQueries queries cannot answer for a drawing of up to ${corpus.maxNodes} objects"
   )
 
@@ -98,4 +98,4 @@ object DETRSetup:
     case Corpus.Rectilinear6to18 => 64
     case Corpus.SketchGraph      => 48
     case Corpus.SketchGraphXL    => 48
-    case Corpus.Vitruvion | Corpus.VitruvionPrimitives => 48
+    case Corpus.Vitruvion | Corpus.VitruvionPrimitives => 16
