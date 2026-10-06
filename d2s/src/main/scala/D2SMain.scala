@@ -11,6 +11,7 @@ import dataset.Corpus
   * [[d2sTrain]] trains a run.
   * [[d2sEval]] scores the newest run of that corpus and size (greedy decoding).
   * [[d2sPlot]] shows what it transcribes (visualization).
+  * [[d2sCorrections]] counts how much help its last checkpoint needs to write every drawing exactly.
   */
 
 @main
@@ -21,3 +22,6 @@ def d2sEval(corpus: String, size: String): Unit = scoreSetTranscriber(D2SSetup(C
 
 @main
 def d2sPlot(corpus: String, size: String): Unit = plotSetTranscriber(D2SSetup(Corpus.named(corpus), D2SModelConfiguration.named(size)))
+
+@main
+def d2sCorrections(corpus: String, size: String): Unit = correctSetTranscriber(D2SSetup(Corpus.named(corpus), D2SModelConfiguration.named(size)), size)
