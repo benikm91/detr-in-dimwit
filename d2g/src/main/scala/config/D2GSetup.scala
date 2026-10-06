@@ -35,7 +35,7 @@ case class D2GSetup(
       */
     weightDecay: Float = 0.05f,
     maxGradientNorm: Float = 1f,
-    warmupSamples: Int = 1_000 * 128,
+    warmupSamples: Int = 2_000 * 512,
     cooldownSamples: Int = 100_000 * 128,
     seed: Int = 42
 ):
