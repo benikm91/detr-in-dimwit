@@ -12,7 +12,9 @@ import scala.language.implicitConversions
 
 /** What a record's nodes cost the model that writes them down.
   *
-  * A prediction embedding may answer with any node the slots before it have not taken, so its cost
+  * The classes of a record are written down one after the other, in [[NodeClass.WrittenInOrder]],
+  * and a target laid out by [[dataset.RecordBatch.permuted]] holds them that way. Within its class,
+  * a prediction embedding may answer with any node the slots before it have not taken, so its cost
   * is the smallest dissimilarity to any of them rather than the dissimilarity to one. The slot just
   * past the last node is charged for saying so, which is how transcription knows where to stop.
   */
@@ -29,7 +31,8 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int)
     val pairs = Shape2(nodes, Axis[Candidate] -> nodes.size)
     val holdsNode = NodeClass.indicator(vtype)(_.isNode).take(Axis[NodeClasses])(target.nodeClass)
     val taken = holdsNode.sum
-    val candidates = triu(Tensor(pairs, vtype).fill(1f)) *! holdsNode.relabelTo(Axis[Candidate])
+    val sameClass = (target.nodeClass.broadcastTo(pairs) elementEquals_! target.nodeClass.relabelTo(Axis[Candidate])).asFloat(vtype)
+    val candidates = triu(Tensor(pairs, vtype).fill(1f)) * sameClass *! holdsNode.relabelTo(Axis[Candidate])
 
     val asked = candidates.max(Axis[Candidate])
     val guessed = distinctly(dissimilarity(a, target), dissimilarity(b, target), candidates)
