@@ -49,6 +49,19 @@ object NodeClass:
   def indicator[V: IsFloating](vtype: VType[V])(holds: NodeClass => Boolean): Tensor1[NodeClasses, V] =
     Tensor1(Axis[NodeClasses], vtype).fromArray(values.map(nodeClass => if holds(nodeClass) then 1f else 0f))
 
+  /** The order the classes of a record are written down in, the simplest first: what a node needs
+    * to be placed by grows from one point to three, and a node written later can be placed against
+    * the ones before it. Within a class there is no order.
+    */
+  val WrittenInOrder: Seq[NodeClass] = Seq(Point, Line, Circle, Arc, Annotation)
+
+  /** Where every class comes in [[WrittenInOrder]], and [[NoNode]] after all of them. */
+  def writtenAt[V: IsFloating](vtype: VType[V]): Tensor1[NodeClasses, V] =
+    Tensor1(Axis[NodeClasses], vtype).fromArray(values.map(nodeClass => WrittenInOrder.indexOf(nodeClass) match
+      case -1 => WrittenInOrder.size.toFloat
+      case at => at.toFloat
+    ))
+
 /** What a relationship of a record is, which a record holds as a node of its own so that a graph
   * is a set.
   *
@@ -147,13 +160,12 @@ case class RecordBatch[S, Node, Edge](
     obj: Tensor2[S, Edge, Int32]
 ):
 
-  /** The same records, laid out again in `nodeSlots` and `edgeSlots` positions with their nodes
-    * and their relationships each in a fresh random order, and the positions they do not reach
-    * last.
+  /** The same records, laid out again in `nodeSlots` and `edgeSlots` positions: their nodes class
+    * by class in [[NodeClass.WrittenInOrder]], their relationships in any order, each in a fresh
+    * random order within that, and the positions they do not reach last.
     *
-    * A record is a set, so the order it is written down in is the model's to be indifferent to,
-    * which is what drawing a new one every step is for. This one is drawn on the device — nothing
-    * is read back to lay it out again.
+    * What has no order is the model's to be indifferent to, which is what drawing a new one every
+    * step is for. This one is drawn on the device — nothing is read back to lay it out again.
     */
   def permuted(key: Key, nodeSlots: AxisExtent[Node], edgeSlots: AxisExtent[Edge])(using Label[S], Label[Node], Label[Edge]): RecordBatch[S, Node, Edge] =
     val drawings = nodeClass.shape.extent(Axis[S])
@@ -196,8 +208,9 @@ case class RecordBatch[S, Node, Edge](
 
 object RecordBatch:
 
-  /** One record's nodes in a fresh random order, with the positions it does not reach last, and
-    * the order they were read in — which is what its relationships name them by.
+  /** One record's nodes class by class, in a fresh random order within a class, with the
+    * positions it does not reach last, and the order they were read in — which is what its
+    * relationships name them by.
     */
   private def permutedNodes[Node: Label](nodes: RecordNodes[Node], key: Key): (
       Tensor1[Node, Int32],
@@ -210,7 +223,7 @@ object RecordBatch:
       Tensor1[Node, Float32],
       Tensor1[Node, Int32]
   ) =
-    val order = heldFirst(NodeClass.indicator(VType[Float32])(_.isNode).slice(Axis[NodeClasses].at(nodes.nodeClass)), key)
+    val order = inOrder(NodeClass.writtenAt(VType[Float32]).slice(Axis[NodeClasses].at(nodes.nodeClass)), key)
     def reordered[V](placed: Tensor1[Node, V]) = placed.slice(Axis[Node].at(order))
     (
       reordered(nodes.nodeClass),
@@ -232,7 +245,7 @@ object RecordBatch:
       nodeOrder: Tensor1[Node, Int32],
       key: Key
   ): (Tensor1[Edge, Int32], Tensor1[Edge, Int32], Tensor1[Edge, Int32]) =
-    val order = heldFirst(EdgeClass.indicator(VType[Float32])(_.isEdge).slice(Axis[EdgeClasses].at(edges.edgeClass)), key)
+    val order = inOrder(EdgeClass.indicator(VType[Float32])(!_.isEdge).slice(Axis[EdgeClasses].at(edges.edgeClass)), key)
     val classes = edges.edgeClass.slice(Axis[Edge].at(order))
     // A relationship names the nodes it relates by their position, and a node that sat at `at`
     // before sits at `renamed(at)` now.
@@ -251,13 +264,11 @@ object RecordBatch:
       where(is(_.isEdge), where(is(_.isSymmetric), maximum(subject, obj), obj), nothing)
     )
 
-  /** The order that reads the positions `holds` marks first, shuffled, and the empty ones after
-    * them.
-    */
-  private def heldFirst[L: Label](holds: Tensor1[L, Float32], key: Key): Tensor1[L, Int32] =
-    val slots = holds.shape.extent(Axis[L])
+  /** The order that reads the positions by ascending `rank`, shuffled within a rank. */
+  private def inOrder[L: Label](rank: Tensor1[L, Float32], key: Key): Tensor1[L, Int32] =
+    val slots = rank.shape.extent(Axis[L])
     val shuffle = dimwit.Random.permutation(slots)(key).asFloat(VType[Float32])
-    ((Tensor.like(holds).fill(1f) - holds) * Tensor.like(holds).fill(slots.size.toFloat) + shuffle).argsort(Axis[L])
+    (rank *! slots.size.toFloat + shuffle).argsort(Axis[L])
 
   /** A batch of records laid out in order, uploaded in five tensors rather than five per drawing. */
   def of[S: Label, Node: Label, Edge: Label](records: Seq[RecordGraph], batch: Axis[S], nodes: AxisExtent[Node], edges: AxisExtent[Edge]): RecordBatch[S, Node, Edge] =

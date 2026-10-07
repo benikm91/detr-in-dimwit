@@ -85,6 +85,25 @@ class RecordsSuite extends FunSuite:
     val drawnSolid = sketch.copy(nodes = Seq(dashed.copy(isConstruction = false), sketch.nodes(1)))
     assertEquals(RecordScoring.score(sketch, drawnSolid, tolerance = 0f).nodesFound, 1)
 
+  test("a record permuted on the device is written class by class, in any order within a class"):
+    val sketch = RecordGraph(
+      Seq(
+        RecordNode(NodeClass.Arc, false, Seq(Point(0.2f, 0.5f), Point(0.6f, 0.5f), Point(0.4f, 0.3f))),
+        RecordNode(NodeClass.Line, false, Seq(Point(0.1f, 0.1f), Point(0.9f, 0.1f))),
+        RecordNode(NodeClass.Point, false, Seq(Point(0.5f, 0.5f))),
+        RecordNode(NodeClass.Circle, true, Seq(Point(0.3f, 0.7f), Point(0.5f, 0.7f))),
+        RecordNode(NodeClass.Line, false, Seq(Point(0.1f, 0.9f), Point(0.9f, 0.9f)))
+      ),
+      Seq.empty
+    )
+    val laid = RecordBatch.of(Seq(sketch), Axis[Drawing], nodes, Axis[Edge] -> 0)
+    val orders = (1 to 10).map: seed =>
+      val written = RecordGraph.of(laid.permuted(dimwit.Random.Key(seed), nodes, Axis[Edge] -> 0)).head.nodes
+      assertEquals(written.toSet, sketch.nodes.toSet, s"seed $seed")
+      assertEquals(written.map(_.nodeClass), Seq(NodeClass.Point, NodeClass.Line, NodeClass.Line, NodeClass.Circle, NodeClass.Arc), s"seed $seed")
+      written
+    assert(orders.distinct.size > 1, "the two lines come in either order")
+
   test("a record survives being permuted, laid out and read back"):
     val random = scala.util.Random(7)
     for _ <- 1 to 20 do
