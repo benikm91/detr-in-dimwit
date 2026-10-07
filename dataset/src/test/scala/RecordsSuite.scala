@@ -85,44 +85,6 @@ class RecordsSuite extends FunSuite:
     val drawnSolid = sketch.copy(nodes = Seq(dashed.copy(isConstruction = false), sketch.nodes(1)))
     assertEquals(RecordScoring.score(sketch, drawnSolid, tolerance = 0f).nodesFound, 1)
 
-  test("the constraints of a sketch hold where they say, and survive being permuted on the device"):
-    val data = DrawingDataset.open(Corpus.Vitruvion)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation)
-    val sketches = data.samples.take(200).map(sample => RecordGraph.of(sample.target)).toSeq
-    assert(sketches.map(_.edges.size).sum > 1000, "the sketches hold their constraints")
-
-    def at(node: RecordNode, part: String): Point = (node.nodeClass, part) match
-      case (NodeClass.Circle, "centre") => Point((node.points(0).x + node.points(1).x) / 2, node.points(0).y)
-      case (NodeClass.Arc, "centre") =>
-        val Seq(a, b, c) = node.points
-        val twice = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y))
-        def squared(p: Point) = p.x * p.x + p.y * p.y
-        Point(
-          (squared(a) * (b.y - c.y) + squared(b) * (c.y - a.y) + squared(c) * (a.y - b.y)) / twice,
-          (squared(a) * (c.x - b.x) + squared(b) * (a.x - c.x) + squared(c) * (b.x - a.x)) / twice
-        )
-      case (_, "start") | (NodeClass.Point, "whole") => node.points(0)
-      case (_, "end")                                => node.points(1)
-    val pointOnPoint = """coincident (start|end|centre|whole)-(start|end|centre|whole)""".r
-    val held = for
-      sketch <- sketches
-      edge <- sketch.edges
-      (subject, obj) = (sketch.nodes(edge.subject), sketch.nodes(edge.obj))
-      case pointOnPoint(first, second) <- Seq(edge.edgeClass.name)
-      if (first != "whole" || subject.nodeClass == NodeClass.Point) && (second != "whole" || obj.nodeClass == NodeClass.Point)
-    yield
-      val (a, b) = (at(subject, first), at(obj, second))
-      math.hypot(a.x - b.x, a.y - b.y) * Corpus.Vitruvion.canvas
-    assert(held.size > 500, s"only ${held.size} point-on-point coincidences")
-    assert(held.count(_ < 0.05) >= held.size * 0.99, s"points held coincident lie apart: ${held.sorted.takeRight(5)} px")
-
-    val (nodeSlots, edgeSlots) = (Axis[Node] -> Corpus.Vitruvion.maxNodes, Axis[Edge] -> Corpus.Vitruvion.maxEdges)
-    val laid = RecordBatch.of(sketches, Axis[Drawing], nodeSlots, edgeSlots)
-    for seed <- 1 to 5 do
-      RecordGraph.of(laid.permuted(dimwit.Random.Key(seed), nodeSlots, edgeSlots)).lazyZip(sketches).foreach: (found, sketch) =>
-        assertEquals(found.nodes.toSet, sketch.nodes.toSet, s"seed $seed")
-        assertEquals(related(found), related(sketch), s"seed $seed")
-        found.edges.foreach(edge => assert(edge.subject <= edge.obj, s"seed $seed: $edge relates its nodes out of order"))
-
   test("a record survives being permuted, laid out and read back"):
     val random = scala.util.Random(7)
     for _ <- 1 to 20 do
@@ -153,7 +115,7 @@ class RecordsSuite extends FunSuite:
       permuted.edgeClass.toArray.lazyZip(permuted.subject.toArray).lazyZip(permuted.obj.toArray).foreach: (classes, subjects, objs) =>
         classes.lazyZip(subjects).lazyZip(objs).foreach: (held, subject, obj) =>
           val edgeClass = EdgeClass.fromId(held)
-          if !edgeClass.isDirected then assert(subject <= obj, s"$edgeClass relates $subject to $obj rather than its ends in ascending order")
+          if edgeClass.isSymmetric then assert(subject < obj, s"$edgeClass relates $subject to $obj rather than its ends in ascending order")
           if !edgeClass.isEdge then assertEquals((subject, obj), (0, 0), "an empty position relates nothing")
 
   test("a record is drawn as the picture it stands for"):
@@ -181,14 +143,13 @@ class RecordsSuite extends FunSuite:
       assert(onLine.nonEmpty, s"sample $index: a record of lines drew none")
       assertEquals(onLine.count(identity), onLine.size, s"sample $index: a line is drawn where the drawing has no ink near it")
 
-  /** What a record's relationships say in terms of its nodes rather than of their slots. One that
-    * is not directed says the same of its two nodes swapped, as its mirror.
+  /** What a record's relationships say in terms of its nodes rather than of their slots. A
+    * symmetric relationship says nothing by which of its two nodes comes first.
     */
-  private def related(record: RecordGraph): Set[Set[(EdgeClass, RecordNode, RecordNode)]] =
+  private def related(record: RecordGraph): Set[(EdgeClass, Set[RecordNode], Seq[RecordNode])] =
     record.edges.map: edge =>
-      val (subject, obj) = (record.nodes(edge.subject), record.nodes(edge.obj))
-      if edge.edgeClass.isDirected then Set((edge.edgeClass, subject, obj))
-      else Set((edge.edgeClass, subject, obj), (edge.edgeClass.mirrored, obj, subject))
+      val ends = Seq(record.nodes(edge.subject), record.nodes(edge.obj))
+      if edge.edgeClass.isSymmetric then (edge.edgeClass, ends.toSet, Seq.empty) else (edge.edgeClass, Set.empty[RecordNode], ends)
     .toSet
 
   /** Everything a permuted batch holds, as the host sees it. */

@@ -13,8 +13,8 @@ they are drawn, and the relationships between them in a canonical order, so
 that a record read back out of an adjacency matrix is the record it came from.
 Everything else (``HelpLine``, ``BothSidedArrow``, ``FinishDrawing``) is
 rendering, not record. A sketch, which the SketchGraphs corpus of Vitruvion is
-written in, holds its primitives in the pixels of its drawing, and the constraints
-between them.
+written in, holds its primitives in the pixels of its drawing; it also lists the
+constraints between them, which are not read.
 """
 
 import json
@@ -27,22 +27,17 @@ def drawings(repo_id, folder, split):
     return np.load(_file(repo_id, folder, split, "images.npy"), mmap_mode="r")
 
 
-def records(repo_id, folder, split, canvas, nodes, edges, no_node, line, annotation, circle, arc, point, no_edge, connected, annotates, edge_classes):
+def records(repo_id, folder, split, canvas, nodes, edges, no_node, line, annotation, circle, arc, point, no_edge, connected, annotates):
     """``(node_class, construction, start_x, start_y, end_x, end_y, mid_x, mid_y, edge_class,
     subject, obj)`` of every drawing, padded to ``nodes`` drawn nodes and ``edges`` relationships.
 
     A node is placed by where it starts, if it runs somewhere by where it ends, and if it bends by
     its middle, as a fraction of the ``canvas`` side; what a node does not place is left at zero.
-    ``edge_classes`` names every relationship class by its id. A corpus with no room for
-    relationships reads a sketch's primitives alone.
     """
-    edge_class_ids = {name: at for at, name in enumerate(edge_classes)}
-
     def record_of(label):
         held = json.loads(label)
         if "primitives" in held:
-            constraints = held["constraints"] if edges else []
-            return _record_of_sketch(held["primitives"], constraints, canvas, line, circle, arc, point, edge_class_ids)
+            return _record_of_sketch(held["primitives"], canvas, line, circle, arc, point)
         return _record_of(_actions(held), line, annotation, circle, arc, connected, annotates)
 
     with open(_file(repo_id, folder, split, "labels.jsonl"), encoding="utf-8") as labels:
@@ -107,16 +102,9 @@ def _record_of(actions, line, annotation, circle, arc, connected, annotates):
     return nodes, sorted(related)
 
 
-def _record_of_sketch(primitives, constraints, canvas, line, circle, arc, point, edge_class_ids):
-    """The ``(class, construction, xs, ys)`` nodes of one sketch, held as a record holds them, and
-    the ``(class, subject, object)`` relationships its constraints are.
-
-    A constraint names the part of each node it takes hold of, and that part goes into its class:
-    ``coincident end-start`` holds the end of its subject on the start of its object. One holding a
-    single node relates that node to itself. One holding more, a midpoint between two points, is no
-    relationship between two and is left out.
-    """
-    nodes, swapped = [], []
+def _record_of_sketch(primitives, canvas, line, circle, arc, point):
+    """The ``(class, construction, xs, ys)`` nodes of one sketch, held as a record holds them."""
+    nodes = []
     for primitive in primitives:
         held = [(x / canvas, y / canvas) for x, y in primitive["points"]]
         if primitive["type"] == "line":
@@ -125,37 +113,17 @@ def _record_of_sketch(primitives, constraints, canvas, line, circle, arc, point,
             along = 0 if abs(bx - ax) >= abs(by - ay) else 1
             (x1, y1), (x2, y2) = sorted(held, key=lambda at: at[along])
             nodes.append((line, primitive["construction"], (x1, x2), (y1, y2)))
-            swapped.append(held[0][along] > held[1][along])
         elif primitive["type"] == "circle":
             ((x, y),), radius = held, primitive["radius"] / canvas
             nodes.append((circle, primitive["construction"], (x - radius, x + radius), (y, y)))
-            swapped.append(False)
         elif primitive["type"] == "arc":
             # A sketch reads an arc counter-clockwise on the drawing, a record clockwise.
             (sx, sy), (mx, my), (ex, ey) = held
             nodes.append((arc, primitive["construction"], (ex, sx, mx), (ey, sy, my)))
-            swapped.append(True)
         else:
             ((x, y),) = held
             nodes.append((point, primitive["construction"], (x,), (y,)))
-            swapped.append(False)
-
-    def part(node, named):
-        """The part of a node a constraint names, as the record holds the node."""
-        if named in ("start", "end") and swapped[node]:
-            return "end" if named == "start" else "start"
-        return {None: "whole", "center": "centre"}.get(named, named)
-
-    related = []
-    for constraint in constraints:
-        # A few constraints name the same part twice, which holds it no more than once.
-        refs = list(dict.fromkeys(tuple(ref) for ref in constraint["refs"]))
-        if len(refs) > 2:
-            continue
-        (subject, held_by_subject), (obj, held_by_obj) = refs if len(refs) == 2 else refs * 2
-        name = "%s %s-%s" % (constraint["type"], part(subject, held_by_subject), part(obj, held_by_obj))
-        related.append((edge_class_ids[name], subject, obj))
-    return nodes, sorted(related)
+    return nodes, []
 
 
 def _actions(held):

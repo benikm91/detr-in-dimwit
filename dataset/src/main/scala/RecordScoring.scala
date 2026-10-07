@@ -68,11 +68,9 @@ object RecordScoring:
       obj <- matched.get(edge.obj)
     yield RecordEdge(edge.edgeClass, subject, obj)
 
-  /** A relationship that is not directed says the same with its two nodes swapped and its class
-    * mirrored.
-    */
+  /** A symmetric relationship says nothing by which of its two nodes comes first. */
   private def canonical(edge: RecordEdge): RecordEdge =
-    if !edge.edgeClass.isDirected && edge.subject > edge.obj then RecordEdge(edge.edgeClass.mirrored, edge.obj, edge.subject) else edge
+    if edge.edgeClass.isSymmetric && edge.subject > edge.obj then RecordEdge(edge.edgeClass, edge.obj, edge.subject) else edge
 
   private def multiset(edges: Seq[RecordEdge]): Map[RecordEdge, Int] =
     edges.groupBy(identity).view.mapValues(_.length).toMap
