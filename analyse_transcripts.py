@@ -13,8 +13,8 @@ RUNS = Path("results/runs")
 
 TRANSCRIPTS = {
     "d2s 6e-4": RUNS / "xl-512-lr6e-4-d2s-b098-wd05/d2s-sketch-xl-s-deep-125000.jsonl",
-    "detr q16 3e-4": RUNS / "xl-512-lr3e-4-detr-q16-b098/detr-sketch-xl-s-deep-125000.jsonl",
-    "detr q16 3e-4 wd 0.05": RUNS / "xl-512-lr3e-4-detr-q16-b098-wd05/detr-sketch-xl-s-deep-125000.jsonl",
+    "detr q16 6e-4": RUNS / "xl-512-lr6e-4-detr-q16-b098-wd05/detr-sketch-xl-s-deep-125000.jsonl",
+    "detr q16 3e-4": RUNS / "xl-512-lr3e-4-detr-q16-b098-wd05/detr-sketch-xl-s-deep-125000.jsonl",
 }
 
 # The tolerance a node is matched at, in pixels, and a looser one: a node matched only at the looser
