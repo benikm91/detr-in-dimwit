@@ -49,18 +49,6 @@ object NodeClass:
   def indicator[V: IsFloating](vtype: VType[V])(holds: NodeClass => Boolean): Tensor1[NodeClasses, V] =
     Tensor1(Axis[NodeClasses], vtype).fromArray(values.map(nodeClass => if holds(nodeClass) then 1f else 0f))
 
-  /** The order the classes of a record are written down in, the simplest first: what a node needs
-    * to be placed by grows from one point to three, and a node written later can be placed against
-    * the ones before it. Within a class there is no order.
-    */
-  val WrittenInOrder: Seq[NodeClass] = Seq(Point, Line, Circle, Arc, Annotation)
-
-  /** Where every class comes in [[WrittenInOrder]], and [[NoNode]] after all of them. */
-  def writtenAt[V: IsFloating](vtype: VType[V]): Tensor1[NodeClasses, V] =
-    Tensor1(Axis[NodeClasses], vtype).fromArray(values.map(nodeClass => WrittenInOrder.indexOf(nodeClass) match
-      case -1 => WrittenInOrder.size.toFloat
-      case at => at.toFloat
-    ))
 
 /** What a relationship of a record is, which a record holds as a node of its own so that a graph
   * is a set.
@@ -160,14 +148,23 @@ case class RecordBatch[S, Node, Edge](
     obj: Tensor2[S, Edge, Int32]
 ):
 
-  /** The same records, laid out again in `nodeSlots` and `edgeSlots` positions: their nodes class
-    * by class in [[NodeClass.WrittenInOrder]], their relationships in any order, each in a fresh
-    * random order within that, and the positions they do not reach last.
+  /** The same records, laid out again in `nodeSlots` and `edgeSlots` positions: their nodes by the
+    * rank of their class, lowest first, their relationships in any order, each in a fresh random
+    * order within a rank, and the positions they do not reach last.
     *
     * What has no order is the model's to be indifferent to, which is what drawing a new one every
     * step is for. This one is drawn on the device — nothing is read back to lay it out again.
+    *
+    * @param classRank Ranks [[NodeClass.NoNode]] above every class, so that the positions a record
+    *                  does not reach come last. Ranking every other class the same lays the nodes
+    *                  out in any order.
     */
-  def permuted(key: Key, nodeSlots: AxisExtent[Node], edgeSlots: AxisExtent[Edge])(using Label[S], Label[Node], Label[Edge]): RecordBatch[S, Node, Edge] =
+  def permuted(
+      key: Key,
+      nodeSlots: AxisExtent[Node],
+      edgeSlots: AxisExtent[Edge],
+      classRank: Tensor1[NodeClasses, Float32] = NodeClass.indicator(VType[Float32])(!_.isNode)
+  )(using Label[S], Label[Node], Label[Edge]): RecordBatch[S, Node, Edge] =
     val drawings = nodeClass.shape.extent(Axis[S])
     val padded = paddedTo(nodeSlots, edgeSlots, drawings)
     val (forNodes, forEdges) = key.split2()
@@ -175,7 +172,7 @@ case class RecordBatch[S, Node, Edge](
     val (classes, constructions, startXs, startYs, endXs, endYs, midXs, midYs, nodeOrders) =
       zipvmap(Axis[S])(padded.nodeClass, padded.construction, padded.startX, padded.startY, padded.endX, padded.endY, padded.midX, padded.midY, nodeKeys):
         case (nodeClass, construction, startX, startY, endX, endY, midX, midY, key) =>
-          RecordBatch.permutedNodes(RecordNodes(nodeClass, construction, startX, startY, endX, endY, midX, midY), key.item)
+          RecordBatch.permutedNodes(RecordNodes(nodeClass, construction, startX, startY, endX, endY, midX, midY), key.item, classRank)
     val (edgeClasses, subjects, objs) =
       zipvmap(Axis[S])(padded.edgeClass, padded.subject, padded.obj, nodeOrders, edgeKeys):
         case (edgeClass, subject, obj, nodeOrder, key) =>
@@ -208,11 +205,10 @@ case class RecordBatch[S, Node, Edge](
 
 object RecordBatch:
 
-  /** One record's nodes class by class, in a fresh random order within a class, with the
-    * positions it does not reach last, and the order they were read in — which is what its
-    * relationships name them by.
+  /** One record's nodes by the rank of their class, in a fresh random order within a rank, and the
+    * order they were read in — which is what its relationships name them by.
     */
-  private def permutedNodes[Node: Label](nodes: RecordNodes[Node], key: Key): (
+  private def permutedNodes[Node: Label](nodes: RecordNodes[Node], key: Key, classRank: Tensor1[NodeClasses, Float32]): (
       Tensor1[Node, Int32],
       Tensor1[Node, Int32],
       Tensor1[Node, Float32],
@@ -223,7 +219,7 @@ object RecordBatch:
       Tensor1[Node, Float32],
       Tensor1[Node, Int32]
   ) =
-    val order = inOrder(NodeClass.writtenAt(VType[Float32]).slice(Axis[NodeClasses].at(nodes.nodeClass)), key)
+    val order = inOrder(classRank.slice(Axis[NodeClasses].at(nodes.nodeClass)), key)
     def reordered[V](placed: Tensor1[Node, V]) = placed.slice(Axis[Node].at(order))
     (
       reordered(nodes.nodeClass),

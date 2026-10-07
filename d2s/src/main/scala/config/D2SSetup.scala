@@ -14,6 +14,8 @@ case class D2SSetup(
     numHeads: Int = 4,
     embedding: Int = 128,
     queryPool: Int = 6,
+    /** Whether the nodes of a record are written down in any order or in an order of their classes. */
+    nodeOrder: NodeOrder = NodeOrder.SimplestFirst,
 
     // Train configuration
     checkpointRoot: String,
@@ -39,7 +41,7 @@ case class D2SSetup(
 
   val nodeSlots: Int = corpus.maxNodes + 1 // One more due to the end prediction
 
-  override def toString: String = s"D2SSetup(${corpus.repoId}, layers=$numLayers, heads=$numHeads, embedding=$embedding, nodes=$nodeSlots, samples=$numSamples, batch=$batchSize)"
+  override def toString: String = s"D2SSetup(${corpus.repoId}, layers=$numLayers, order=$nodeOrder, heads=$numHeads, embedding=$embedding, nodes=$nodeSlots, samples=$numSamples, batch=$batchSize)"
 
 object D2SSetup:
 

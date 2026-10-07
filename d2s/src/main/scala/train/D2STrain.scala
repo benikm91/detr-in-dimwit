@@ -103,7 +103,7 @@ def trainSetTranscriber(setup: D2SSetup): Unit =
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
-  val nodeLoss = RemainingNodeLoss(VType[Float32], setup.corpus.canvas)
+  val nodeLoss = RemainingNodeLoss(VType[Float32], setup.corpus.canvas, setup.nodeOrder)
 
   /** The mean loss over the drawings of a batch, whatever axis `S` they lie along. */
   def cost[S: Label](
@@ -128,7 +128,7 @@ def trainSetTranscriber(setup: D2SSetup): Unit =
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
     val lossScale = state.lossScale
     val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
-      (params: D2S.Params[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, relationships), forQueries)(params))
+      (params: D2S.Params[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, relationships, setup.nodeOrder.classRank), forQueries)(params))
     )(state.params)
     val gradients = lossScale.unscaled(scaledGradients)
     val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)
