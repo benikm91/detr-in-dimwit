@@ -79,7 +79,6 @@ def trainSetTranscriber(setup: D2SSetup): Unit =
   val nodes = Axis[Node] -> setup.nodeSlots
   val relationships = Axis[Relationship] -> setup.corpus.maxEdges
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train)
-  val batches = data.batches(Axis[Batch] -> batchSize)
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 
@@ -195,7 +194,7 @@ def trainSetTranscriber(setup: D2SSetup): Unit =
   ))
 
   val started = System.nanoTime
-  batches
+  data.batches(Axis[Batch] -> batchSize, afterSteps = taken)
     .scanLeft(initialState):
       case (state, batch) =>
         val (images, records) = shard(batch)
