@@ -24,4 +24,4 @@ object Matching:
     def read(at: Int) = liftPyTensor1(columns.axis, VType[Int32])(pairs.bracketAccess(at))
     val (row, column) = (read(0), read(1))
     // Sorted by their column, every column's row lands at that column.
-    row.take(Axis[Column])(column.argsort(Axis[Column]))
+    row.slice(Axis[Column].at(column.argsort(Axis[Column])))

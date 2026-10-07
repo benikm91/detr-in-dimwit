@@ -5,6 +5,7 @@ import dataset.NodeClass
 import dataset.NodeClasses
 import dataset.IsConstruction
 import dataset.RecordNodes
+import deepwit.attention.KVCache
 import deepwit.base.AffineLayer
 import documentEncoder.DocumentEncoder
 import deepwit.embedder.LearnedAbsolutePositionalInjector
@@ -52,7 +53,7 @@ class D2S[V: IsFloating](params: D2S.Params[V]):
 
     val (carriedNodes, answeredNodes) =
       val takenNodes = nodePosition(embedNodes(taken))
-      val queryNodes = params.nodes.queries.take(Axis[PoolQuery])(nodeQueryIds) // take queries and broadcast along context
+      val queryNodes = params.nodes.queries.slice(Axis[PoolQuery].at(nodeQueryIds)) // take queries and broadcast along context
         .vmap(Axis[PoolQuery]): query =>
           nodePosition(query.broadcastTo(takenNodes.shape))
       nodeDecoder.forTraining(encodedDocument, takenNodes, queryNodes)
@@ -63,6 +64,33 @@ class D2S[V: IsFloating](params: D2S.Params[V]):
         (scored.nodeClass, scored.construction, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY)
 
     (carriedNodes, NodeQueryLogits(nodeClass, construction, startX, startY, endX, endY, midX, midY))
+
+  // Writing a record down one node at a time, as [[predict]] would have it at every slot, but
+  // projecting at each step only what the step adds.
+
+  /** The encoded document as every step of the decoder reads it. */
+  def read(encodedDocument: Tensor2[Patch, Embedding, V]): List[KVCache[Patch, V]] =
+    nodeDecoder.read(encodedDocument)
+
+  /** The decoder before any node is taken. */
+  def nothingTaken(slots: AxisExtent[Node]): List[KVCache[Node, V]] =
+    nodeDecoder.nothingTaken(slots)
+
+  /** Takes `node`, a record of one node, at `slot`, for the slots after it to read. */
+  def take(document: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32], node: RecordNodes[Node]): List[KVCache[Node, V]] =
+    val embedded = nodePosition.injectAt(slot)(embedNodes(node).slice(Axis[Node].at(0)))
+    nodeDecoder.take(document, taken, slot, embedded)
+
+  /** What every query of the pool answers at `slot`, given the nodes taken before it: logits of one
+    * node slot, the one asked about.
+    */
+  def answerAt(document: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32]): NodeQueryLogits[V] =
+    val asked = params.nodes.queries.vmap(Axis[PoolQuery])(nodePosition.injectAt(slot))
+    val (nodeClass, construction, startX, startY, endX, endY, midX, midY) =
+      nodeDecoder.answer(document, taken, slot, asked).vmap(Axis[PoolQuery]): answered =>
+        val scored = nodeHead(stack(Seq(answered), Axis[Node]))
+        (scored.nodeClass, scored.construction, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY)
+    NodeQueryLogits(nodeClass, construction, startX, startY, endX, endY, midX, midY)
 
 object D2S:
 

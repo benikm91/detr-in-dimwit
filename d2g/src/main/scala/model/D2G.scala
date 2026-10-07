@@ -74,7 +74,7 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
         val nodesPresentMask = !(taken.nodes.nodeClass elementEquals_! NodeClass.NoNode.id)
         NodeSource(carriedNodes, nodesPresentMask)
       val takenEdges = edgePosition(embedEdges(taken.edges))
-      val queryEdges = params.edges.queries.take(Axis[PoolQuery])(edgeQueryIds) // take queries and broadcast along context
+      val queryEdges = params.edges.queries.slice(Axis[PoolQuery].at(edgeQueryIds)) // take queries and broadcast along context
         .vmap(Axis[PoolQuery]): query =>
           edgePosition(query.broadcastTo(takenEdges.shape))
       edgeDecoder.forTraining(encodedDocument, nodeSource, takenEdges, queryEdges)

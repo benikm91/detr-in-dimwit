@@ -27,7 +27,7 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int)
     val (a, b) = (answered.at(0), answered.at(1))
     val nodes = target.nodeClass.shape.extent(Axis[Node])
     val pairs = Shape2(nodes, Axis[Candidate] -> nodes.size)
-    val holdsNode = NodeClass.indicator(vtype)(_.isNode).take(Axis[NodeClasses])(target.nodeClass)
+    val holdsNode = NodeClass.indicator(vtype)(_.isNode).slice(Axis[NodeClasses].at(target.nodeClass))
     val taken = holdsNode.sum
     val candidates = triu(Tensor(pairs, vtype).fill(1f)) *! holdsNode.relabelTo(Axis[Candidate])
 
@@ -47,8 +47,8 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int)
     val candidateClass = target.nodeClass.relabelTo(Axis[Candidate])
     def placed(scores: Tensor2[Node, Pixel, V], coordinate: Tensor1[Node, Float32]) =
       costOfValue(scores, Pixels.of(coordinate, canvas).relabelTo(Axis[Candidate]))
-    val runsOn = NodeClass.indicator(vtype)(_.numPoints > 1).take(Axis[NodeClasses])(candidateClass)
-    val bends = NodeClass.indicator(vtype)(_.numPoints > 2).take(Axis[NodeClasses])(candidateClass)
+    val runsOn = NodeClass.indicator(vtype)(_.numPoints > 1).slice(Axis[NodeClasses].at(candidateClass))
+    val bends = NodeClass.indicator(vtype)(_.numPoints > 2).slice(Axis[NodeClasses].at(candidateClass))
     val ends = placed(logits.endX, target.endX) + placed(logits.endY, target.endY)
     val middles = placed(logits.midX, target.midX) + placed(logits.midY, target.midY)
     costOfValue(logits.nodeClass, candidateClass) +
@@ -94,7 +94,7 @@ def costOfValue[Slot: Label, Candidate: Label, L: Label, V: IsFloating](
     logits: Tensor2[Slot, L, V],
     values: Tensor1[Candidate, Int32]
 ): Tensor2[Slot, Candidate, V] =
-  val chosen = logits.take(Axis[L])(values)
+  val chosen = logits.slice(Axis[L].at(values))
   logNormalizer(logits) -! chosen
 
 /** The cross entropy of every position's scores against one class, which is the one that ends the

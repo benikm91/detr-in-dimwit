@@ -260,8 +260,8 @@ object RecordBatch:
       Tensor1[Node, Float32],
       Tensor1[Node, Int32]
   ) =
-    val order = heldFirst(NodeClass.indicator(VType[Float32])(_.isNode).take(Axis[NodeClasses])(nodes.nodeClass), key)
-    def reordered[V](placed: Tensor1[Node, V]) = placed.take(Axis[Node])(order)
+    val order = heldFirst(NodeClass.indicator(VType[Float32])(_.isNode).slice(Axis[NodeClasses].at(nodes.nodeClass)), key)
+    def reordered[V](placed: Tensor1[Node, V]) = placed.slice(Axis[Node].at(order))
     (
       reordered(nodes.nodeClass),
       reordered(nodes.construction),
@@ -282,22 +282,22 @@ object RecordBatch:
       nodeOrder: Tensor1[Node, Int32],
       key: Key
   ): (Tensor1[Edge, Int32], Tensor1[Edge, Int32], Tensor1[Edge, Int32]) =
-    val order = heldFirst(EdgeClass.indicator(VType[Float32])(_.isEdge).take(Axis[EdgeClasses])(edges.edgeClass), key)
-    val classes = edges.edgeClass.take(Axis[Edge])(order)
+    val order = heldFirst(EdgeClass.indicator(VType[Float32])(_.isEdge).slice(Axis[EdgeClasses].at(edges.edgeClass)), key)
+    val classes = edges.edgeClass.slice(Axis[Edge].at(order))
     // A relationship names the nodes it relates by their position, and a node that sat at `at`
     // before sits at `renamed(at)` now.
     val renamed = nodeOrder.argsort(Axis[Node])
-    def moved(named: Tensor1[Edge, Int32]) = renamed.take(Axis[Node])(named.take(Axis[Edge])(order))
+    def moved(named: Tensor1[Edge, Int32]) = renamed.slice(Axis[Node].at(named.slice(Axis[Edge].at(order))))
     val (subject, obj) = (moved(edges.subject), moved(edges.obj))
     def is(holds: EdgeClass => Boolean) =
-      val marked = EdgeClass.indicator(VType[Float32])(holds).take(Axis[EdgeClasses])(classes)
+      val marked = EdgeClass.indicator(VType[Float32])(holds).slice(Axis[EdgeClasses].at(classes))
       marked > Tensor.like(marked).fill(0f)
     // A relationship that is not directed names the two it relates in ascending order, as its
     // mirror where that swaps them, and a position holding no relationship relates nothing.
     val swapped = !is(_.isDirected) and subject > obj
     val nothing = Tensor.like(subject).fill(0)
     (
-      where(swapped, EdgeClass.mirrors.take(Axis[EdgeClasses])(classes), classes),
+      where(swapped, EdgeClass.mirrors.slice(Axis[EdgeClasses].at(classes)), classes),
       where(is(_.isEdge), where(swapped, obj, subject), nothing),
       where(is(_.isEdge), where(swapped, subject, obj), nothing)
     )
