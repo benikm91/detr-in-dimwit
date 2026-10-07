@@ -61,7 +61,7 @@ def scoreTranscriber(setup: D2GSetup, size: String): Unit =
       .flatMap(batch => batch.map(sample => RecordGraph.of(sample.target)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val csv = Metrics.Csv("d2g", setup.corpus, size, Runs.parameters(checkpoints.loadLatest[D2GTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("d2g", setup.corpus, size, Split.Validation, Runs.parameters(checkpoints.loadLatest[D2GTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
   checkpoints.iterations.reverse.foreach: step =>
@@ -71,7 +71,7 @@ def scoreTranscriber(setup: D2GSetup, size: String): Unit =
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-      println(s"transcripts written to ${Transcripts.write("d2g", setup.corpus, size, step, drawings)}")
+      println(s"transcripts written to ${Transcripts.write("d2g", setup.corpus, size, Split.Validation, step, drawings)}")
 
 /** Plots what a trained model transcribes.
   *

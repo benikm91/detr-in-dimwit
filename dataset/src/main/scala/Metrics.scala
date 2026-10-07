@@ -4,8 +4,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
-/** What a run is measured by: every checkpoint, at every tolerance, scored on the validation
-  * split — and at every threshold, where the model decides by one.
+/** What a run is measured by: its checkpoints, at every tolerance, scored on a split — and at
+  * every threshold, where the model decides by one.
   */
 object Metrics:
 
@@ -15,12 +15,12 @@ object Metrics:
     "model,corpus,size,step,threshold,tolerance,parameters,training_seconds," +
       "node_recall,node_precision,nodes_exact,edge_recall,edge_precision,records_exact"
 
-  /** `<model>-<corpus>-<size>.csv` in [[Runs.outputDir]], begun with its header alone. Rows are
+  /** `<model>-<corpus>-<size>-<split>.csv` in [[Runs.outputDir]], begun with its header alone. Rows are
     * appended as each checkpoint is scored, so a run cut short keeps the checkpoints it reached. A
     * percentage over nothing — a detector's relationships — is left blank.
     */
-  class Csv(model: String, corpus: Corpus, size: String, parameters: Int, trainingSeconds: Option[Long]):
-    val path = Path.of(Runs.outputDir, s"$model-${corpus.name}-$size.csv")
+  class Csv(model: String, corpus: Corpus, size: String, split: DrawingDataset.Split, parameters: Int, trainingSeconds: Option[Long]):
+    val path = Path.of(Runs.outputDir, s"$model-${corpus.name}-$size-${split.fileName}.csv")
     Files.createDirectories(path.getParent)
     Files.writeString(path, Header + "\n")
 

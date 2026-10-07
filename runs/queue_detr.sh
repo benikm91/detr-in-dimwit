@@ -1,7 +1,8 @@
 #!/bin/bash
 #
-# Queues a detr training job per corpus and model size. Every job notes itself in
-# `jobs.txt` as it starts, and every training job queues its own scoring job when it finishes.
+# Queues a detr training job per corpus and model size. Every job notes itself in `jobs.txt` as it
+# starts. Every training job queues its scoring on the validation split when it finishes, and that
+# queues the scoring of the last checkpoint on the test split.
 #
 #   runs/queue_detr.sh              # every configuration below, sharing one OUTPUT_DIR
 #   runs/queue_detr.sh l-shape xs   # one configuration, in an OUTPUT_DIR of its own

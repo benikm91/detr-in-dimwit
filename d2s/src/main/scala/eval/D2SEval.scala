@@ -31,17 +31,17 @@ import viz.PlotTargets.websocket
 
 import scala.language.implicitConversions
 
-/** Scores every checkpoint of the newest run of a setup on the whole validation split, the last
-  * checkpoint first, and writes the metrics as one CSV, and what the last checkpoint wrote down
-  * for every drawing as [[Transcripts]].
+/** Scores the newest run of a setup on a whole split, and writes the metrics as one CSV, and what
+  * the last checkpoint wrote down for every drawing as [[Transcripts]]. On the validation split
+  * every checkpoint is scored, the last first; the test split is looked at once, by the last alone.
   */
-def scoreSetTranscriber(setup: D2SSetup, size: String): Unit =
+def scoreSetTranscriber(setup: D2SSetup, size: String, split: Split): Unit =
   dimwit.initialize()
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
   val nodes = Axis[Node] -> setup.nodeSlots
-  val data = open(setup, Split.Validation)
+  val data = open(setup, split)
   println(s"pool of ${setup.queryPool} queries, ${data.numSamples} drawings\n")
 
   val transcriber = Transcriber(nodes, TranscribedTogether)
@@ -56,17 +56,20 @@ def scoreSetTranscriber(setup: D2SSetup, size: String): Unit =
       .flatMap(batch => batch.map(sample => RecordGraph.of(sample.target).copy(edges = Seq.empty)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val csv = Metrics.Csv("d2s", setup.corpus, size, Runs.parameters(checkpoints.loadLatest[D2STrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("d2s", setup.corpus, size, split, Runs.parameters(checkpoints.loadLatest[D2STrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
-  checkpoints.iterations.reverse.foreach: step =>
+  val scored = split match
+    case Split.Test => Seq(checkpoints.iterations.last)
+    case _          => checkpoints.iterations.reverse
+  scored.foreach: step =>
     println(s"scoring checkpoint $step")
     val drawings = transcribed(checkpoints.load[D2STrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
     val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => RecordScoring.score(target, written, tolerance / setup.corpus.canvas))))
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-      println(s"transcripts written to ${Transcripts.write("d2s", setup.corpus, size, step, drawings)}")
+      println(s"transcripts written to ${Transcripts.write("d2s", setup.corpus, size, split, step, drawings)}")
 
 /** Plots what a trained model transcribes.
   *

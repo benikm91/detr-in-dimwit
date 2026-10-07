@@ -23,7 +23,7 @@
 #
 # `runs/queue_d2g.sh` is the usual way in; `sbatch` hands the environment on to the job.
 # CACHE_DIR is where the corpora land, so that the next job does not download them again.
-# OUTPUT_DIR is where `d2g-<corpus>-<size>.csv` ends up: what is left of the job once the
+# OUTPUT_DIR is where `d2g-<corpus>-<size>-<split>.csv` ends up: what is left of the job once the
 # instance is wiped. CHECKPOINT_DIR is where the checkpoints go, under OUTPUT_DIR unless it is set
 # otherwise: the scoring job reads them back, and they are yours to delete once it has.
 
@@ -68,7 +68,7 @@ module load sarus/1.6.4
 
 # DimWit, DeepWit, PlotWit and dimwit-sharding come published inside the image, at the versions
 # build.sbt asks for. A new release of any of them needs a new image.
-IMAGE="benikm91/dimwit-gpu:deepwit-0.2.1"
+IMAGE="benikm91/dimwit-gpu:kv-cache-control-flow"
 sarus pull "$IMAGE"
 
 sarus run \
@@ -154,5 +154,5 @@ if [[ $STAGE == train ]]; then
   echo "queued scoring as $evalId"
 else
   echo "job finished, metrics in $OUTPUT_DIR:"
-  ls -la "$OUTPUT_DIR"/d2g-"$CORPUS"-"$SIZE".csv
+  ls -la "$OUTPUT_DIR"/d2g-"$CORPUS"-"$SIZE"-*.csv
 fi

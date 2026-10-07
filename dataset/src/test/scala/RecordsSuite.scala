@@ -40,7 +40,7 @@ class RecordsSuite extends FunSuite:
       Metrics.Row(10000, None, 8f, Seq(detected, detected.copy(nodesExact = true), detected.copy(nodesExact = true, isExact = true))),
       Metrics.Row(20000, Some(0.5f), 8f, Seq(detected))
     )
-    val csv = Metrics.Csv("test", Corpus.LShape, "xs", parameters = 123, trainingSeconds = Some(45))
+    val csv = Metrics.Csv("test", Corpus.LShape, "xs", Split.Validation, parameters = 123, trainingSeconds = Some(45))
     rows.foreach(row => csv.append(Seq(row)))
     val lines = java.nio.file.Files.readAllLines(csv.path)
     java.nio.file.Files.delete(csv.path)
@@ -59,7 +59,7 @@ class RecordsSuite extends FunSuite:
     )
     val threePixelsOff = RecordNode(NodeClass.Line, false, Seq(Point(13 * pixel, 20 * pixel), Point(50 * pixel, 20 * pixel)))
     val written = RecordGraph(Seq(target.nodes(1), threePixelsOff, RecordNode(NodeClass.Circle, false, Seq(Point(0f, 0f), Point(0.1f, 0f)))), Seq.empty)
-    val path = Transcripts.write("test", Corpus.LShape, "xs", 1000, Seq((target, written)))
+    val path = Transcripts.write("test", Corpus.LShape, "xs", Split.Validation, 1000, Seq((target, written)))
     val line = java.nio.file.Files.readAllLines(path).get(0)
     java.nio.file.Files.delete(path)
     assert(line.contains(""""points": [[10.00, 20.00], [50.00, 20.00]]"""), line)

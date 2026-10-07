@@ -22,7 +22,7 @@ import java.nio.file.Path
   */
 object Transcripts:
 
-  def write(model: String, corpus: Corpus, size: String, step: Int, drawings: Seq[(RecordGraph, RecordGraph)]): Path =
+  def write(model: String, corpus: Corpus, size: String, split: DrawingDataset.Split, step: Int, drawings: Seq[(RecordGraph, RecordGraph)]): Path =
     def node(at: RecordNode) =
       val points = at.points.map(point => f"[${point.x * corpus.canvas}%.2f, ${point.y * corpus.canvas}%.2f]").mkString("[", ", ", "]")
       s"""{"class": "${at.nodeClass.toString.toLowerCase}", "construction": ${at.isConstruction}, "points": $points}"""
@@ -39,6 +39,6 @@ object Transcripts:
           s""""${tolerance.toInt}": $perNode"""
         s"""{"drawing": $drawing, "target": ${record(target)}, "predicted": ${record(predicted)}, "matched": ${matched.mkString("{", ", ", "}")}}"""
 
-    val path = Path.of(Runs.outputDir, s"$model-${corpus.name}-$size-$step.jsonl")
+    val path = Path.of(Runs.outputDir, s"$model-${corpus.name}-$size-${split.fileName}-$step.jsonl")
     Files.createDirectories(path.getParent)
     Files.writeString(path, lines.mkString("", "\n", "\n"))
