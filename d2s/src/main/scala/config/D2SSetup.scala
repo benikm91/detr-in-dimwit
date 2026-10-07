@@ -19,8 +19,8 @@ case class D2SSetup(
 
     // Train configuration
     checkpointRoot: String,
-    checkpointEverySamples: Int = 20_000 * 128,
-    numSamples: Int = 500_000 * 128,
+    checkpointEverySamples: Int = 40_000 * 128,
+    numSamples: Int = 1_070_000 * 128,
     batchSize: Int = 512,
     learningRate: Float = 3e-4f,
     /** Adam's memory of how large the gradients are, about 1 / (1 − β₂) steps. Short enough that a
@@ -35,7 +35,7 @@ case class D2SSetup(
     weightDecay: Float = 0.05f,
     maxGradientNorm: Float = 1f,
     warmupSamples: Int = 1_000 * 128,
-    cooldownSamples: Int = 100_000 * 128,
+    cooldownSamples: Int = 214_000 * 128,
     seed: Int = 42
 ):
 
