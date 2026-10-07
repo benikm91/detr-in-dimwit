@@ -4,7 +4,7 @@
 #SBATCH --partition=gpu
 #SBATCH --account=cai_cv
 #SBATCH --gres=gpu:4
-#SBATCH --exclude=sanjose,irvine,salinas,losangeles
+#SBATCH --exclude=sanjose,irvine,salinas
 #SBATCH --time=6:00:00
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/%x_%j.out
 #SBATCH --error=/cluster/home/%u/.logs/slurm/%j/%x_%j.err
