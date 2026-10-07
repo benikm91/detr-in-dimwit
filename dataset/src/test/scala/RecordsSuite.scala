@@ -143,6 +143,16 @@ class RecordsSuite extends FunSuite:
       assert(onLine.nonEmpty, s"sample $index: a record of lines drew none")
       assertEquals(onLine.count(identity), onLine.size, s"sample $index: a line is drawn where the drawing has no ink near it")
 
+  test("batches taken after a number of steps go on where that many steps left off, into the next pass"):
+    val data = DrawingDataset.open(Corpus.LShape)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation)
+    val batch = Axis[Drawing] -> 64
+    val perPass = data.numSamples / batch.size
+    def read(drawn: Batch[Drawing, Width, Height, RecordBatch[Drawing, Node, Edge]]) =
+      (drawn.pixels.asInt(VType[Int32]).toArray.map(_.map(_.toSeq).toSeq).toSeq, drawn.target.nodeClass.toArray.map(_.toSeq).toSeq)
+    val throughOnePass = data.batches(batch, afterSteps = 0).map(read).take(perPass + 2).toSeq
+    Seq(1, perPass - 1, perPass + 1).foreach: steps =>
+      assertEquals(read(data.batches(batch, afterSteps = steps).next()), throughOnePass(steps), s"after $steps steps")
+
   /** What a record's relationships say in terms of its nodes rather than of their slots. A
     * symmetric relationship says nothing by which of its two nodes comes first.
     */

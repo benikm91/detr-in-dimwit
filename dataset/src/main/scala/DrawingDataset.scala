@@ -163,11 +163,14 @@ final class DrawingDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Labe
 
   /** Batches of drawings, for as long as they are asked for, on the host. The drawings were
     * generated independently of one another, so reading them in order is already a shuffle.
+    *
+    * @param afterSteps The batches already taken, which are passed over without being read: a run
+    *                   that carries on from a checkpoint reads on where it left off.
     */
-  def batches[S: Label](batch: AxisExtent[S]): Iterator[Batch[S, W, H, RecordBatch[S, Node, Edge]]] =
+  def batches[S: Label](batch: AxisExtent[S], afterSteps: Int): Iterator[Batch[S, W, H, RecordBatch[S, Node, Edge]]] =
     require(batch.size <= numSamples, s"a batch of ${batch.size} exceeds the $numSamples drawings of the split")
     val starts = 0 to numSamples - batch.size by batch.size
-    Iterator.continually(starts).flatten.map(from => Batch(stored(batch, from), recordsIn(batch, from)))
+    Iterator.continually(starts).flatten.drop(afterSteps).map(from => Batch(stored(batch, from), recordsIn(batch, from)))
 
   override def toString: String = s"DrawingDataset(${corpus.repoId}, drawings=$numSamples, nodes=${corpus.maxNodes})"
 

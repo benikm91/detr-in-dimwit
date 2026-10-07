@@ -81,7 +81,6 @@ def trainDetector(setup: DETRSetup): Unit =
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numTotalSteps steps")
 
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train)
-  val batches = data.batches(Axis[Batch] -> batchSize)
 
   /** Warmup, then the rate held, then a cosine cooldown over the last stretch. Adam orbits a
     * solution at a distance the rate sets, which is what the cooldown closes; holding the rate
@@ -190,7 +189,7 @@ def trainDetector(setup: DETRSetup): Unit =
   ))
 
   val started = System.nanoTime
-  batches
+  data.batches(Axis[Batch] -> batchSize, afterSteps = taken)
     .scanLeft(initialState):
       case (state, batch) =>
         val (images, records) = shard(batch)
