@@ -15,7 +15,7 @@ case class D2SSetup(
     embedding: Int = 128,
     queryPool: Int = 6,
     /** Whether the nodes of a record are written down in any order or in an order of their classes. */
-    nodeOrder: NodeOrder = NodeOrder.SimplestFirst,
+    nodeOrder: NodeOrder = NodeOrder.Free,
 
     // Train configuration
     checkpointRoot: String,
