@@ -147,8 +147,7 @@ class RecordsSuite extends FunSuite:
     val data = DrawingDataset.open(Corpus.LShape)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation)
     val batch = Axis[Drawing] -> 64
     val perPass = data.numSamples / batch.size
-    def read(drawn: Batch[Drawing, Width, Height, RecordBatch[Drawing, Node, Edge]]) =
-      (drawn.pixels.asInt(VType[Int32]).toArray.map(_.map(_.toSeq).toSeq).toSeq, drawn.target.nodeClass.toArray.map(_.toSeq).toSeq)
+    def read(drawn: Batch[Drawing, Width, Height, RecordBatch[Drawing, Node, Edge]]) = drawn.target.startX.toArray.map(_.toSeq).toSeq
     val throughOnePass = data.batches(batch, afterSteps = 0).map(read).take(perPass + 2).toSeq
     Seq(1, perPass - 1, perPass + 1).foreach: steps =>
       assertEquals(read(data.batches(batch, afterSteps = steps).next()), throughOnePass(steps), s"after $steps steps")
