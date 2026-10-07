@@ -91,9 +91,9 @@ class EdgeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
 
   private val contextAxis = Axis[Context]
 
-  private def jointAttention(queries: Int) = MultiHeadCustomSelfAttention(
+  private def jointAttention(slots: Int) = MultiHeadCustomSelfAttention(
     params.selfAttention,
-    jointSequenceMask[Context](queries),
+    jointSequenceMask[Context, Context](slots),
     AttentionScore.scaledDotProduct
   )
   private val selfAttentionPreNorm = LayerNorm(params.selfAttentionNorm)
@@ -109,9 +109,8 @@ class EdgeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
       edges: Tensor2[Edge, Embedding, V],
       predictions: Tensor2[EdgePrediction, Embedding, V]
   ): (Tensor2[Edge, Embedding, V], Tensor2[EdgePrediction, Embedding, V]) =
-    val queries = predictions.shape(Axis[EdgePrediction]) / edges.shape(Axis[Edge])
     var x = concatenate(edges, predictions)
-    x = x + jointAttention(queries)(x.vmap(contextAxis)(selfAttentionPreNorm))
+    x = x + jointAttention(edges.shape(Axis[Edge]))(x.vmap(contextAxis)(selfAttentionPreNorm))
     x = x + documentAttention(document, x.vmap(contextAxis)(documentAttentionPreNorm))
     x = x + nodeAttention(nodes.presentMask, x.shape.extent(contextAxis))(nodes.nodeEmbeddings, x.vmap(contextAxis)(nodeAttentionPreNorm))
     x = x + x.vmap(contextAxis)(embedding => mlp(mlpPreNorm(embedding)))
@@ -120,7 +119,7 @@ class EdgeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
   private def nodeAttention(presentMask: Tensor1[Node, Bool], context: AxisExtent[Context]) =
     val readable = where_!(presentMask.any, presentMask, true) // in case no nodes are present => make all slots readable to prevent NaNs in attention
     val mask = readable.broadcastTo(Shape2(context, readable.shape.extent(Axis[Node])))
-    MultiHeadCustomAttention[Node, Embedding, Context, Embedding, V](params.nodeAttention, _ => mask, AttentionScore.scaledDotProduct)
+    MultiHeadCustomAttention[Node, Embedding, Context, Embedding, V](params.nodeAttention, (_, _) => mask, AttentionScore.scaledDotProduct)
 
 object EdgeDecoderBlock:
 

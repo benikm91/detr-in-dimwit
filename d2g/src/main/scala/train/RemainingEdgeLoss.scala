@@ -26,7 +26,7 @@ class RemainingEdgeLoss[V: IsFloating](vtype: VType[V])
     val (a, b) = (answered.at(0), answered.at(1))
     val edges = target.edgeClass.shape.extent(Axis[Edge])
     val pairs = Shape2(edges, Axis[Candidate] -> edges.size)
-    val holdsEdge = EdgeClass.indicator(vtype)(_.isEdge).take(Axis[EdgeClasses])(target.edgeClass)
+    val holdsEdge = EdgeClass.indicator(vtype)(_.isEdge).slice(Axis[EdgeClasses].at(target.edgeClass))
     val taken = holdsEdge.sum
     val candidates = triu(Tensor(pairs, vtype).fill(1f)) *! holdsEdge.relabelTo(Axis[Candidate])
 

@@ -48,7 +48,7 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Query
     */
   def decide(logits: NodeLogits[V]): RecordNodes[Query] =
     val nodeClass = logits.nodeClass.argmax(Axis[NodeClasses])
-    def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).take(Axis[NodeClasses])(nodeClass)
+    def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).slice(Axis[NodeClasses].at(nodeClass))
     def placed(scores: Tensor2[Query, Pixel, V], carried: Tensor1[Query, Float32]) =
       Pixels.coordinates(scores.argmax(Axis[Pixel]), canvas) * carried
     val (drawn, runsOn, bends) = (carries(_.isNode), carries(_.numPoints > 1), carries(_.numPoints > 2))

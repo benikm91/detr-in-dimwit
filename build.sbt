@@ -10,9 +10,9 @@ ThisBuild / csrConfiguration := csrConfiguration.value
   .withTtl(Some(0.seconds))
   .withCachePolicies(Vector(CachePolicy.LocalOnly))
 
-lazy val dimwit = "ch.contrafactus" %% "dimwit-core" % "0.2.0"
+lazy val dimwit = "ch.contrafactus" %% "dimwit-core" % "0.3-SNAPSHOT" changing ()
 lazy val dimwitSharding = "ch.contrafactus" %% "dimwit-sharding" % "0.1.0"
-lazy val deepwit = "ch.contrafactus" %% "deepwit-core" % "0.2.1"
+lazy val deepwit = "ch.contrafactus" %% "deepwit-core" % "0.3-SNAPSHOT" changing ()
 // plotwit has no release yet, and its snapshot depends on a DimWit snapshot: it uses ours instead.
 lazy val plotwit = ("ch.contrafactus" %% "plotwit-core" % "0.2-SNAPSHOT" changing ()).exclude("ch.contrafactus", "dimwit-core_3")
 lazy val scalapy = "dev.scalapy" %% "scalapy-core" % "0.5.3"

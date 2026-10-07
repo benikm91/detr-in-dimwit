@@ -275,7 +275,7 @@ private def open(setup: D2GSetup, split: Split) =
 /** What one query answered with at every node slot, and the log probability of that answer. */
 private def answered(scorer: NodeHead[Float32], logits: NodeLogits[Float32]) =
   val decided = scorer.decide(logits)
-  def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).take(Axis[NodeClasses])(decided.nodeClass)
+  def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).slice(Axis[NodeClasses].at(decided.nodeClass))
   val score = chosen(logits.nodeClass) + chosen(logits.construction) + chosen(logits.startX) + chosen(logits.startY) +
     (chosen(logits.endX) + chosen(logits.endY)) * carries(_.numPoints > 1) +
     (chosen(logits.midX) + chosen(logits.midY)) * carries(_.numPoints > 2)

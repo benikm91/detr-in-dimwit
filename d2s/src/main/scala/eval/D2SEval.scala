@@ -23,6 +23,7 @@ import dataset.Transcripts
 import dataset.at
 import dataset.report
 import deepwit.checkpointing.TensorTreeCheckpointer
+import deepwit.attention.KVCache
 import dimwit.*
 import dimwit.tensor.Tensor4
 import plotwit.*
@@ -126,99 +127,56 @@ private trait Drawing derives Label
   * again, so that every batch is the same shape. The parameters are an argument, so the one
   * compiled computation serves every batch of every checkpoint.
   *
-  * In lockstep means every drawing takes its first node, then its second, and so on for as many
-  * slots as a record has. A drawing that has answered [[NodeClass.NoNode]] takes nothing more, and
-  * the slots it would have filled hold nothing — which is what a position a record does not reach
-  * holds anyway, so the record a drawing ends up with is the one it would have been given had it
-  * been transcribed on its own. That is what makes a step
-  * the same piece of work whatever the drawings answer, and so something `jit` can compile once
-  * and `vmap` can spread over the batch: where a transcription stops becomes a value rather than a
-  * branch, and nothing is read back to the host until the whole batch is written down.
-  *
-  * Each step still re-reads what it has taken so far, since there is no KV cache. That makes every
-  * step cost more than it needs to, which is of no consequence here.
+  * A drawing takes its nodes one slot after the other, in one `scan` over the slots, and a step
+  * reads what the slots before it have taken from the decoder's caches rather than reading them
+  * again. A drawing that has answered [[NodeClass.NoNode]] takes nothing more, and the slots it
+  * would have filled hold nothing — which is what a position a record does not reach holds
+  * anyway. So where a transcription stops is a value rather than a branch, and the drawings of a
+  * batch are spread over by `vmap` with nothing read back to the host until all are written down.
   */
 class Transcriber(nodes: AxisExtent[Node], drawings: Int = 1):
 
   private val transcribe = jit: (params: D2S.Params[Float32], documents: Tensor4[Drawing, Width, Height, Channel, Float32]) =>
-    written(D2S(params), documents)
+    val model = D2S(params)
+    val slots = Tensor1(nodes.axis).fromRange(0 until nodes.size)
+    val (nodeClass, construction, startX, startY, endX, endY, midX, midY) = documents.vmap(Axis[Drawing]): document =>
+      val read = model.read(model.encodeDocument(document))
+      val (_, written) = scan(Axis[Node])((model.nothingTaken(nodes), Tensor0(true)), slots):
+        case ((taken, writing), slot) =>
+          val (node, takes) = answeredAt(model, read, taken, slot, writing)
+          def one[W](value: Tensor0[W]) = stack(Seq(value), Axis[Node])
+          val (cls, isConstruction, sx, sy, ex, ey, mx, my) = node
+          val taking = RecordNodes(one(cls), one(isConstruction), one(sx), one(sy), one(ex), one(ey), one(mx), one(my))
+          ((model.take(read, taken, slot, taking), takes), node)
+      written
+    val noRelationships = Tensor(Shape2(documents.shape.extent(Axis[Drawing]), Axis[Relationship] -> 0), VType[Int32]).fill(0)
+    RecordBatch(nodeClass, construction, startX, startY, endX, endY, midX, midY, noRelationships, noRelationships, noRelationships)
 
-  /** The nodes a batch of documents hold, as records that relate none of them. */
-  private def written(model: D2S[Float32], documents: Tensor4[Drawing, Width, Height, Channel, Float32]): RecordBatch[Drawing, Node, Relationship] =
-
-    val everyDrawing = documents.shape.extent(Axis[Drawing])
-
-    /** Nothing written yet: every slot of every drawing empty. */
-    val nothingWritten =
-      val (allNodes, noRelationships) = (Shape2(everyDrawing, nodes), Shape2(everyDrawing, Axis[Relationship] -> 0))
-      def nowhere = Tensor(allNodes, VType[Float32]).fill(0f)
-      def nothing = Tensor(noRelationships, VType[Int32]).fill(0)
-      RecordBatch[Drawing, Node, Relationship](
-        nodeClass = Tensor(allNodes, VType[Int32]).fill(NodeClass.NoNode.id),
-        construction = Tensor(allNodes, VType[Int32]).fill(0),
-        startX = nowhere,
-        startY = nowhere,
-        endX = nowhere,
-        endY = nowhere,
-        midX = nowhere,
-        midY = nowhere,
-        edgeClass = nothing,
-        subject = nothing,
-        obj = nothing
-      )
-
-    /** Every drawing still writing down what it is asked for, which at the start is all of them. */
-    val allWriting = Tensor1(everyDrawing, VType[Bool]).fill(true)
-
-    val encoded = documents.vmap(Axis[Drawing])(model.encodeDocument)
-
-    /** The likeliest of what the pool answers at one node slot, for every drawing. The slots past
-      * what a drawing has written hold nothing, and a prediction reads only the slots before its
-      * own, so the answer is the one that slot would have been given on its own.
-      */
-    def answeredNode(taken: RecordBatch[Drawing, Node, Relationship], slot: Int) =
-      zipvmap(Axis[Drawing])(encoded, taken.nodeClass, taken.construction, taken.startX, taken.startY, taken.endX, taken.endY, taken.midX, taken.midY):
-        case (document, nodeClass, construction, startX, startY, endX, endY, midX, midY) =>
-          val scored = model.logitsPerQuery(document, RecordNodes(nodeClass, construction, startX, startY, endX, endY, midX, midY))
-          val (saidClass, saidConstruction, saidStartX, saidStartY, saidEndX, saidEndY, saidMidX, saidMidY, score) =
-            zipvmap(Axis[PoolQuery])(scored.nodeClass, scored.construction, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY):
-              case (nodeClass, construction, startX, startY, endX, endY, midX, midY) =>
-                answered(model.nodeHead, NodeLogits(nodeClass, construction, startX, startY, endX, endY, midX, midY))
-          val here = Axis[Node].at(slot)
-          val likeliest = Axis[PoolQuery].at(score.slice(here).argmax(Axis[PoolQuery]))
-          def said[W](answers: Tensor2[PoolQuery, Node, W]) = answers.slice(here).slice(likeliest)
-          (said(saidClass), said(saidConstruction), said(saidStartX), said(saidStartY), said(saidEndX), said(saidEndY), said(saidMidX), said(saidMidY))
-
-    /** The slot a step fills, as a mask over the record's slots. */
-    def only[L: Label](slots: AxisExtent[L], slot: Int) =
-      Tensor1(slots.axis, VType[Bool]).fromArray(Array.tabulate(slots.size)(_ == slot))
-
-    /** One more node slot, filled by every drawing that is still writing nodes. A drawing that
-      * answers [[NodeClass.NoNode]] stops there, and the slots it would have filled stay empty.
-      */
-    def writeNode(taken: RecordBatch[Drawing, Node, Relationship], writing: Tensor1[Drawing, Bool], slot: Int) =
-      val (said, construction, startX, startY, endX, endY, midX, midY) = answeredNode(taken, slot)
-      val fills = writing and !(said elementEquals_! NodeClass.NoNode.id)
-      val here = Shape2(everyDrawing, nodes)
-      val filling = only(nodes, slot).broadcastTo(here) and fills.broadcastTo(here)
-      def put[W](old: Tensor2[Drawing, Node, W], now: Tensor1[Drawing, W]) =
-        where_!(filling, now, old)
-      val record = taken.copy(
-        nodeClass = put(taken.nodeClass, said),
-        construction = put(taken.construction, construction),
-        startX = put(taken.startX, startX),
-        startY = put(taken.startY, startY),
-        endX = put(taken.endX, endX),
-        endY = put(taken.endY, endY),
-        midX = put(taken.midX, midX),
-        midY = put(taken.midY, midY)
-      )
-      (record, fills)
-
-    val (withNodes, _) = (0 until nodes.size).foldLeft((nothingWritten, allWriting)):
-      case ((taken, writing), slot) => writeNode(taken, writing, slot)
-
-    withNodes
+  /** The likeliest of what the pool answers at `slot` — the node a drawing that is still `writing`
+    * takes there, nothing for one that is not — and whether it takes one.
+    */
+  private def answeredAt(model: D2S[Float32], read: List[KVCache[Patch, Float32]], taken: List[KVCache[Node, Float32]], slot: Tensor0[Int32], writing: Tensor0[Bool]) =
+    val scored = model.answerAt(read, taken, slot)
+    val (saidClass, saidConstruction, saidStartX, saidStartY, saidEndX, saidEndY, saidMidX, saidMidY, score) =
+      zipvmap(Axis[PoolQuery])(scored.nodeClass, scored.construction, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY):
+        case (nodeClass, construction, startX, startY, endX, endY, midX, midY) =>
+          answered(model.nodeHead, NodeLogits(nodeClass, construction, startX, startY, endX, endY, midX, midY))
+    val likeliest = Axis[PoolQuery].at(score.slice(Axis[Node].at(0)).argmax(Axis[PoolQuery]))
+    def said[W](answers: Tensor2[PoolQuery, Node, W]) = answers.slice(Axis[Node].at(0)).slice(likeliest)
+    val takes = writing and !(said(saidClass) elementEquals NodeClass.NoNode.id)
+    def ifTaken[W](value: Tensor0[W], nothing: Tensor0[W]) = where(takes, value, nothing)
+    val (nowhere, none) = (Tensor0(0f), Tensor0(0))
+    val node = (
+      ifTaken(said(saidClass), Tensor0(NodeClass.NoNode.id)),
+      ifTaken(said(saidConstruction), none),
+      ifTaken(said(saidStartX), nowhere),
+      ifTaken(said(saidStartY), nowhere),
+      ifTaken(said(saidEndX), nowhere),
+      ifTaken(said(saidEndY), nowhere),
+      ifTaken(said(saidMidX), nowhere),
+      ifTaken(said(saidMidY), nowhere)
+    )
+    (node, takes)
 
   def apply(params: D2S.Params[Float32], document: Tensor3[Width, Height, Channel, Float32]): RecordGraph =
     apply(params, Seq(document)).head
@@ -235,7 +193,7 @@ private def open(setup: D2SSetup, split: Split) =
 /** What one query answered with at every node slot, and the log probability of that answer. */
 def answered(scorer: NodeHead[Float32], logits: NodeLogits[Float32]) =
   val decided = scorer.decide(logits)
-  def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).take(Axis[NodeClasses])(decided.nodeClass)
+  def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).slice(Axis[NodeClasses].at(decided.nodeClass))
   val score = chosen(logits.nodeClass) + chosen(logits.construction) + chosen(logits.startX) + chosen(logits.startY) +
     (chosen(logits.endX) + chosen(logits.endY)) * carries(_.numPoints > 1) +
     (chosen(logits.midX) + chosen(logits.midY)) * carries(_.numPoints > 2)
