@@ -33,12 +33,12 @@ case class DETRSetup(
     numHeads: Int = 4,
     embedding: Int = 128,
 
-    /** The same run as the transcriber's, so that the two are compared on it: 137M drawings in
-      * batches of 512, the last 27.4M of them the cooldown — about 90 passes over Vitruvion's
+    /** The same run as the transcriber's, so that the two are compared on it: 138M drawings in
+      * batches of 512, the last 27.6M of them the cooldown — about 90 passes over Vitruvion's
       * training split.
       */
     checkpointEverySamples: Int = 40_000 * 128,
-    numSamples: Int = 1_070_000 * 128,
+    numSamples: Int = 1_080_000 * 128,
     batchSize: Int = 512,
     learningRate: Float = 3e-4f,
     /** Adam's memory of how large the gradients are, about 1 / (1 − β₂) steps. Short enough that a
@@ -63,7 +63,7 @@ case class DETRSetup(
 
     /** How long the rate climbs before it holds, and how long it falls again at the end. */
     warmupSamples: Int = 1_000 * 128,
-    cooldownSamples: Int = 214_000 * 128,
+    cooldownSamples: Int = 216_000 * 128,
 
     seed: Int = 0
 ):
