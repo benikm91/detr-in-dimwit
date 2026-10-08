@@ -68,22 +68,23 @@ class NodeDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
   def nothingTaken(slots: AxisExtent[Node]): List[KVCache[Node, V]] =
     params.blocks.map(block => KVCache.empty(slots, block.selfAttention))
 
-  /** Takes the `node` embedding at `slot`: every block's keys and values of the taken nodes, with
-    * it among them for the slots after it to read.
+  /** Takes the `node` embedding at `slot`: the node as the decoder carries it, as [[forTraining]]
+    * carries it there, and every block's keys and values of the taken nodes, with it among them for
+    * the slots after it to read.
     */
-  def take(document: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32], node: Tensor1[Embedding, V]): List[KVCache[Node, V]] =
-    val (_, nowTaken) = blocks.lazyZip(document).lazyZip(taken).foldLeft((node, List.empty[KVCache[Node, V]])):
-      case ((node, nowTaken), (block, document, taken)) =>
-        val (carried, withNode) = block.take(document, taken, slot, node)
+  def take(documentCache: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32], node: Tensor1[Embedding, V]): (Tensor1[Embedding, V], List[KVCache[Node, V]]) =
+    val (carried, nowTaken) = blocks.lazyZip(documentCache).lazyZip(taken).foldLeft((node, List.empty[KVCache[Node, V]])):
+      case ((node, nowTaken), (block, documentCache, taken)) =>
+        val (carried, withNode) = block.take(documentCache, taken, slot, node)
         (carried, nowTaken :+ withNode)
-    nowTaken
+    (finalNorm(carried), nowTaken)
 
   /** What each of the `asked` queries answers at `slot`, given the nodes taken before it, as
     * [[forTraining]] would answer there.
     */
-  def answer(document: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32], asked: Tensor2[PoolQuery, Embedding, V]): Tensor2[PoolQuery, Embedding, V] =
-    val answered = blocks.lazyZip(document).lazyZip(taken).foldLeft(asked):
-      case (asked, (block, document, taken)) => block.answer(document, taken, slot, asked)
+  def answer(documentCache: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32], asked: Tensor2[PoolQuery, Embedding, V]): Tensor2[PoolQuery, Embedding, V] =
+    val answered = blocks.lazyZip(documentCache).lazyZip(taken).foldLeft(asked):
+      case (asked, (block, documentCache, taken)) => block.answer(documentCache, taken, slot, asked)
     answered.vmap(Axis[PoolQuery])(finalNorm)
 
 object NodeDecoder:
@@ -156,7 +157,7 @@ class NodeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
   /** Takes the `node` embedding at `slot`: what the block makes of it, and `taken` with its key and
     * value written in.
     */
-  def take(document: KVCache[Patch, V], taken: KVCache[Node, V], slot: Tensor0[Int32], node: Tensor1[Embedding, V]): (Tensor1[Embedding, V], KVCache[Node, V]) =
+  def take(documentCache: KVCache[Patch, V], taken: KVCache[Node, V], slot: Tensor0[Int32], node: Tensor1[Embedding, V]): (Tensor1[Embedding, V], KVCache[Node, V]) =
     val normed = selfAttentionPreNorm(node)
     val withNode = KVCache(
       taken.keys.set(Axis[Node].at(slot))(normed.dot(Axis[Embedding])(selfWeights.keyWeights)),
@@ -164,26 +165,26 @@ class NodeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
     )
     val slots = taken.keys.shape.extent(Axis[Node])
     val carried = decoded(
-      document,
-      stack(Seq(node), Axis[Taking]),
-      stack(Seq(normed), Axis[Taking]),
+      documentCache,
+      node.prependAxis(Axis[Taking]),
+      normed.prependAxis(Axis[Taking]),
       withNode,
-      stack(Seq(slot), Axis[Taking]),
+      slot.prependAxis(Axis[Taking]),
       Tensor1(Axis[Node]).fromRange(0 until slots.size),
       slots.size
     )
-    (carried.slice(Axis[Taking].at(0)), withNode)
+    (carried.squeeze(Axis[Taking]), withNode)
 
   /** What the `asked` queries make of their prediction embeddings at `slot`, reading the nodes
     * taken before it and themselves.
     */
-  def answer(document: KVCache[Patch, V], taken: KVCache[Node, V], slot: Tensor0[Int32], asked: Tensor2[PoolQuery, Embedding, V]): Tensor2[PoolQuery, Embedding, V] =
+  def answer(documentCache: KVCache[Patch, V], taken: KVCache[Node, V], slot: Tensor0[Int32], asked: Tensor2[PoolQuery, Embedding, V]): Tensor2[PoolQuery, Embedding, V] =
     val slots = taken.keys.shape(Axis[Node])
     val normed = asked.vmap(Axis[PoolQuery])(selfAttentionPreNorm)
     val queries = Tensor1(Axis[PoolQuery]).fromRange(0 until asked.shape(Axis[PoolQuery]))
     val positions = queries *! slots +! slots +! slot
     decoded(
-      document,
+      documentCache,
       asked,
       normed,
       KVCache(
@@ -199,7 +200,7 @@ class NodeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
     * at `sourcePositions` and to the document.
     */
   private def decoded[Row: Λ, Source: Λ](
-      document: KVCache[Patch, V],
+      documentCache: KVCache[Patch, V],
       rows: Tensor2[Row, Embedding, V],
       normed: Tensor2[Row, Embedding, V],
       sources: KVCache[Source, V],
@@ -212,8 +213,8 @@ class NodeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
     val afterSelf = rows + selfAttention.projectHeads(readSelf)
     val documentRead = MultiHeadUnfusedFullAttention[Patch, PatchEmbedding, Row, Embedding, V](Axis[Patch], Axis[Row], params.documentAttention, AttentionScore.scaledDotProduct)
     val documentQueries = afterSelf.vmap(Axis[Row])(documentAttentionPreNorm).dot(Axis[Embedding])(params.documentAttention.queryWeights)
-    val patches = Tensor1(Axis[Patch]).fromRange(0 until document.keys.shape(Axis[Patch]))
-    val afterDocument = afterSelf + documentRead.projectHeads(documentRead.attendAt(documentQueries, document.keys, document.values, positions, patches))
+    val patches = Tensor1(Axis[Patch]).fromRange(0 until documentCache.keys.shape(Axis[Patch]))
+    val afterDocument = afterSelf + documentRead.projectHeads(documentRead.attendAt(documentQueries, documentCache.keys, documentCache.values, positions, patches))
     afterDocument + afterDocument.vmap(Axis[Row])(embedding => mlp(mlpPreNorm(embedding)))
 
 /** Axis of the one node a decoding step takes. */

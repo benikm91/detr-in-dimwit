@@ -49,7 +49,6 @@ object NodeClass:
   def indicator[V: IsFloating](vtype: VType[V])(holds: NodeClass => Boolean): Tensor1[NodeClasses, V] =
     Tensor1(Axis[NodeClasses], vtype).fromArray(values.map(nodeClass => if holds(nodeClass) then 1f else 0f))
 
-
 /** What a relationship of a record is, which a record holds as a node of its own so that a graph
   * is a set.
   *

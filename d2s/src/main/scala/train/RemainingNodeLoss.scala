@@ -34,7 +34,9 @@ class RemainingNodeLoss[V: IsFloating](vtype: VType[V], canvas: Int, written: No
     val remaining = triu(Tensor(pairs, vtype).fill(1f)) *! holdsNode.relabelTo(Axis[Candidate])
     val candidates = written match
       case NodeOrder.Free       => remaining
-      case NodeOrder.ByClass(_) => remaining * (target.nodeClass.broadcastTo(pairs) elementEquals_! target.nodeClass.relabelTo(Axis[Candidate])).asFloat(vtype)
+      case NodeOrder.ByClass(_) =>
+        val sameClass = target.nodeClass.vmap(Axis[Node])(own => target.nodeClass.relabelTo(Axis[Candidate]) elementEquals_! own)
+        remaining * sameClass.asFloat(vtype)
 
     val asked = candidates.max(Axis[Candidate])
     val guessed = distinctly(dissimilarity(a, target), dissimilarity(b, target), candidates)

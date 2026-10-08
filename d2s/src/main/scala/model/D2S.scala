@@ -76,21 +76,19 @@ class D2S[V: IsFloating](params: D2S.Params[V]):
   def nothingTaken(slots: AxisExtent[Node]): List[KVCache[Node, V]] =
     nodeDecoder.nothingTaken(slots)
 
-  /** Takes `node`, a record of one node, at `slot`, for the slots after it to read. */
-  def take(document: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32], node: RecordNodes[Node]): List[KVCache[Node, V]] =
-    val embedded = nodePosition.injectAt(slot)(embedNodes(node).slice(Axis[Node].at(0)))
-    nodeDecoder.take(document, taken, slot, embedded)
-
-  /** What every query of the pool answers at `slot`, given the nodes taken before it: logits of one
-    * node slot, the one asked about.
+  /** Takes `node`, a record of one node, at `slot`, for the slots after it to read: the node as the
+    * decoder carries it, and the taken nodes with it among them.
     */
-  def answerAt(document: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32]): NodeQueryLogits[V] =
+  def take(documentCache: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32], node: RecordNodes[Node]): (Tensor1[Embedding, V], List[KVCache[Node, V]]) =
+    val embedded = nodePosition.injectAt(slot)(embedNodes(node).squeeze(Axis[Node]))
+    nodeDecoder.take(documentCache, taken, slot, embedded)
+
+  /** What the pool answers at `slot`, given the nodes taken before it: a candidate node per query,
+    * in the order of the queries.
+    */
+  def answerAt(documentCache: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32]): NodeLogits[V] =
     val asked = params.nodes.queries.vmap(Axis[PoolQuery])(nodePosition.injectAt(slot))
-    val (nodeClass, construction, startX, startY, endX, endY, midX, midY) =
-      nodeDecoder.answer(document, taken, slot, asked).vmap(Axis[PoolQuery]): answered =>
-        val scored = nodeHead(stack(Seq(answered), Axis[Node]))
-        (scored.nodeClass, scored.construction, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY)
-    NodeQueryLogits(nodeClass, construction, startX, startY, endX, endY, midX, midY)
+    nodeHead(nodeDecoder.answer(documentCache, taken, slot, asked).relabel(Axis[PoolQuery] -> Axis[Node]))
 
 object D2S:
 
@@ -120,17 +118,6 @@ object D2S:
 
     given tensorTree[V]: TensorTree[NodeQueryLogits[V]] = TensorTree.derived
     given tree[V]: TreeOf[NodeQueryLogits[V], V] = TreeOf.derived
-
-    def of[V](answered: Seq[NodeLogits[V]]): NodeQueryLogits[V] = NodeQueryLogits(
-      nodeClass = stack(answered.map(_.nodeClass), Axis[PoolQuery]),
-      construction = stack(answered.map(_.construction), Axis[PoolQuery]),
-      startX = stack(answered.map(_.startX), Axis[PoolQuery]),
-      startY = stack(answered.map(_.startY), Axis[PoolQuery]),
-      endX = stack(answered.map(_.endX), Axis[PoolQuery]),
-      endY = stack(answered.map(_.endY), Axis[PoolQuery]),
-      midX = stack(answered.map(_.midX), Axis[PoolQuery]),
-      midY = stack(answered.map(_.midY), Axis[PoolQuery])
-    )
 
   case class Params[V](
       encoder: DocumentEncoder.Params[Embedding, V],

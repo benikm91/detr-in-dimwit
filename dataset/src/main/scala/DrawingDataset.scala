@@ -159,7 +159,7 @@ final class DrawingDataset[W: Label, H: Label, C: Label, Node: Label, Edge: Labe
   /** Every drawing of the split, once. */
   def samples: Iterator[Sample[W, H, C, Record[Node, Edge]]] =
     (0 until numSamples).iterator.map: at =>
-      Sample(drawn(Axis[Drawings] -> 1, at).slice(Axis[Drawings].at(0)), recordAt(at))
+      Sample(drawn(Axis[Drawings] -> 1, at).squeeze(Axis[Drawings]), recordAt(at))
 
   /** Batches of drawings, for as long as they are asked for, on the host. The drawings were
     * generated independently of one another, so reading them in order is already a shuffle.

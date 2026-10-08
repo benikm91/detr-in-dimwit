@@ -37,13 +37,13 @@ class CachedDecodingSuite extends munit.FunSuite:
     )
     val encoded = model.encodeDocument(drawing)
     val whole = model.logitsPerQuery(encoded, record)
-    val document = model.read(encoded)
+    val documentCache = model.read(encoded)
 
     def one[V](values: Tensor1[Node, V], slot: Int) = values.slice(Axis[Node].at(slot, 1))
     (0 until slots).foldLeft(model.nothingTaken(Axis[Node] -> slots)): (taken, slot) =>
-      val atSlot = model.answerAt(document, taken, Tensor0(slot))
-      def assertSame[L: Label](name: String, cached: Tensor3[PoolQuery, Node, L, Float32], read: Tensor3[PoolQuery, Node, L, Float32]) =
-        val difference = (cached.slice(Axis[Node].at(0)) - read.slice(Axis[Node].at(slot))).abs.max.item
+      val atSlot = model.answerAt(documentCache, taken, slot)
+      def assertSame[L: Label](name: String, cached: Tensor2[Node, L, Float32], read: Tensor3[PoolQuery, Node, L, Float32]) =
+        val difference = (cached.relabel(Axis[Node] -> Axis[PoolQuery]) - read.slice(Axis[Node].at(slot))).abs.max.item
         assert(difference < 1e-4f, s"slot $slot, $name: the cached answer is off by $difference")
       assertSame("class", atSlot.nodeClass, whole.nodeClass)
       assertSame("construction", atSlot.construction, whole.construction)
@@ -52,7 +52,8 @@ class CachedDecodingSuite extends munit.FunSuite:
       assertSame("middle y", atSlot.midY, whole.midY)
       val node = RecordNodes(one(record.nodeClass, slot), one(record.construction, slot), one(record.startX, slot), one(record.startY, slot),
         one(record.endX, slot), one(record.endY, slot), one(record.midX, slot), one(record.midY, slot))
-      model.take(document, taken, Tensor0(slot), node)
+      val (_, nowTaken) = model.take(documentCache, taken, slot, node)
+      nowTaken
 
   test("the transcriber writes what reading the whole record at every slot would"):
     val corpus = Corpus.VitruvionPrimitives
@@ -60,7 +61,7 @@ class CachedDecodingSuite extends munit.FunSuite:
     val untrained = D2S.Params.init(numLayers = 2, numHeads = 2, embedding = 32, nodes = nodes.size, queries = 3, canvas = corpus.canvas, key = Random.Key(2))
     // An untrained model stops at once; one that never says it is done writes every slot.
     val classHead = untrained.nodes.head.nodeClass
-    val neverDone = classHead.copy(bias = classHead.bias.set(Axis[dataset.NodeClasses].at(NodeClass.NoNode.id))(Tensor0(-100f)))
+    val neverDone = classHead.copy(bias = classHead.bias.set(Axis[dataset.NodeClasses].at(NodeClass.NoNode.id))(-100f))
     val params = untrained.copy(nodes = untrained.nodes.copy(head = untrained.nodes.head.copy(nodeClass = neverDone)))
     val model = D2S(params)
     val data = DrawingDataset.open(corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Validation)
@@ -74,13 +75,14 @@ class CachedDecodingSuite extends munit.FunSuite:
         case ((written, writing), slot) if !writing => (written, false)
         case ((written, _), slot) =>
           val scored = read(document, laidOut(written))
-          val answers = (0 until scored.nodeClass.shape(Axis[PoolQuery])).map: query =>
-            val logits = scored.at(query)
-            val (cls, construction, sx, sy, ex, ey, mx, my, score) = answered(model.nodeHead, logits)
-            val at = Axis[Node].at(slot)
-            val nodeClass = NodeClass.fromId(cls.slice(at).item)
-            (RecordNode(nodeClass, construction.slice(at).item == 1, Seq(dataset.Point(sx.slice(at).item, sy.slice(at).item), dataset.Point(ex.slice(at).item, ey.slice(at).item), dataset.Point(mx.slice(at).item, my.slice(at).item)).take(nodeClass.numPoints)), score.slice(at).item)
-          val (likeliest, _) = answers.maxBy(_._2)
+          def candidates[L: Label](logits: Tensor3[PoolQuery, Node, L, Float32]) = logits.slice(Axis[Node].at(slot)).relabel(Axis[PoolQuery] -> Axis[Node])
+          val (said, score) = answered(model.nodeHead, NodeLogits(candidates(scored.nodeClass), candidates(scored.construction), candidates(scored.startX),
+            candidates(scored.startY), candidates(scored.endX), candidates(scored.endY), candidates(scored.midX), candidates(scored.midY)))
+          val at = Axis[Node].at(score.argmax(Axis[Node]).item)
+          val nodeClass = NodeClass.fromId(said.nodeClass.slice(at).item)
+          def point(x: Tensor1[Node, Float32], y: Tensor1[Node, Float32]) = dataset.Point(x.slice(at).item, y.slice(at).item)
+          val likeliest = RecordNode(nodeClass, said.construction.slice(at).item == 1,
+            Seq(point(said.startX, said.startY), point(said.endX, said.endY), point(said.midX, said.midY)).take(nodeClass.numPoints))
           if likeliest.nodeClass.isNode then (written :+ likeliest, true) else (written, false)
       ._1
 
