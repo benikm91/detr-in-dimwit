@@ -5,11 +5,9 @@ import d2s.model.*
 import d2s.train.*
 import d2s.config.*
 import NodeHead.NodeLogits
-import dataset.Canvas
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
-import dataset.EdgeClass
 import dataset.Metrics
 import dataset.NodeClass
 import dataset.NodeClasses
@@ -25,6 +23,7 @@ import dataset.Transcripts
 import dataset.at
 import dataset.report
 import deepwit.checkpointing.TensorTreeCheckpointer
+import deepwit.attention.KVCache
 import dimwit.*
 import dimwit.tensor.Tensor4
 import plotwit.*
@@ -32,17 +31,17 @@ import viz.PlotTargets.websocket
 
 import scala.language.implicitConversions
 
-/** Scores every checkpoint of the newest run of a setup on the whole validation split, the last
-  * checkpoint first, and writes the metrics as one CSV, and what the last checkpoint wrote down
-  * for every drawing as [[Transcripts]].
+/** Scores the newest run of a setup on a whole split, and writes the metrics as one CSV, and what
+  * the last checkpoint wrote down for every drawing as [[Transcripts]]. On the validation split
+  * every checkpoint is scored, the last first; the test split is looked at once, by the last alone.
   */
-def scoreSetTranscriber(setup: D2SSetup, size: String): Unit =
+def scoreSetTranscriber(setup: D2SSetup, size: String, split: Split): Unit =
   dimwit.initialize()
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
   val nodes = Axis[Node] -> setup.nodeSlots
-  val data = open(setup, Split.Validation)
+  val data = open(setup, split)
   println(s"pool of ${setup.queryPool} queries, ${data.numSamples} drawings\n")
 
   val transcriber = Transcriber(nodes, TranscribedTogether)
@@ -57,17 +56,20 @@ def scoreSetTranscriber(setup: D2SSetup, size: String): Unit =
       .flatMap(batch => batch.map(sample => RecordGraph.of(sample.target).copy(edges = Seq.empty)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val csv = Metrics.Csv("d2s", setup.corpus, size, Runs.parameters(checkpoints.loadLatest[D2STrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("d2s", setup.corpus, size, split, Runs.parameters(checkpoints.loadLatest[D2STrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
-  checkpoints.iterations.reverse.foreach: step =>
+  val scored = split match
+    case Split.Test => Seq(checkpoints.iterations.last)
+    case _          => checkpoints.iterations.reverse
+  scored.foreach: step =>
     println(s"scoring checkpoint $step")
     val drawings = transcribed(checkpoints.load[D2STrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
-    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => RecordScoring.score(target, written, tolerance / Canvas))))
+    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => RecordScoring.score(target, written, tolerance / setup.corpus.canvas))))
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-      println(s"transcripts written to ${Transcripts.write("d2s", setup.corpus, size, step, drawings)}")
+      println(s"transcripts written to ${Transcripts.write("d2s", setup.corpus, size, split, step, drawings)}")
 
 /** Plots what a trained model transcribes.
   *
@@ -128,99 +130,33 @@ private trait Drawing derives Label
   * again, so that every batch is the same shape. The parameters are an argument, so the one
   * compiled computation serves every batch of every checkpoint.
   *
-  * In lockstep means every drawing takes its first node, then its second, and so on for as many
-  * slots as a record has. A drawing that has answered [[NodeClass.NoNode]] takes nothing more, and
-  * the slots it would have filled hold nothing — which is what a position a record does not reach
-  * holds anyway, so the record a drawing ends up with is the one it would have been given had it
-  * been transcribed on its own. That is what makes a step
-  * the same piece of work whatever the drawings answer, and so something `jit` can compile once
-  * and `vmap` can spread over the batch: where a transcription stops becomes a value rather than a
-  * branch, and nothing is read back to the host until the whole batch is written down.
-  *
-  * Each step still re-reads what it has taken so far, since there is no KV cache. That makes every
-  * step cost more than it needs to, which is of no consequence here.
+  * A drawing takes its nodes one slot after the other, in one `scan` over the slots, and a step
+  * reads what the slots before it have taken from the decoder's caches rather than reading them
+  * again. A drawing that has answered [[NodeClass.NoNode]] takes nothing more, and the slots it
+  * would have filled hold nothing — which is what a position a record does not reach holds
+  * anyway. So where a transcription stops is a value rather than a branch, and the drawings of a
+  * batch are spread over by `vmap` with nothing read back to the host until all are written down.
   */
 class Transcriber(nodes: AxisExtent[Node], drawings: Int = 1):
 
-  private val transcribe = jit: (params: D2S.Params[Float32], documents: Tensor4[Drawing, Width, Height, Channel, Float32]) =>
-    written(D2S(params), documents)
+  private val jitTranscribe = jit(transcribe)
 
-  /** The nodes a batch of documents hold, as records that relate none of them. */
-  private def written(model: D2S[Float32], documents: Tensor4[Drawing, Width, Height, Channel, Float32]): RecordBatch[Drawing, Node, Relationship] =
-
-    val everyDrawing = documents.shape.extent(Axis[Drawing])
-
-    /** Nothing written yet: every slot of every drawing empty. */
-    val nothingWritten =
-      // One empty relationship slot rather than none: DimWit's `toArray` drops the drawings of a
-      // tensor whose relationship axis is empty.
-      val (allNodes, noRelationships) = (Shape2(everyDrawing, nodes), Shape2(everyDrawing, Axis[Relationship] -> 1))
-      def nowhere = Tensor(allNodes, VType[Float32]).fill(0f)
-      def nothing = Tensor(noRelationships, VType[Int32]).fill(EdgeClass.NoEdge.id)
-      RecordBatch[Drawing, Node, Relationship](
-        nodeClass = Tensor(allNodes, VType[Int32]).fill(NodeClass.NoNode.id),
-        startX = nowhere,
-        startY = nowhere,
-        endX = nowhere,
-        endY = nowhere,
-        midX = nowhere,
-        midY = nowhere,
-        edgeClass = nothing,
-        subject = nothing,
-        obj = nothing
-      )
-
-    /** Every drawing still writing down what it is asked for, which at the start is all of them. */
-    val allWriting = Tensor1(everyDrawing, VType[Bool]).fill(true)
-
-    val encoded = documents.vmap(Axis[Drawing])(model.encodeDocument)
-
-    /** The likeliest of what the pool answers at one node slot, for every drawing. The slots past
-      * what a drawing has written hold nothing, and a prediction reads only the slots before its
-      * own, so the answer is the one that slot would have been given on its own.
-      */
-    def answeredNode(taken: RecordBatch[Drawing, Node, Relationship], slot: Int) =
-      zipvmap(Axis[Drawing])(encoded, taken.nodeClass, taken.startX, taken.startY, taken.endX, taken.endY, taken.midX, taken.midY):
-        case (document, nodeClass, startX, startY, endX, endY, midX, midY) =>
-          val scored = model.logitsPerQuery(document, RecordNodes(nodeClass, startX, startY, endX, endY, midX, midY))
-          val (saidClass, saidStartX, saidStartY, saidEndX, saidEndY, saidMidX, saidMidY, score) =
-            zipvmap(Axis[PoolQuery])(scored.nodeClass, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY):
-              case (nodeClass, startX, startY, endX, endY, midX, midY) =>
-                answered(model.nodeHead, NodeLogits(nodeClass, startX, startY, endX, endY, midX, midY))
-          val here = Axis[Node].at(slot)
-          val likeliest = Axis[PoolQuery].at(score.slice(here).argmax(Axis[PoolQuery]))
-          def said[W](answers: Tensor2[PoolQuery, Node, W]) = answers.slice(here).slice(likeliest)
-          (said(saidClass), said(saidStartX), said(saidStartY), said(saidEndX), said(saidEndY), said(saidMidX), said(saidMidY))
-
-    /** The slot a step fills, as a mask over the record's slots. */
-    def only[L: Label](slots: AxisExtent[L], slot: Int) =
-      Tensor1(slots.axis, VType[Bool]).fromArray(Array.tabulate(slots.size)(_ == slot))
-
-    /** One more node slot, filled by every drawing that is still writing nodes. A drawing that
-      * answers [[NodeClass.NoNode]] stops there, and the slots it would have filled stay empty.
-      */
-    def writeNode(taken: RecordBatch[Drawing, Node, Relationship], writing: Tensor1[Drawing, Bool], slot: Int) =
-      val (said, startX, startY, endX, endY, midX, midY) = answeredNode(taken, slot)
-      val fills = writing and !(said elementEquals_! NodeClass.NoNode.id)
-      val here = Shape2(everyDrawing, nodes)
-      val filling = only(nodes, slot).broadcastTo(here) and fills.broadcastTo(here)
-      def put[W](old: Tensor2[Drawing, Node, W], now: Tensor1[Drawing, W]) =
-        where_!(filling, now, old)
-      val record = taken.copy(
-        nodeClass = put(taken.nodeClass, said),
-        startX = put(taken.startX, startX),
-        startY = put(taken.startY, startY),
-        endX = put(taken.endX, endX),
-        endY = put(taken.endY, endY),
-        midX = put(taken.midX, midX),
-        midY = put(taken.midY, midY)
-      )
-      (record, fills)
-
-    val (withNodes, _) = (0 until nodes.size).foldLeft((nothingWritten, allWriting)):
-      case ((taken, writing), slot) => writeNode(taken, writing, slot)
-
-    withNodes
+  private def transcribe(params: D2S.Params[Float32], documents: Tensor4[Drawing, Width, Height, Channel, Float32]): RecordBatch[Drawing, Node, Relationship] =
+    val model = D2S(params)
+    val slots = Tensor1(nodes.axis).fromRange(0 until nodes.size)
+    val (nodeClass, construction, startX, startY, endX, endY, midX, midY) = documents.vmap(Axis[Drawing]): document =>
+      val documentCache = model.read(model.encodeDocument(document))
+      val (_, written) = scan(Axis[Node])((model.nothingTaken(nodes), Tensor0(true)), slots):
+        case ((taken, writing), slot) =>
+          val (node, stillWriting) = answeredAt(model, documentCache, taken, slot, writing)
+          def one[W](value: Tensor0[W]) = value.prependAxis(Axis[Node])
+          val (cls, isConstruction, sx, sy, ex, ey, mx, my) = node
+          val taking = RecordNodes(one(cls), one(isConstruction), one(sx), one(sy), one(ex), one(ey), one(mx), one(my))
+          val (_, nowTaken) = model.take(documentCache, taken, slot, taking)
+          ((nowTaken, stillWriting), node)
+      written
+    val noRelationships = Tensor(Shape2(documents.shape.extent(Axis[Drawing]), Axis[Relationship] -> 0), VType[Int32]).fill(0)
+    RecordBatch(nodeClass, construction, startX, startY, endX, endY, midX, midY, noRelationships, noRelationships, noRelationships)
 
   def apply(params: D2S.Params[Float32], document: Tensor3[Width, Height, Channel, Float32]): RecordGraph =
     apply(params, Seq(document)).head
@@ -229,31 +165,51 @@ class Transcriber(nodes: AxisExtent[Node], drawings: Int = 1):
     require(documents.nonEmpty, "there is nothing to transcribe")
     require(documents.size <= drawings, s"${documents.size} drawings do not fit in a batch of $drawings")
     val filled = documents.padTo(drawings, documents.last)
-    RecordGraph.of(transcribe(params, stack(filled, Axis[Drawing]))).take(documents.size)
+    RecordGraph.of(jitTranscribe(params, stack(filled, Axis[Drawing]))).take(documents.size)
 
 private def open(setup: D2SSetup, split: Split) =
   DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(split)
 
-/** What one query answered with at every node slot, and the log probability of that answer. */
-def answered(scorer: NodeHead[Float32], logits: NodeLogits[Float32]) =
+/** The likeliest of what the pool answers at `slot` — the node a drawing that is still `writing`
+  * takes there, nothing for one that is not — and whether it is still writing after it.
+  */
+def answeredAt(model: D2S[Float32], documentCache: List[KVCache[Patch, Float32]], taken: List[KVCache[Node, Float32]], slot: Tensor0[Int32], writing: Tensor0[Bool]) =
+  val (said, score) = answered(model.nodeHead, model.answerAt(documentCache, taken, slot))
+  val likeliest = Axis[Node].at(score.argmax(Axis[Node]))
+  val stillWriting = writing and !said.nodeClass.slice(likeliest).elementEquals(NodeClass.NoNode.id)
+  val node = (
+    where(stillWriting, said.nodeClass.slice(likeliest), NodeClass.NoNode.id),
+    where(stillWriting, said.construction.slice(likeliest), 0),
+    where(stillWriting, said.startX.slice(likeliest), 0),
+    where(stillWriting, said.startY.slice(likeliest), 0),
+    where(stillWriting, said.endX.slice(likeliest), 0),
+    where(stillWriting, said.endY.slice(likeliest), 0),
+    where(stillWriting, said.midX.slice(likeliest), 0),
+    where(stillWriting, said.midY.slice(likeliest), 0)
+  )
+  (node, stillWriting)
+
+/** The node every position along `Node` answers with, and the log probability of that answer: the
+  * score of its class plus the score of each coordinate the class places.
+  */
+def answered(scorer: NodeHead[Float32], logits: NodeLogits[Float32]): (RecordNodes[Node], Tensor1[Node, Float32]) =
   val decided = scorer.decide(logits)
-  def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).take(Axis[NodeClasses])(decided.nodeClass)
-  val score = chosen(logits.nodeClass) + chosen(logits.startX) + chosen(logits.startY) +
+  def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).slice(Axis[NodeClasses].at(decided.nodeClass))
+  val score = chosen(logits.nodeClass) + chosen(logits.construction) + chosen(logits.startX) + chosen(logits.startY) +
     (chosen(logits.endX) + chosen(logits.endY)) * carries(_.numPoints > 1) +
     (chosen(logits.midX) + chosen(logits.midY)) * carries(_.numPoints > 2)
-  (decided.nodeClass, decided.startX, decided.startY, decided.endX, decided.endY, decided.midX, decided.midY, score)
+  (decided, score)
 
 /** The log probability of the value a position's scores are highest for. */
 def chosen[Slot: Label, L: Label](logits: Tensor2[Slot, L, Float32]): Tensor1[Slot, Float32] =
-  val peak = logits.max(Axis[L])
-  peak - (peak + (logits -! peak).exp.sum(Axis[L]).log)
+  logits.logSoftmax(Axis[L]).max(Axis[L])
 
-/** How much of a record there is to see, for the header of a drawing of it. */
+/** How many nodes of each class a record holds, for the header of a drawing of it. */
 def counted(record: RecordGraph): String =
-  def held(nodeClass: NodeClass, name: String) =
+  val held = NodeClass.values.toSeq.flatMap: nodeClass =>
     val count = record.nodes.count(_.nodeClass == nodeClass)
-    s"$count $name${if count == 1 then "" else "s"}"
-  s"${held(NodeClass.Line, "line")}, ${held(NodeClass.Annotation, "text")}"
+    Option.when(count > 0)(s"$count ${nodeClass.toString.toLowerCase}${if count == 1 then "" else "s"}")
+  if held.isEmpty then "nothing" else held.mkString(", ")
 
 def describe(record: RecordGraph): String =
   val nodes = record.nodes.map(node => s"${node.nodeClass}(${node.points.map(point => f"${point.x}%.3f, ${point.y}%.3f").mkString("; ")})")

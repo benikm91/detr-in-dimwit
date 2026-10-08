@@ -15,16 +15,16 @@ import scala.language.implicitConversions
   *
   * Every node is answered by the query the optimal matching gives it, and every query left over
   * is trained towards [[NodeClass.NoNode]]. What a query costs against a node is what the
-  * transcriber's node head pays for it: the cross entropy of the node's class, and of the pixel of
-  * every point that class places.
+  * transcriber's node head pays for it: the cross entropy of the node's class, of whether it is
+  * construction geometry, and of the pixel of every point that class places.
   */
 class HungarianLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((NodeLogits[V], RecordNodes[Node]) => Tensor0[V]):
 
   override def apply(logits: NodeLogits[V], target: RecordNodes[Node]): Tensor0[V] =
     val queries = logits.nodeClass.shape.extent(Axis[Query])
-    val holdsNode = NodeClass.indicator(vtype)(_.isNode).take(Axis[NodeClasses])(target.nodeClass)
+    val holdsNode = NodeClass.indicator(vtype)(_.isNode).slice(Axis[NodeClasses].at(target.nodeClass))
     val classCost = costOfValue(logits.nodeClass, target.nodeClass)
-    val placementCost = placement(logits, target)
+    val placementCost = costOfValue(logits.construction, target.construction) + placement(logits, target)
 
     // A slot holding no node costs every query the same, so only the nodes decide the matching.
     val answering = Matching.optimal((classCost + placementCost) *! holdsNode)
@@ -42,15 +42,15 @@ class HungarianLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((NodeL
   private def placement(logits: NodeLogits[V], target: RecordNodes[Node]): Tensor2[Query, Node, V] =
     def placed(scores: Tensor2[Query, Pixel, V], coordinate: Tensor1[Node, Float32]) =
       costOfValue(scores, Pixels.of(coordinate, canvas))
-    val runsOn = NodeClass.indicator(vtype)(_.numPoints > 1).take(Axis[NodeClasses])(target.nodeClass)
-    val bends = NodeClass.indicator(vtype)(_.numPoints > 2).take(Axis[NodeClasses])(target.nodeClass)
+    val runsOn = NodeClass.indicator(vtype)(_.numPoints > 1).slice(Axis[NodeClasses].at(target.nodeClass))
+    val bends = NodeClass.indicator(vtype)(_.numPoints > 2).slice(Axis[NodeClasses].at(target.nodeClass))
     val ends = placed(logits.endX, target.endX) + placed(logits.endY, target.endY)
     val middles = placed(logits.midX, target.midX) + placed(logits.midY, target.midY)
     placed(logits.startX, target.startX) + placed(logits.startY, target.startY) + ends *! runsOn + middles *! bends
 
   /** The cross entropy of every query's scores against the value every node holds. */
   private def costOfValue[L: Label](logits: Tensor2[Query, L, V], values: Tensor1[Node, Int32]): Tensor2[Query, Node, V] =
-    logNormalizer(logits) -! logits.take(Axis[L])(values)
+    logNormalizer(logits) -! logits.slice(Axis[L].at(values))
 
   /** The cross entropy of every query's scores against one class. */
   private def costOfClass(logits: Tensor2[Query, NodeClasses, V], id: Int): Tensor1[Query, V] =

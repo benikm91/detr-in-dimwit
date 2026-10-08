@@ -2,13 +2,16 @@ package d2s.model
 
 import d2s.*
 import deepwit.activation.gelu
+import deepwit.attention.AttentionMask
 import deepwit.attention.AttentionScore
+import deepwit.attention.KVCache
 import deepwit.attention.MultiHeadAttention
 import deepwit.attention.MultiHeadCustomAttention
 import deepwit.attention.MultiHeadCustomSelfAttention
 import deepwit.attention.MultiHeadFullAttention
 import deepwit.attention.MultiHeadFullSelfAttention
 import deepwit.attention.MultiHeadSelfAttention
+import deepwit.attention.MultiHeadUnfusedFullAttention
 import deepwit.base.AffineLayer
 import deepwit.normalization.LayerNorm
 import deepwit.transformer.TransformerBlock
@@ -57,6 +60,33 @@ class NodeDecoder[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
       answered.vmap(Axis[NodePrediction])(finalNorm).unflatten(Axis[NodePrediction], perQuery)
     )
 
+  /** Every block's keys and values of the encoded `document`, which every decoding step reads. */
+  def read(document: Tensor2[Patch, PatchEmbedding, V]): List[KVCache[Patch, V]] =
+    blocks.map(_.read(document))
+
+  /** Every block's keys and values of `slots` taken nodes, before any is taken. */
+  def nothingTaken(slots: AxisExtent[Node]): List[KVCache[Node, V]] =
+    params.blocks.map(block => KVCache.empty(slots, block.selfAttention))
+
+  /** Takes the `node` embedding at `slot`: the node as the decoder carries it, as [[forTraining]]
+    * carries it there, and every block's keys and values of the taken nodes, with it among them for
+    * the slots after it to read.
+    */
+  def take(documentCache: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32], node: Tensor1[Embedding, V]): (Tensor1[Embedding, V], List[KVCache[Node, V]]) =
+    val (carried, nowTaken) = blocks.lazyZip(documentCache).lazyZip(taken).foldLeft((node, List.empty[KVCache[Node, V]])):
+      case ((node, nowTaken), (block, documentCache, taken)) =>
+        val (carried, withNode) = block.take(documentCache, taken, slot, node)
+        (carried, nowTaken :+ withNode)
+    (finalNorm(carried), nowTaken)
+
+  /** What each of the `asked` queries answers at `slot`, given the nodes taken before it, as
+    * [[forTraining]] would answer there.
+    */
+  def answer(documentCache: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32], asked: Tensor2[PoolQuery, Embedding, V]): Tensor2[PoolQuery, Embedding, V] =
+    val answered = blocks.lazyZip(documentCache).lazyZip(taken).foldLeft(asked):
+      case (asked, (block, documentCache, taken)) => block.answer(documentCache, taken, slot, asked)
+    answered.vmap(Axis[PoolQuery])(finalNorm)
+
 object NodeDecoder:
 
   /** The sequence a block decodes: every node embedding, then every prediction embedding. */
@@ -89,9 +119,9 @@ class NodeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
 
   private val contextAxis = Axis[Context]
 
-  private def jointAttention(queries: Int) = MultiHeadCustomSelfAttention(
+  private def jointAttention(slots: Int) = MultiHeadCustomSelfAttention(
     params.selfAttention,
-    jointSequenceMask[Context](queries),
+    jointSequenceMask[Context, Context](slots),
     AttentionScore.scaledDotProduct
   )
   private val selfAttentionPreNorm = LayerNorm(params.selfAttentionNorm)
@@ -105,12 +135,90 @@ class NodeDecoderBlock[PatchEmbedding: Λ, Embedding: Λ, V: IsFloating](
       nodes: Tensor2[Node, Embedding, V],
       predictions: Tensor2[NodePrediction, Embedding, V]
   ): (Tensor2[Node, Embedding, V], Tensor2[NodePrediction, Embedding, V]) =
-    val queries = predictions.shape(Axis[NodePrediction]) / nodes.shape(Axis[Node])
     var x = concatenate(nodes, predictions)
-    x = x + jointAttention(queries)(x.vmap(contextAxis)(selfAttentionPreNorm))
+    x = x + jointAttention(nodes.shape(Axis[Node]))(x.vmap(contextAxis)(selfAttentionPreNorm))
     x = x + documentAttention(document, x.vmap(contextAxis)(documentAttentionPreNorm))
     x = x + x.vmap(contextAxis)(embedding => mlp(mlpPreNorm(embedding)))
     x.deconcatenate(contextAxis, (nodes.extent(Axis[Node]), predictions.extent(Axis[NodePrediction])))
+
+  // Decoding one slot at a time: the keys and values of the document and of the taken nodes are
+  // kept, and a step projects only the embeddings it adds. Each slot sits where it sits in the
+  // joined sequence, so the same mask decides what it reads.
+
+  private val selfWeights = params.selfAttention.multiHeadAttention
+
+  /** The keys and values of the encoded `document`, as this block's cross-attention reads them. */
+  def read(document: Tensor2[Patch, PatchEmbedding, V]): KVCache[Patch, V] =
+    KVCache(
+      document.dot(Axis[PatchEmbedding])(params.documentAttention.keyWeights),
+      document.dot(Axis[PatchEmbedding])(params.documentAttention.valueWeights)
+    )
+
+  /** Takes the `node` embedding at `slot`: what the block makes of it, and `taken` with its key and
+    * value written in.
+    */
+  def take(documentCache: KVCache[Patch, V], taken: KVCache[Node, V], slot: Tensor0[Int32], node: Tensor1[Embedding, V]): (Tensor1[Embedding, V], KVCache[Node, V]) =
+    val normed = selfAttentionPreNorm(node)
+    val withNode = KVCache(
+      taken.keys.set(Axis[Node].at(slot))(normed.dot(Axis[Embedding])(selfWeights.keyWeights)),
+      taken.values.set(Axis[Node].at(slot))(normed.dot(Axis[Embedding])(selfWeights.valueWeights))
+    )
+    val slots = taken.keys.shape.extent(Axis[Node])
+    val carried = decoded(
+      documentCache,
+      node.prependAxis(Axis[Taking]),
+      normed.prependAxis(Axis[Taking]),
+      withNode,
+      slot.prependAxis(Axis[Taking]),
+      Tensor1(Axis[Node]).fromRange(0 until slots.size),
+      slots.size
+    )
+    (carried.squeeze(Axis[Taking]), withNode)
+
+  /** What the `asked` queries make of their prediction embeddings at `slot`, reading the nodes
+    * taken before it and themselves.
+    */
+  def answer(documentCache: KVCache[Patch, V], taken: KVCache[Node, V], slot: Tensor0[Int32], asked: Tensor2[PoolQuery, Embedding, V]): Tensor2[PoolQuery, Embedding, V] =
+    val slots = taken.keys.shape(Axis[Node])
+    val normed = asked.vmap(Axis[PoolQuery])(selfAttentionPreNorm)
+    val queries = Tensor1(Axis[PoolQuery]).fromRange(0 until asked.shape(Axis[PoolQuery]))
+    val positions = queries *! slots +! slots +! slot
+    decoded(
+      documentCache,
+      asked,
+      normed,
+      KVCache(
+        concatenate(taken.keys, normed.dot(Axis[Embedding])(selfWeights.keyWeights)),
+        concatenate(taken.values, normed.dot(Axis[Embedding])(selfWeights.valueWeights))
+      ),
+      positions,
+      concatenate(Tensor1(Axis[Node]).fromRange(0 until slots), positions),
+      slots
+    )
+
+  /** The block applied to `rows` at `positions` of the joined sequence, attending to the `sources`
+    * at `sourcePositions` and to the document.
+    */
+  private def decoded[Row: Λ, Source: Λ](
+      documentCache: KVCache[Patch, V],
+      rows: Tensor2[Row, Embedding, V],
+      normed: Tensor2[Row, Embedding, V],
+      sources: KVCache[Source, V],
+      positions: Tensor1[Row, Int32],
+      sourcePositions: Tensor1[Source, Int32],
+      slots: Int
+  ): Tensor2[Row, Embedding, V] =
+    val selfAttention = MultiHeadCustomAttention[Source, Embedding, Row, Embedding, V](selfWeights, jointSequenceMask[Row, Source](slots), AttentionScore.scaledDotProduct)
+    val readSelf = selfAttention.attendAt(normed.dot(Axis[Embedding])(selfWeights.queryWeights), sources.keys, sources.values, positions, sourcePositions)
+    val afterSelf = rows + selfAttention.projectHeads(readSelf)
+    val documentRead = MultiHeadUnfusedFullAttention[Patch, PatchEmbedding, Row, Embedding, V](Axis[Patch], Axis[Row], params.documentAttention, AttentionScore.scaledDotProduct)
+    val documentQueries = afterSelf.vmap(Axis[Row])(documentAttentionPreNorm).dot(Axis[Embedding])(params.documentAttention.queryWeights)
+    val patches = Tensor1(Axis[Patch]).fromRange(0 until documentCache.keys.shape(Axis[Patch]))
+    val afterDocument = afterSelf + documentRead.projectHeads(documentRead.attendAt(documentQueries, documentCache.keys, documentCache.values, positions, patches))
+    afterDocument + afterDocument.vmap(Axis[Row])(embedding => mlp(mlpPreNorm(embedding)))
+
+/** Axis of the one node a decoding step takes. */
+private trait Taking derives Label
 
 object NodeDecoderBlock:
 
@@ -136,7 +244,9 @@ object NodeDecoderBlock:
         mlpNorm = LayerNorm.Params.identity(embeddingExtent, vtype)
       )
 
-/** Attention mask for a joined sequence: "taken" embeddings, then one "prediction" per slot per query.
+/** Attention mask for a joined sequence of `slots` "taken" embeddings, then one "prediction" per
+  * slot per query, each placed at its position in that sequence: the taken embedding of a slot at
+  * the slot, the prediction of query `q` for slot `s` at `slots + q * slots + s`.
   * Rows read, columns are read:
   * {{{
   *                 source:  taken                 prediction
@@ -144,32 +254,7 @@ object NodeDecoderBlock:
   *   target: prediction     before its own slot   itself
   * }}}
   */
-def jointSequenceMask[Context: Λ](queries: Int)(context: AxisExtent[Context]): Tensor2[Context, Context, Bool] =
-
-  trait TakenSource derives Label
-  trait TakenTarget derives Label
-  trait PredictionSource derives Label
-  trait PredictionTarget derives Label
-
-  val slots = context.size / (1 + queries)
-  val predictions = slots * queries
-  val taken = Axis[TakenSource] -> slots
-
-  val upToItsOwnSlot = tril(Tensor(Shape2(Axis[TakenTarget] -> slots, taken)).fill(true))
-  val noSlot = Tensor(Shape2(Axis[TakenTarget] -> slots, Axis[PredictionSource] -> predictions)).fill(false)
-
-  // A prediction row answers for the slot it sits at, which is its position within its own token's
-  // block, so the taken embeddings it may read are the ones before that slot.
-  val answersFor = Tensor1(Axis[PredictionTarget], VType[Int32])
-    .fromArray(Array.range(0, predictions).map(_ % slots))
-  val readable = Tensor1(taken.axis, VType[Int32]).fromArray(Array.range(0, slots))
-  val shape = Shape2(Axis[PredictionTarget] -> predictions, taken)
-  val beforeItsOwnSlot = readable.broadcastTo(shape) < answersFor.broadcastTo(shape)
-
-  val itselfOnly = Tensor2(Axis[PredictionTarget] -> predictions, Axis[PredictionSource] -> predictions).eye(VType[Bool])
-
-  val mask = concatenate(
-    concatenate(upToItsOwnSlot, noSlot),
-    concatenate(beforeItsOwnSlot, itselfOnly)
-  )
-  mask.relabelAll((Axis[Context], Axis[Context]))
+def jointSequenceMask[Target: Λ, Source: Λ](slots: Int): AttentionMask[Target, Source] = (targets, sources) =>
+  targets.vmap(Axis[Target]): target =>
+    val lastTakenRead = where(target < slots, target, (target - slots) % slots - 1)
+    (sources elementEquals_! target) or (sources <=! lastTakenRead)

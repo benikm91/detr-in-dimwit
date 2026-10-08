@@ -67,7 +67,7 @@ case class DETRSetup(
     seed: Int = 0
 ):
   require(
-    numQueries > corpus.maxNodes,
+    numQueries >= corpus.maxNodes,
     s"$numQueries queries cannot answer for a drawing of up to ${corpus.maxNodes} objects"
   )
 
@@ -88,13 +88,13 @@ object DETRSetup:
 
   def checkpointRoot(corpus: Corpus, size: DETR.Size): String = s"${Runs.checkpointDir}/detr/${corpus.name}-${size.name}"
 
-  /** About three queries per object a drawing can hold, which is the headroom the l-shape runs
-    * converged with and every corpus since has kept. Fewer would leave the queries no room to
-    * compete over an object before one wins it; more is more slots that have to learn to stay
-    * empty.
+  /** The generated corpora get about three queries per object a drawing can hold, which is the
+    * headroom the l-shape runs converged with. The sketch corpora get one query per node a drawing
+    * can hold.
     */
   def queries(corpus: Corpus): Int = corpus match
-    case Corpus.LShape           => 32
-    case Corpus.Rectilinear6to18 => 64
-    case Corpus.SketchGraph      => 48
-    case Corpus.SketchGraphXL    => 48
+    case Corpus.LShape              => 32
+    case Corpus.Rectilinear6to18    => 64
+    case Corpus.SketchGraph         => 16
+    case Corpus.SketchGraphXL       => 16
+    case Corpus.VitruvionPrimitives => 16

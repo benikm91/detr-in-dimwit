@@ -6,7 +6,6 @@ import d2g.eval.*
 import d2g.config.*
 import d2s.model.*
 import d2s.train.*
-import dataset.Canvas
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
@@ -83,7 +82,6 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val nodes = Axis[Node] -> setup.nodeSlots
   val edges = Axis[Edge] -> setup.edgeSlots
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
-  val batches = data.batches(Axis[Batch] -> batchSize)
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 
@@ -100,7 +98,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
     nodes = setup.nodeSlots,
     edges = setup.edgeSlots,
     queries = setup.queryPool,
-    canvas = Canvas,
+    canvas = setup.corpus.canvas,
     key = initKey
   )
 
@@ -108,7 +106,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
-  val nodeLoss = RemainingNodeLoss(VType[Float32], Canvas)
+  val nodeLoss = RemainingNodeLoss(VType[Float32], setup.corpus.canvas, setup.nodeOrder)
   val edgeLoss = RemainingEdgeLoss(VType[Float32])
 
   /** The mean loss over the drawings of a batch, whatever axis `S` they lie along. */
@@ -118,9 +116,9 @@ def trainTranscriber(setup: D2GSetup): Unit =
       asked: Key
   )(params: D2G.Params[Float32]): Tensor0[Float32] =
     val model = D2G(params.asFloats(VType[Float16]))
-    zipvmap(Axis[S])(images.asFloat(VType[Float16]), records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY, records.edgeClass, records.subject, records.obj):
-      case (image, nodeClass, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj) =>
-        val target = Record(nodeClass, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj)
+    zipvmap(Axis[S])(images.asFloat(VType[Float16]), records.nodeClass, records.construction, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY, records.edgeClass, records.subject, records.obj):
+      case (image, nodeClass, construction, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj) =>
+        val target = Record(nodeClass, construction, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj)
         val scored = model.logits(image, target, asked).asFloats(VType[Float32])
         nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target.edges)
     .mean
@@ -134,7 +132,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
     val lossScale = state.lossScale
     val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
-      (params: D2G.Params[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges), forQueries)(params))
+      (params: D2G.Params[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges, setup.nodeOrder.classRank), forQueries)(params))
     )(state.params)
     val gradients = lossScale.unscaled(scaledGradients)
     val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)
@@ -161,6 +159,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
       batch.pixels.shard(mesh, over),
       RecordBatch(
         nodeClass = records.nodeClass.shard(mesh, over),
+        construction = records.construction.shard(mesh, over),
         startX = records.startX.shard(mesh, over),
         startY = records.startY.shard(mesh, over),
         endX = records.endX.shard(mesh, over),
@@ -200,7 +199,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
   ))
 
   val started = System.nanoTime
-  batches
+  data.batches(Axis[Batch] -> batchSize, afterSteps = taken)
     .scanLeft(initialState):
       case (state, batch) =>
         val (images, records) = shard(batch)

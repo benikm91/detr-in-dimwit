@@ -4,7 +4,7 @@
 #SBATCH --partition=gpu
 #SBATCH --account=cai_cv
 #SBATCH --gres=gpu:4
-#SBATCH --exclude=sanjose,irvine,salinas,losangeles
+#SBATCH --exclude=irvine,salinas
 #SBATCH --time=6:00:00
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/%x_%j.out
 #SBATCH --error=/cluster/home/%u/.logs/slurm/%j/%x_%j.err
@@ -23,14 +23,14 @@
 #
 # `runs/queue_d2s.sh` is the usual way in; `sbatch` hands the environment on to the job.
 # CACHE_DIR is where the corpora land, so that the next job does not download them again.
-# OUTPUT_DIR is where `d2s-<corpus>-<size>.csv` ends up: what is left of the job once the
+# OUTPUT_DIR is where `d2s-<corpus>-<size>-<split>.csv` ends up: what is left of the job once the
 # instance is wiped. CHECKPOINT_DIR is where the checkpoints go, under OUTPUT_DIR unless it is set
 # otherwise: the scoring job reads them back, and they are yours to delete once it has.
 
 set -euo pipefail
 
-STAGE="${1:?say which stage to run: train, eval or draw}"
-[[ $STAGE == train || $STAGE == eval || $STAGE == draw ]] || { echo "no stage named '$STAGE': train, eval or draw" >&2; exit 2; }
+STAGE="${1:?say which stage to run: train, eval, test or draw}"
+[[ $STAGE == train || $STAGE == eval || $STAGE == test || $STAGE == draw ]] || { echo "no stage named '$STAGE': train, eval, test or draw" >&2; exit 2; }
 
 : "${CACHE_DIR:?set CACHE_DIR to a directory that outlives the job, where the corpora are cached}"
 : "${OUTPUT_DIR:?set OUTPUT_DIR to a directory that outlives the job, where the metrics are written}"
@@ -68,7 +68,7 @@ module load sarus/1.6.4
 
 # DimWit, DeepWit, PlotWit and dimwit-sharding come published inside the image, at the versions
 # build.sbt asks for. A new release of any of them needs a new image.
-IMAGE="benikm91/dimwit-gpu:deepwit-0.2.1"
+IMAGE="benikm91/dimwit-gpu:kv-cache-control-flow"
 sarus pull "$IMAGE"
 
 sarus run \
@@ -134,6 +134,7 @@ JSON
     case "$stage" in
       train) sbt "d2s/runMain d2sTrain $corpus $size" ;;
       eval) sbt "d2s/runMain d2sEval $corpus $size" ;;
+      test) sbt "d2s/runMain d2sTest $corpus $size" ;;
       draw) sbt "d2s/runMain d2sDraw $corpus $size" ;;
     esac
   ' d2s "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" &
@@ -146,13 +147,26 @@ if [[ $requeued == yes ]]; then
 fi
 [[ ${trained:-0} -eq 0 ]] || exit "${trained:-0}"
 
-if [[ $STAGE == train ]]; then
-  echo "job finished, checkpoints in $CHECKPOINT_DIR"
-  # Scoring is queued from here, so that it reads the checkpoints this run just wrote and runs only
-  # if there are any. One GPU is enough: it scores one checkpoint at a time.
-  evalId="$(sbatch --parsable --gres=gpu:1 --time=24:00:00 --job-name="d2s-$CORPUS-$SIZE-eval" runs/d2s.sh eval)"
-  echo "queued scoring as $evalId"
-else
-  echo "job finished, metrics in $OUTPUT_DIR:"
-  ls -la "$OUTPUT_DIR"/d2s-"$CORPUS"-"$SIZE".csv
-fi
+# A run goes train, eval, test: each stage queues the next once it has finished, so that the next
+# reads what this one wrote, and runs only if it got that far. One GPU is enough for scoring: it
+# scores one checkpoint at a time. The memory this job was given is not handed on, since the next
+# stage may land on a node that has less.
+queueNext() {
+  nextId="$(env -u SLURM_MEM_PER_NODE sbatch --parsable --gres=gpu:1 --time=24:00:00 --job-name="d2s-$CORPUS-$SIZE-$1" runs/d2s.sh "$1")"
+  echo "queued $1 as $nextId"
+}
+case "$STAGE" in
+  train)
+    echo "job finished, checkpoints in $CHECKPOINT_DIR"
+    queueNext eval
+    ;;
+  eval)
+    echo "job finished, metrics in $OUTPUT_DIR:"
+    ls -la "$OUTPUT_DIR"/d2s-"$CORPUS"-"$SIZE"-*.csv
+    queueNext test
+    ;;
+  *)
+    echo "job finished, metrics in $OUTPUT_DIR:"
+    ls -la "$OUTPUT_DIR"/d2s-"$CORPUS"-"$SIZE"-*.csv
+    ;;
+esac

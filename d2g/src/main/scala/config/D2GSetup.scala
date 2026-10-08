@@ -4,6 +4,7 @@ import d2g.*
 import d2g.model.*
 import d2g.train.*
 import d2g.eval.*
+import d2s.NodeOrder
 import d2s.config.D2SModelConfiguration
 import dataset.Corpus
 import dataset.Runs
@@ -17,6 +18,8 @@ case class D2GSetup(
     numHeads: Int = 4,
     embedding: Int = 128,
     queryPool: Int = 6,
+    /** Whether the nodes of a record are written down in any order or in an order of their classes. */
+    nodeOrder: NodeOrder = NodeOrder.SimplestFirst,
 
     // Train configuration
     checkpointRoot: String,
@@ -43,7 +46,7 @@ case class D2GSetup(
   val nodeSlots: Int = corpus.maxNodes + 1 // One more due to the end prediction
   val edgeSlots: Int = corpus.maxEdges + 1 // One more due to the end prediction
 
-  override def toString: String = s"D2GSetup(${corpus.repoId}, layers=$numLayers, heads=$numHeads, embedding=$embedding, nodes=$nodeSlots, edges=$edgeSlots, samples=$numSamples, batch=$batchSize)"
+  override def toString: String = s"D2GSetup(${corpus.repoId}, layers=$numLayers, order=$nodeOrder, heads=$numHeads, embedding=$embedding, nodes=$nodeSlots, edges=$edgeSlots, samples=$numSamples, batch=$batchSize)"
 
 object D2GSetup:
 

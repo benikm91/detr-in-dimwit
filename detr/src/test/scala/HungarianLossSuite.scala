@@ -4,6 +4,7 @@ import detr.*
 import detr.model.NodeHead.NodeLogits
 import dataset.NodeClass
 import dataset.NodeClasses
+import dataset.IsConstruction
 import dataset.RecordNodes
 import dimwit.*
 import munit.FunSuite
@@ -19,6 +20,7 @@ class HungarianLossSuite extends FunSuite:
   /** A record of one line, from (2, 4) to (6, 4) in pixels, and one slot holding no node. */
   private val oneLine = RecordNodes(
     nodeClass = Tensor1(Axis[Node], VType[Int32]).fromArray(Array(NodeClass.Line.id, NodeClass.NoNode.id)),
+    construction = Tensor1(Axis[Node], VType[Int32]).fromArray(Array(0, 0)),
     startX = Tensor1(Axis[Node], VType[Float32]).fromArray(Array(0.25f, 0f)),
     startY = Tensor1(Axis[Node], VType[Float32]).fromArray(Array(0.5f, 0f)),
     endX = Tensor1(Axis[Node], VType[Float32]).fromArray(Array(0.75f, 0f)),
@@ -34,6 +36,7 @@ class HungarianLossSuite extends FunSuite:
     def pixel(at: Int) = sure(Axis[Pixel], canvas)(query => if answering.contains(query) then at else 0)
     NodeLogits(
       nodeClass = sure(Axis[NodeClasses], NodeClass.values.length)(query => if answering.contains(query) then NodeClass.Line.id else NodeClass.NoNode.id),
+      construction = sure(Axis[IsConstruction], 2)(_ => 0),
       startX = pixel(2),
       startY = pixel(4),
       endX = pixel(6),

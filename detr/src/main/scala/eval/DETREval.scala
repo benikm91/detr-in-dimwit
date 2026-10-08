@@ -4,7 +4,6 @@ import detr.*
 import detr.model.*
 import detr.train.*
 import detr.config.*
-import dataset.Canvas
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
@@ -53,9 +52,9 @@ def plotDetector(setup: DETRSetup): Unit =
 
   display(grid(rows))
 
-/** Scores every checkpoint of the newest run on the whole validation split, the last checkpoint
-  * first, and writes what it finds as [[Metrics]], and what the last checkpoint found in every
-  * drawing as [[Transcripts]].
+/** Scores the newest run on a whole split, and writes what it finds as [[Metrics]], and what the
+  * last checkpoint found in every drawing as [[Transcripts]]. On the validation split every
+  * checkpoint is scored, the last first; the test split is looked at once, by the last alone.
   *
   * The nodes the queries answer with are compared with the record the drawing was rendered from,
   * which is how [[scoreTranscriber]] scores too — a detector predicts no relationships, so the
@@ -63,12 +62,12 @@ def plotDetector(setup: DETRSetup): Unit =
   * reported readably: `found` is recall, `right` is precision, and `records exactly right` is
   * every node of the drawing at once with nothing spurious.
   */
-def scoreDetector(setup: DETRSetup, size: String): Unit =
+def scoreDetector(setup: DETRSetup, size: String, split: Split): Unit =
   dimwit.initialize()
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
-  val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Validation)
+  val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(split)
 
   def detected(params: DETR.Params[Float32]): Seq[(RecordGraph, RecordGraph)] =
     val detect = jit(DETR(params).apply)
@@ -76,14 +75,17 @@ def scoreDetector(setup: DETRSetup, size: String): Unit =
       .map(sample => (RecordGraph.of(sample.target).copy(edges = Seq.empty), RecordGraph.of(detect(sample.image))))
       .toSeq
 
-  val csv = Metrics.Csv("detr", setup.corpus, size, Runs.parameters(checkpoints.loadLatest[TrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("detr", setup.corpus, size, split, Runs.parameters(checkpoints.loadLatest[TrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
-  checkpoints.iterations.reverse.foreach: step =>
+  val scored = split match
+    case Split.Test => Seq(checkpoints.iterations.last)
+    case _          => checkpoints.iterations.reverse
+  scored.foreach: step =>
     println(s"scoring checkpoint $step")
     val drawings = detected(checkpoints.load[TrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
-    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, found) => RecordScoring.score(target, found, tolerance / Canvas))))
+    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, found) => RecordScoring.score(target, found, tolerance / setup.corpus.canvas))))
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-      println(s"transcripts written to ${Transcripts.write("detr", setup.corpus, size, step, drawings)}")
+      println(s"transcripts written to ${Transcripts.write("detr", setup.corpus, size, split, step, drawings)}")

@@ -14,6 +14,7 @@ import dataset.Record
 import dataset.RecordBatch
 import dataset.RecordEdges
 import dataset.RecordNodes
+import deepwit.attention.KVCache
 import deepwit.base.AffineLayer
 import documentEncoder.DocumentEncoder
 import deepwit.embedder.LearnedAbsolutePositionalInjector
@@ -38,7 +39,8 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   import D2G.EdgeQueryLogits
   import D2G.Scores
 
-  private val set = D2S(params.set)
+  /** The model of the nodes, which the relationships are written on top of. */
+  val set = D2S(params.set)
   val encodeDocument = set.encodeDocument
   val nodeHead = set.nodeHead
 
@@ -74,7 +76,7 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
         val nodesPresentMask = !(taken.nodes.nodeClass elementEquals_! NodeClass.NoNode.id)
         NodeSource(carriedNodes, nodesPresentMask)
       val takenEdges = edgePosition(embedEdges(taken.edges))
-      val queryEdges = params.edges.queries.take(Axis[PoolQuery])(edgeQueryIds) // take queries and broadcast along context
+      val queryEdges = params.edges.queries.slice(Axis[PoolQuery].at(edgeQueryIds)) // take queries and broadcast along context
         .vmap(Axis[PoolQuery]): query =>
           edgePosition(query.broadcastTo(takenEdges.shape))
       edgeDecoder.forTraining(encodedDocument, nodeSource, takenEdges, queryEdges)
@@ -85,6 +87,27 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
         (scored.edgeClass, scored.subject, scored.obj)
 
     Scores(nodes, EdgeQueryLogits(edgeClass, subject, obj))
+
+  /** Every edge decoder block's keys and values of the encoded document and of the written `nodes`,
+    * which every relationship step reads.
+    */
+  def readForEdges(encodedDocument: Tensor2[Patch, Embedding, V], nodes: NodeSource[Embedding, V]): List[EdgeSources[V]] =
+    edgeDecoder.read(encodedDocument, nodes)
+
+  /** The edge decoder before any relationship is taken. */
+  def noEdgeTaken(slots: AxisExtent[Edge]): List[KVCache[Edge, V]] =
+    edgeDecoder.nothingTaken(slots)
+
+  /** Takes `edge`, a record of one relationship, at `slot`, for the slots after it to read. */
+  def takeEdge(sources: List[EdgeSources[V]], taken: List[KVCache[Edge, V]], slot: Tensor0[Int32], edge: RecordEdges[Edge]): List[KVCache[Edge, V]] =
+    edgeDecoder.take(sources, taken, slot, edgePosition.injectAt(slot)(embedEdges(edge).squeeze(Axis[Edge])))
+
+  /** What the pool answers at relationship `slot`, given the relationships taken before it: a
+    * candidate relationship per query, in the order of the queries.
+    */
+  def answerEdgeAt(sources: List[EdgeSources[V]], taken: List[KVCache[Edge, V]], slot: Tensor0[Int32]): EdgeLogits[V] =
+    val asked = params.edges.queries.vmap(Axis[PoolQuery])(edgePosition.injectAt(slot))
+    edgeHead(edgeDecoder.answer(sources, taken, slot, asked).relabel(Axis[PoolQuery] -> Axis[Edge]))
 
 object D2G:
 
@@ -111,12 +134,6 @@ object D2G:
 
     given tensorTree[V]: TensorTree[EdgeQueryLogits[V]] = TensorTree.derived
     given tree[V]: TreeOf[EdgeQueryLogits[V], V] = TreeOf.derived
-
-    def of[V](answered: Seq[EdgeLogits[V]]): EdgeQueryLogits[V] = EdgeQueryLogits(
-      edgeClass = stack(answered.map(_.edgeClass), Axis[PoolQuery]),
-      subject = stack(answered.map(_.subject), Axis[PoolQuery]),
-      obj = stack(answered.map(_.obj), Axis[PoolQuery])
-    )
 
   case class Params[V](
       set: D2S.Params[V],

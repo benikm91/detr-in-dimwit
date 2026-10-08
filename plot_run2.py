@@ -44,7 +44,7 @@ def history(folder):
 
 def scores(folder):
     """The scores at every checkpoint at the tolerance compared at, or None before the eval has run."""
-    found = [path for path in folder.glob("*.csv")]
+    found = [path for path in folder.glob("*-s-deep.csv")]
     return scored_in(found[0]) if found else None
 
 

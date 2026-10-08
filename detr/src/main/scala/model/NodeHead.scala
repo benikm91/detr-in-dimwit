@@ -3,6 +3,7 @@ package detr.model
 import detr.*
 import dataset.NodeClass
 import dataset.NodeClasses
+import dataset.IsConstruction
 import dataset.RecordNodes
 import deepwit.base.AffineLayer
 import dimwit.*
@@ -17,6 +18,7 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Query
   import NodeHead.NodeLogits
 
   private val nodeClass = AffineLayer(params.nodeClass)
+  private val construction = AffineLayer(params.construction)
   private val startX = AffineLayer(params.startX)
   private val startY = AffineLayer(params.startY)
   private val endX = AffineLayer(params.endX)
@@ -29,6 +31,7 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Query
   override def apply(embeddings: Tensor2[Query, DETR.Embedding, V]): NodeLogits[V] =
     NodeLogits(
       nodeClass = embeddings.vmap(Axis[Query])(nodeClass),
+      construction = embeddings.vmap(Axis[Query])(construction),
       startX = embeddings.vmap(Axis[Query])(startX),
       startY = embeddings.vmap(Axis[Query])(startY),
       endX = embeddings.vmap(Axis[Query])(endX),
@@ -45,12 +48,13 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Query
     */
   def decide(logits: NodeLogits[V]): RecordNodes[Query] =
     val nodeClass = logits.nodeClass.argmax(Axis[NodeClasses])
-    def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).take(Axis[NodeClasses])(nodeClass)
+    def carries(holds: NodeClass => Boolean) = NodeClass.indicator(VType[Float32])(holds).slice(Axis[NodeClasses].at(nodeClass))
     def placed(scores: Tensor2[Query, Pixel, V], carried: Tensor1[Query, Float32]) =
       Pixels.coordinates(scores.argmax(Axis[Pixel]), canvas) * carried
     val (drawn, runsOn, bends) = (carries(_.isNode), carries(_.numPoints > 1), carries(_.numPoints > 2))
     RecordNodes(
       nodeClass = nodeClass,
+      construction = logits.construction.argmax(Axis[IsConstruction]) * drawn.asInt(VType[Int32]),
       startX = placed(logits.startX, drawn),
       startY = placed(logits.startY, drawn),
       endX = placed(logits.endX, runsOn),
@@ -61,9 +65,12 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Query
 
 object NodeHead:
 
-  /** Every query's node, scored: a class, and a pixel for every coordinate a class can place. */
+  /** Every query's node, scored: a class, whether it is construction geometry, and a pixel for
+    * every coordinate a class can place.
+    */
   case class NodeLogits[V](
       nodeClass: Tensor2[Query, NodeClasses, V],
+      construction: Tensor2[Query, IsConstruction, V],
       startX: Tensor2[Query, Pixel, V],
       startY: Tensor2[Query, Pixel, V],
       endX: Tensor2[Query, Pixel, V],
@@ -79,6 +86,7 @@ object NodeHead:
 
   case class Params[V](
       nodeClass: AffineLayer.Params[DETR.Embedding, NodeClasses, V],
+      construction: AffineLayer.Params[DETR.Embedding, IsConstruction, V],
       startX: AffineLayer.Params[DETR.Embedding, Pixel, V],
       startY: AffineLayer.Params[DETR.Embedding, Pixel, V],
       endX: AffineLayer.Params[DETR.Embedding, Pixel, V],
