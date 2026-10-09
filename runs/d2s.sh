@@ -41,12 +41,15 @@ export CHECKPOINT_DIR="${CHECKPOINT_DIR:-$OUTPUT_DIR/checkpoints}"
 export CORPUS="${CORPUS:-sketch}"
 export SIZE="${SIZE:-s}"
 
+# Which seed a run trains from, so that a setting can be run again: SEED=1 for a repeat.
+export SEED="${SEED:-0}"
+
 # Which branch the container builds, as pushed to GitHub — a change that is not pushed is not
 # run. Inherited by the scoring job this one queues, so both build the same one.
 export BRANCH="${BRANCH:-main}"
 
 mkdir -p "$CACHE_DIR" "$OUTPUT_DIR" "$CHECKPOINT_DIR"
-echo "running d2s $STAGE on $CORPUS at size $SIZE from branch $BRANCH: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
+echo "running d2s $STAGE on $CORPUS at size $SIZE, seed $SEED, from branch $BRANCH: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
 
 # Which run this job is, for looking its id up later by what it ran and where it wrote.
 printf '%s\td2s\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CORPUS" "$SIZE" "$STAGE" "$OUTPUT_DIR" "${SLURM_JOB_ID:-none}" \
@@ -85,6 +88,7 @@ sarus run \
     slurmJobId="$4"
     node="$5"
     branch="$6"
+    seed="$7"
 
     export TMPDIR=/tmp
 
@@ -114,6 +118,7 @@ sarus run \
   "model": "$model",
   "corpus": "$corpus",
   "size": "$size",
+  "seed": "$seed",
   "slurmJobId": "$slurmJobId",
   "node": "$node",
   "gpus": "$gpus",
@@ -132,12 +137,12 @@ JSON
     fi
 
     case "$stage" in
-      train) sbt "d2s/runMain d2sTrain $corpus $size" ;;
+      train) sbt "d2s/runMain d2sTrain $corpus $size $seed" ;;
       eval) sbt "d2s/runMain d2sEval $corpus $size" ;;
       test) sbt "d2s/runMain d2sTest $corpus $size" ;;
       draw) sbt "d2s/runMain d2sDraw $corpus $size" ;;
     esac
-  ' d2s "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" &
+  ' d2s "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" "$SEED" &
 
 wait $! || trained=$?
 
