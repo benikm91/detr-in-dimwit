@@ -6,7 +6,7 @@ nodes relate. That makes it the model to compare with [detr](../detr), which pre
 set in one pass, and d2g is a D2S with the relationships added on top.
 
 ```
-sbt "d2s/runMain d2sTrain sketch-xl s-deep"   # trains a run
+sbt "d2s/runMain d2sTrain sketch-xl s-deep 0" # trains a run from seed 0
 sbt "d2s/runMain d2sEval sketch-xl s-deep"    # scores every checkpoint of the newest run
 sbt "d2s/runMain d2sDraw sketch-xl s-deep"    # draws what every checkpoint transcribed
 ```
