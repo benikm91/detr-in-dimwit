@@ -6,14 +6,14 @@ import detr.config.*
 import dataset.Corpus
 import dataset.DrawingDataset.Split
 
-/** The detector, on a corpus at a size — `sbt "detr/runMain detrTrain sketch s"`.
+/** The detector, on a corpus at a size — `sbt "detr/runMain detrTrain sketch s 0"`.
   *
   * [[detrTrain]] trains a run, [[detrEval]] scores the newest run of that corpus and size,
   * [[detrTest]] scores its last checkpoint on the test split, and [[detrPlot]] shows what it
   * detects. See [[Corpus]] and [[DETR.Size]] for the names.
   */
 @main
-def detrTrain(corpus: String, size: String): Unit = trainDetector(DETRSetup(Corpus.named(corpus), DETR.Size.named(size)))
+def detrTrain(corpus: String, size: String, seed: Int): Unit = trainDetector(DETRSetup(Corpus.named(corpus), DETR.Size.named(size)).copy(seed = seed))
 
 @main
 def detrEval(corpus: String, size: String): Unit = scoreDetector(DETRSetup(Corpus.named(corpus), DETR.Size.named(size)), size, Split.Validation)
