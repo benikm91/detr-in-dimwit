@@ -20,7 +20,7 @@ lazy val munit = "org.scalameta" %% "munit" % "1.0.0" % Test
 
 lazy val root = project
   .in(file("."))
-  .aggregate(dataset, documentEncoder, detr, d2s, d2g)
+  .aggregate(dataset, documentEncoder, detr, d2s, d2g, d2seq)
   .settings(
     name := "detr-root",
     publish / skip := true
@@ -77,4 +77,10 @@ lazy val d2g = project
   .in(file("d2g"))
   .dependsOn(d2s) // D2G is a D2S with relationships on top, so it depends on d2s.
   .settings(name := "d2g")
+  .settings(modelSettings)
+
+lazy val d2seq = project
+  .in(file("d2seq"))
+  .dependsOn(dataset, documentEncoder) // A sequence model to set beside d2s, sharing none of its code.
+  .settings(name := "d2seq")
   .settings(modelSettings)
