@@ -26,8 +26,21 @@ enum NodeOrder:
 
 object NodeOrder:
 
+  private val simplestFirst = Seq(NodeClass.Point, NodeClass.Line, NodeClass.Circle, NodeClass.Arc, NodeClass.Annotation)
+
   /** The simplest class first: what a node needs to be placed by grows from one point to three,
     * and a node written later can be placed against the ones before it.
     */
-  val SimplestFirst: NodeOrder =
-    ByClass(Seq(NodeClass.Point, NodeClass.Line, NodeClass.Circle, NodeClass.Arc, NodeClass.Annotation))
+  val SimplestFirst: NodeOrder = ByClass(simplestFirst)
+
+  /** The same classes the other way round: whether it is this order of the classes that helps, or
+    * any order of them.
+    */
+  val SimplestLast: NodeOrder = ByClass(simplestFirst.reverse)
+
+  /** The order a run names on its command line. */
+  def named(name: String): NodeOrder = name match
+    case "free"           => Free
+    case "simplest-first" => SimplestFirst
+    case "simplest-last"  => SimplestLast
+    case other            => sys.error(s"no order named '$other': free, simplest-first, simplest-last")
