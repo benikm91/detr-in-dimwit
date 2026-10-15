@@ -47,8 +47,7 @@ case class D2TokTrainState(
 /** Trains a language model of records on the corpus its [[D2TokSetup]] names: every word of a
   * record predicted from the document and the words before it.
   *
-  * The nodes of a record are written in the order the setup names: in a fresh random order every
-  * step, or in the order the corpus stores them.
+  * The nodes of a record are written in the [[SequenceOrder]] the setup names.
   *
   * One implementation serves every corpus. What differs between them is held in the setup, so that
   * a change to how training works cannot reach one corpus and miss another.
@@ -76,9 +75,7 @@ def trainWordTranscriber(setup: D2TokSetup): Unit =
   require(numTotalSteps % checkpointEvery == 0, s"$numTotalSteps steps do not end on a checkpoint, which is where the cooldown ends")
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numTotalSteps steps")
 
-  val nodes = Axis[Node] -> setup.corpus.maxNodes
   val tokens = Axis[Token] -> setup.tokens
-  val relationships = Axis[Relationship] -> setup.corpus.maxEdges
   val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train)
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
@@ -128,9 +125,7 @@ def trainWordTranscriber(setup: D2TokSetup): Unit =
   ) =
     val images = drawingsOf(pixels, Axis[Channel])
     val (nextLinearization, forThisStep) = state.linearization.splitToTuple(2)
-    val written = setup.order match
-      case SequenceOrder.Random => records.permuted(forThisStep, nodes, relationships)
-      case SequenceOrder.Kept   => records
+    val written = setup.order.laidOut(records, forThisStep, setup.corpus.canvas)
     val lossScale = state.lossScale
     val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
       (params: D2Tok.Params[Float32]) => lossScale.scaled(cost(images, written)(params))
