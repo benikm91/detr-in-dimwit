@@ -47,7 +47,7 @@ export SEED="${SEED:-0}"
 
 # Which order a run writes the nodes of a record in — the names `NodeOrder.named` knows: free,
 # simplest-first or simplest-last for the sketches, free, walls-first or walls-last for the floor plans.
-if [[ $CORPUS == synthetic-floorplans ]]; then export ORDER="${ORDER:-walls-first}"; else export ORDER="${ORDER:-simplest-first}"; fi
+if [[ $CORPUS == synthetic-floorplans ]]; then export ORDER="${ORDER:-free}"; else export ORDER="${ORDER:-simplest-first}"; fi
 
 # Which branch the container builds, as pushed to GitHub — a change that is not pushed is not
 # run. Inherited by the scoring job this one queues, so both build the same one.

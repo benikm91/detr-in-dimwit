@@ -47,7 +47,7 @@ export SEED="${SEED:-0}"
 
 # Which order a run writes the nodes of a record in — the names `d2s.floorplan.NodeOrder.named`
 # knows: free, walls-first or walls-last.
-export ORDER="${ORDER:-walls-first}"
+export ORDER="${ORDER:-free}"
 
 # Which branch the container builds, as pushed to GitHub — a change that is not pushed is not
 # run. Inherited by the scoring job this one queues, so both build the same one.

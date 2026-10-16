@@ -6,7 +6,7 @@ import d2s.floorplan.NodeOrder
 import dataset.DrawingDataset.Split
 
 /** Entry points for the D2G experiments on the synthetic floor plans, at a model configuration
-  * (e.g., `s`): `sbt "d2g/runMain d2gTrain s walls-first 0"`. See [[D2SModelConfiguration]] for the
+  * (e.g., `s`): `sbt "d2g/runMain d2gTrain s free 0"`. See [[D2SModelConfiguration]] for the
   * sizes and [[NodeOrder.named]] for the orders of the nodes.
   *
   * [[d2gTrain]] trains a run in an order of the nodes, from a seed, so that a setting can be run again.
