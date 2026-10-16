@@ -17,8 +17,8 @@
 # holds, not how big it is. `runs/queue_d2s.sh` asks for as many as the model size needs.
 #
 #   CORPUS=l-shape SIZE=s \
-#   CACHE_DIR=/cluster/scratch/$USER/corpora \
-#   OUTPUT_DIR=/cluster/scratch/$USER/metrics \
+#   CACHE_DIR=$HOME/.detr-cache/corpora \
+#   OUTPUT_DIR=$HOME/.detr-cache/output/<run name> \
 #     sbatch runs/d2s.sh train
 #
 # `runs/queue_d2s.sh` is the usual way in; `sbatch` hands the environment on to the job.

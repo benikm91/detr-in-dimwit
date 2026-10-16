@@ -17,8 +17,8 @@
 # holds, not how big it is.
 #
 #   CORPUS=l-shape SIZE=s \
-#   CACHE_DIR=/cluster/scratch/$USER/corpora \
-#   OUTPUT_DIR=/cluster/scratch/$USER/metrics \
+#   CACHE_DIR=$HOME/.detr-cache/corpora \
+#   OUTPUT_DIR=$HOME/.detr-cache/output/<run name> \
 #     sbatch runs/d2tok.sh train
 #
 # `sbatch` hands the environment on to the job.
