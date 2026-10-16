@@ -37,14 +37,16 @@ STAGE="${1:?say which stage to run: train, eval or test}"
 export CACHE_DIR OUTPUT_DIR
 export CHECKPOINT_DIR="${CHECKPOINT_DIR:-$OUTPUT_DIR/checkpoints}"
 
-# Which corpus to train on and how big a model — the names `Corpus` and `D2SModelConfiguration` know.
+# Which corpus to train on and how big a model — the names `Corpus` and `D2TokModelConfiguration` know,
+# and `synthetic-floorplans`.
 export CORPUS="${CORPUS:-sketch}"
 export SIZE="${SIZE:-s}"
 
 # Which seed a run trains from, so that a setting can be run again: SEED=1 for a repeat.
 export SEED="${SEED:-0}"
 
-# Which order a run writes the nodes of a record in — the names `SequenceOrder` knows: random or kept.
+# Which order a run writes the nodes of a record in — the names either `SequenceOrder` knows: random,
+# kept, class or position.
 export ORDER="${ORDER:-random}"
 
 # Which branch the container builds, as pushed to GitHub — a change that is not pushed is not

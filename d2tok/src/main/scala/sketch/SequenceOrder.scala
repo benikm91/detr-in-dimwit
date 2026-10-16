@@ -1,5 +1,6 @@
-package d2tok
+package d2tok.sketch
 
+import d2tok.*
 import dataset.NodeClass
 import dataset.NodeClasses
 import dataset.RecordBatch

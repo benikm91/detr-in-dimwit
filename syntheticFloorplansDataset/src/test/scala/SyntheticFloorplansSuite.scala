@@ -94,3 +94,13 @@ class SyntheticFloorplansSuite extends FunSuite:
       assert(written.nodes.take(3).forall(n => n.nodeClass == FloorplanClass.OutsideWall || n.nodeClass == FloorplanClass.InsideWall), s"seed $seed: walls first")
       written.nodes
     assert(orders.distinct.size > 1, "a fresh order every time")
+
+  test("a plan's record drawn on an empty canvas colours the pixels its nodes run through, and no others"):
+    val plan = FloorplanGraph.of(validation.samples.next().target)
+    val canvas = Tensor(Shape2(Axis[Width] -> SyntheticFloorplans.canvas, Axis[Height] -> SyntheticFloorplans.canvas), VType[UInt8]).fill(255)
+    val drawn = FloorplanDrawing(plan, canvas, Axis[Channel])
+    val inked = drawn.slice(Axis[Channel].at(0)).asInt(VType[Int32]).toArray.map(_.map(_ != 255))
+    def at(point: dataset.Point) = ((point.x * SyntheticFloorplans.canvas).round.min(SyntheticFloorplans.canvas - 1), (point.y * SyntheticFloorplans.canvas).round.min(SyntheticFloorplans.canvas - 1))
+    for node <- plan.nodes; (x, y) <- Seq(at(node.start), at(node.end)) do
+      assert(inked(x)(y), s"$node is not drawn at its end ($x, $y)")
+    assert(inked.flatten.count(identity) < inked.flatten.length / 4, "the record covers a quarter of the canvas or more")

@@ -1,4 +1,5 @@
 import d2tok.*
+import d2tok.sketch.*
 import dataset.NodeClass
 import dataset.Point
 import dataset.RecordBatch

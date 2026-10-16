@@ -1,8 +1,9 @@
-package d2tok.train
+package d2tok.sketch.train
 
 import d2tok.*
 import d2tok.model.*
-import d2tok.config.*
+import d2tok.sketch.*
+import d2tok.sketch.config.*
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
@@ -49,8 +50,8 @@ case class D2TokTrainState(
   *
   * The nodes of a record are written in the [[SequenceOrder]] the setup names.
   *
-  * One implementation serves every corpus. What differs between them is held in the setup, so that
-  * a change to how training works cannot reach one corpus and miss another.
+  * One implementation serves every sketch corpus. What differs between them is held in the setup,
+  * so that a change to how training works cannot reach one corpus and miss another.
   *
   * The model runs in Float16 against Float32 master weights, the loss in Float32. A [[LossScale]]
   * keeps the small gradients from rounding to zero, and a step whose gradients overflow is skipped.

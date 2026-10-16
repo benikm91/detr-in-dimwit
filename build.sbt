@@ -95,6 +95,6 @@ lazy val d2seq = project
 
 lazy val d2tok = project
   .in(file("d2tok"))
-  .dependsOn(dataset, documentEncoder) // A language model of records to set beside d2s, sharing none of its code.
+  .dependsOn(dataset, syntheticFloorplansDataset, documentEncoder) // A language model of records to set beside d2s, sharing none of its code.
   .settings(name := "d2tok")
   .settings(modelSettings)

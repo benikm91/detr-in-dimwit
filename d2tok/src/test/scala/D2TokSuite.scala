@@ -1,5 +1,6 @@
 import d2tok.*
-import d2tok.eval.Transcriber
+import d2tok.sketch.*
+import d2tok.sketch.eval.Transcriber
 import d2tok.model.*
 import dataset.NodeClass
 import dataset.Point

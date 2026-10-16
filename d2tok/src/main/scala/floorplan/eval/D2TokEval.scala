@@ -1,25 +1,28 @@
-package d2tok.eval
+package d2tok.floorplan.eval
 
 import d2tok.*
 import d2tok.model.*
-import d2tok.train.*
-import d2tok.config.*
-import dataset.DrawingDataset
+import d2tok.floorplan.*
+import d2tok.floorplan.config.*
+import d2tok.floorplan.train.*
 import dataset.DrawingDataset.Split
 import dataset.Metrics
-import dataset.RecordGraph
 import dataset.RecordScoring
 import dataset.Runs
 import dataset.Tolerances
-import dataset.Transcripts
 import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
 import dimwit.tensor.Tensor4
 
+import syntheticFloorplansDataset.FloorplanGraph
+import syntheticFloorplansDataset.FloorplanScoring
+import syntheticFloorplansDataset.FloorplanTranscripts
+import syntheticFloorplansDataset.SyntheticFloorplans
+
 import scala.language.implicitConversions
 
 /** Scores the newest run of a setup on a whole split, and writes the metrics as one CSV, and what
-  * the last checkpoint wrote down for every drawing as [[Transcripts]]. On the validation split
+  * the last checkpoint wrote down for every plan as [[FloorplanTranscripts]]. On the validation split
   * every checkpoint is scored, the last first; the test split is looked at once, by the last alone.
   */
 def scoreWordTranscriber(setup: D2TokSetup, size: String, split: Split): Unit =
@@ -27,22 +30,22 @@ def scoreWordTranscriber(setup: D2TokSetup, size: String, split: Split): Unit =
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
-  val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(split)
-  println(s"${data.numSamples} drawings\n")
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(split)
+  println(s"${data.numSamples} plans\n")
 
   val transcriber = Transcriber(setup.words, Axis[Token] -> setup.tokens, TranscribedTogether)
 
-  /** Every drawing of the split transcribed by a model, beside the nodes of the record it was
-    * rendered from — a sequence of words holds no relationships, so the record it is held against
-    * holds none either.
+  /** Every plan of the split transcribed by a model, beside the nodes of the record it was drawn
+    * from — a sequence of words holds no relationships, so the record it is held against holds
+    * none either.
     */
-  def transcribed(params: D2Tok.Params[Float32]): Seq[(RecordGraph, RecordGraph)] =
+  def transcribed(params: D2Tok.Params[Float32]): Seq[(FloorplanGraph, FloorplanGraph)] =
     data.samples
       .grouped(TranscribedTogether)
-      .flatMap(batch => batch.map(sample => RecordGraph.of(sample.target).copy(edges = Seq.empty)).zip(transcriber(params, batch.map(_.image))))
+      .flatMap(batch => batch.map(sample => FloorplanGraph.of(sample.target).copy(edges = Seq.empty)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val csv = Metrics.Csv("d2tok", setup.corpus.name, size, split, Runs.parameters(checkpoints.loadLatest[D2TokTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("d2tok", SyntheticFloorplans.name, size, split, Runs.parameters(checkpoints.loadLatest[D2TokTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
   val scored = split match
@@ -51,11 +54,11 @@ def scoreWordTranscriber(setup: D2TokSetup, size: String, split: Split): Unit =
   scored.foreach: step =>
     println(s"scoring checkpoint $step")
     val drawings = transcribed(checkpoints.load[D2TokTrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
-    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => RecordScoring.score(target, written, tolerance / setup.corpus.canvas))))
+    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => FloorplanScoring.score(target, written, tolerance / SyntheticFloorplans.canvas))))
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-      println(s"transcripts written to ${Transcripts.write("d2tok", setup.corpus, size, split, step, drawings)}")
+      println(s"transcripts written to ${FloorplanTranscripts.write("d2tok", size, split, step, drawings)}")
 
 /** How many drawings are transcribed together. A batch is one traced computation, so this is what
   * the split costs in calls rather than in work.
@@ -102,5 +105,5 @@ class Transcriber(words: Words, tokens: AxisExtent[Token], drawings: Int = 1):
     jitTranscribe(params, stack(filled, Axis[Drawing])).toArray.take(documents.size).map(_.toSeq).toSeq
 
   /** The records the written words read as. */
-  def apply(params: D2Tok.Params[Float32], documents: Seq[Tensor3[Width, Height, Channel, Float32]]): Seq[RecordGraph] =
-    written(params, documents).map(said => RecordGraph(words.read(said), Seq.empty))
+  def apply(params: D2Tok.Params[Float32], documents: Seq[Tensor3[Width, Height, Channel, Float32]]): Seq[FloorplanGraph] =
+    written(params, documents).map(said => FloorplanGraph(words.read(said), Seq.empty))

@@ -37,7 +37,8 @@ STAGE="${1:?say which stage to run: train, eval, test or draw}"
 export CACHE_DIR OUTPUT_DIR
 export CHECKPOINT_DIR="${CHECKPOINT_DIR:-$OUTPUT_DIR/checkpoints}"
 
-# Which corpus to train on and how big a model — the names `Corpus` and `D2SModelConfiguration` know.
+# Which corpus to train on and how big a model — the names `Corpus` and `D2SModelConfiguration` know,
+# and `synthetic-floorplans`.
 export CORPUS="${CORPUS:-sketch}"
 export SIZE="${SIZE:-s}"
 
@@ -45,8 +46,8 @@ export SIZE="${SIZE:-s}"
 export SEED="${SEED:-0}"
 
 # Which order a run writes the nodes of a record in — the names `NodeOrder.named` knows: free,
-# simplest-first or simplest-last.
-export ORDER="${ORDER:-simplest-first}"
+# simplest-first or simplest-last for the sketches, free, walls-first or walls-last for the floor plans.
+if [[ $CORPUS == synthetic-floorplans ]]; then export ORDER="${ORDER:-walls-first}"; else export ORDER="${ORDER:-simplest-first}"; fi
 
 # Which branch the container builds, as pushed to GitHub — a change that is not pushed is not
 # run. Inherited by the scoring job this one queues, so both build the same one.

@@ -41,3 +41,4 @@ runs/queue_d2s.sh sketch xs
 runs/queue_d2s.sh sketch s
 runs/queue_d2s.sh sketch-xl s-deep
 runs/queue_d2s.sh sketch-xl m-deep
+runs/queue_d2s.sh synthetic-floorplans s-deep
