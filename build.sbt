@@ -20,7 +20,7 @@ lazy val munit = "org.scalameta" %% "munit" % "1.0.0" % Test
 
 lazy val root = project
   .in(file("."))
-  .aggregate(dataset, documentEncoder, detr, d2s, d2g, d2seq, d2tok)
+  .aggregate(dataset, syntheticFloorplansDataset, documentEncoder, detr, d2s, d2g, d2seq, d2tok)
   .settings(
     name := "detr-root",
     publish / skip := true
@@ -36,6 +36,14 @@ lazy val dataset = project
       munit,
       plotwit
     )
+  )
+
+lazy val syntheticFloorplansDataset = project
+  .in(file("syntheticFloorplansDataset"))
+  .dependsOn(dataset) // The batches and samples every model reads, filled from another corpus.
+  .settings(
+    name := "syntheticFloorplansDataset",
+    libraryDependencies ++= Seq(dimwit, scalapy, munit)
   )
 
 lazy val documentEncoder = project
