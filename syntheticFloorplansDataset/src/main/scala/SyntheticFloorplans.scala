@@ -223,8 +223,9 @@ object SyntheticFloorplans:
   val maxRelationships = 101
 
   /** Opens a split, its drawings read at `canvas` pixels a side: [[storedSide]] or a divisor of it,
-    * every pixel then the mean of the block it covers. A record's points are fractions of the side,
-    * so they are the same at any `canvas`.
+    * every pixel then the mean of the block it covers. A part is averaged down the first time it is
+    * read at a side, and kept beside the Hugging Face cache. A record's points are fractions of the
+    * side, so they are the same at any `canvas`.
     *
     * A split is read in its parts — train in nine of 50,000 plans — each read when it is reached, so
     * that only one part's records are held at a time; its drawings stay memory mapped.

@@ -11,9 +11,12 @@ A record holds its nodes -- each a class and the two ends of a segment, in the p
 """
 
 import json
+import os
+import tempfile
+from pathlib import Path
 
 import numpy as np
-from huggingface_hub import hf_hub_download
+from huggingface_hub import constants, hf_hub_download
 
 
 def parts(repo_id, split):
@@ -25,28 +28,44 @@ def parts(repo_id, split):
 def drawings(repo_id, part, canvas):
     """The images of a part at ``canvas`` pixels a side, memory mapped so that only what is read is
     read. A smaller side is the stored one averaged down, every pixel the mean of the block it
-    covers, so that a thin line turns grey rather than vanishing."""
-    stored = np.load(_file(repo_id, "%s_images.npy" % part), mmap_mode="r")
+    covers, so that a thin line turns grey rather than vanishing.
+
+    The averaging is done once, the first time a part is asked for at a side, and kept beside the
+    Hugging Face cache: training reads a part hundreds of times, and the stored drawings are 16
+    times the bytes of drawings at a quarter of their side.
+    """
+    stored_at = Path(_file(repo_id, "%s_images.npy" % part))
+    stored = np.load(stored_at, mmap_mode="r")
     side = stored.shape[1]
     if side % canvas != 0:
         raise ValueError("drawings of %d pixels do not average down to %d" % (side, canvas))
-    return stored if canvas == side else _AveragedDown(stored, side // canvas)
+    if canvas == side:
+        return stored
+    # The snapshot folder names the revision, so a new release of the dataset is averaged anew.
+    kept = Path(constants.HF_HUB_CACHE).parent / "averaged" / repo_id.replace("/", "--") / stored_at.parent.name / ("%s_images_%d.npy" % (part, canvas))
+    if not kept.exists():
+        _average(stored, side // canvas, kept)
+    return np.load(kept, mmap_mode="r")
 
 
-class _AveragedDown:
-    """Drawings read ``factor`` times smaller a side than they are stored, a slice at a time."""
+def _average(stored, factor, kept):
+    """Writes ``stored`` averaged down by ``factor`` to ``kept``, a block of drawings at a time.
 
-    def __init__(self, stored, factor):
-        self.stored, self.factor = stored, factor
-
-    def __len__(self):
-        return len(self.stored)
-
-    def __getitem__(self, at):
-        held = np.asarray(self.stored[at], dtype=np.float32)
-        rows, columns = held.shape[-2] // self.factor, held.shape[-1] // self.factor
-        blocks = held.reshape(held.shape[:-2] + (rows, self.factor, columns, self.factor))
-        return np.rint(blocks.mean(axis=(-3, -1))).astype(np.uint8)
+    Written under a name of its own and renamed when complete, so that two jobs averaging the same
+    part at once each leave a whole file, and neither reads a half-written one.
+    """
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    plans, side = stored.shape[0], stored.shape[1] // factor
+    handle, writing = tempfile.mkstemp(dir=kept.parent, suffix=".npy")
+    os.close(handle)
+    averaged = np.lib.format.open_memmap(writing, mode="w+", dtype=np.uint8, shape=(plans, side, side))
+    for start in range(0, plans, 1000):
+        held = np.asarray(stored[start:start + 1000], dtype=np.float32)
+        blocks = held.reshape(len(held), side, factor, side, factor)
+        averaged[start:start + len(held)] = np.rint(blocks.mean(axis=(2, 4))).astype(np.uint8)
+    averaged.flush()
+    del averaged
+    os.replace(writing, kept)
 
 
 def records(repo_id, part, side, nodes, edges, classes, relationships):
