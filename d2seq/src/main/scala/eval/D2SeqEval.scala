@@ -45,7 +45,7 @@ def scoreSequenceTranscriber(setup: D2SeqSetup, size: String, split: Split): Uni
       .flatMap(batch => batch.map(sample => RecordGraph.of(sample.target).copy(edges = Seq.empty)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val csv = Metrics.Csv("d2seq", setup.corpus, size, split, Runs.parameters(checkpoints.loadLatest[D2SeqTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("d2seq", setup.corpus.name, size, split, Runs.parameters(checkpoints.loadLatest[D2SeqTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
   val scored = split match

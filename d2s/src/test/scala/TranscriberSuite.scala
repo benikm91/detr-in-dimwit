@@ -1,6 +1,7 @@
 import d2s.*
 import d2s.model.*
-import d2s.eval.Transcriber
+import d2s.sketch.model.*
+import d2s.sketch.eval.Transcriber
 import dimwit.*
 
 class TranscriberSuite extends munit.FunSuite:

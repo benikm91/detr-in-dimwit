@@ -1,6 +1,8 @@
-package d2s.model
+package d2s.sketch.model
 
 import d2s.*
+import d2s.sketch.*
+import d2s.model.*
 import dataset.EdgeClass
 import dataset.EdgeClasses
 import dataset.NodeClass
@@ -14,8 +16,8 @@ import dimwit.*
 
 import scala.language.implicitConversions
 
-trait NodePart derives Label // The parts a node embedding is composed of
-trait PartEmbedding derives Label // An embedding of a [[NodePart]] or a [[EdgePart]]
+import NodeEmbedder.NodePart
+import NodeEmbedder.PartEmbedding
 
 /** Transforms a record node into a single embedding vector. */
 class NodeEmbedder[V: IsFloating](params: NodeEmbedder.Params[V]) extends (RecordNodes[Node] => Tensor2[Node, Embedding, V]):
@@ -44,6 +46,9 @@ class NodeEmbedder[V: IsFloating](params: NodeEmbedder.Params[V]) extends (Recor
         project(stack(parts, Axis[NodePart]).flatten((Axis[NodePart], Axis[PartEmbedding])))
 
 object NodeEmbedder:
+
+  trait NodePart derives Label // The parts a node embedding is composed of
+  trait PartEmbedding derives Label // An embedding of one part
 
   case class Params[V](
       nodeClass: VocabularyEmbedder.Params[NodeClasses, PartEmbedding, V],

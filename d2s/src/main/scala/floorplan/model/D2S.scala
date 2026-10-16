@@ -1,22 +1,25 @@
-package d2s.model
+package d2s.floorplan.model
 
 import d2s.*
-import dataset.NodeClass
-import dataset.NodeClasses
-import dataset.IsConstruction
-import dataset.RecordNodes
+import d2s.model.*
 import deepwit.attention.KVCache
 import deepwit.base.AffineLayer
 import documentEncoder.DocumentEncoder
 import deepwit.embedder.LearnedAbsolutePositionalInjector
 import deepwit.embedder.VocabularyEmbedder
 import deepwit.init.Init
+import NodeEmbedder.NodePart
+import NodeEmbedder.PartEmbedding
 import NodeHead.NodeLogits
 import dimwit.*
+import syntheticFloorplansDataset.FloorplanClass
+import syntheticFloorplansDataset.FloorplanClasses
+import syntheticFloorplansDataset.FloorplanNodes
 
 import scala.language.implicitConversions
 
-/** Document-to-set model based on remaining-node prediction.
+/** Document-to-set model based on remaining-node prediction, of floor plans: each node a class and
+  * the two ends of a segment.
   *
   * 1. The document (or: image) is embedded by a vision transformer to a sequence of patch embeddings.
   * 2. The nodes are predicted based on cross-attenting the document (1).
@@ -35,19 +38,19 @@ class D2S[V: IsFloating](params: D2S.Params[V]):
   val pool = params.nodes.queries.shape(Axis[PoolQuery])
 
   /** What two queries of the pool answer. Queries selected randomly. */
-  def logits(document: Tensor3[Width, Height, Channel, V], taken: RecordNodes[Node], asked: Key): NodeQueryLogits[V] =
+  def logits(document: Tensor3[Width, Height, Channel, V], taken: FloorplanNodes[Node], asked: Key): NodeQueryLogits[V] =
     val randomQueryIds = Random.permutation(Axis[PoolQuery] -> pool)(asked).slice(Axis[PoolQuery].at(0 until 2))
     predict(encodeDocument(document), taken, randomQueryIds)._2
 
   /** What every query of the pool answers, in one reading. */
-  def logitsPerQuery(encoded: Tensor2[Patch, Embedding, V], taken: RecordNodes[Node]): NodeQueryLogits[V] =
+  def logitsPerQuery(encoded: Tensor2[Patch, Embedding, V], taken: FloorplanNodes[Node]): NodeQueryLogits[V] =
     val allQueryIds = Tensor1(Axis[PoolQuery], VType[Int32]).fromArray(Array.range(0, pool))
     predict(encoded, taken, allQueryIds)._2
 
   /** The taken nodes as the decoder carries them, and what each asked query answers at every slot. */
   def predict(
       encodedDocument: Tensor2[Patch, Embedding, V],
-      taken: RecordNodes[Node],
+      taken: FloorplanNodes[Node],
       nodeQueryIds: Tensor1[PoolQuery, Int32]
   ): (Tensor2[Node, Embedding, V], NodeQueryLogits[V]) =
 
@@ -58,12 +61,12 @@ class D2S[V: IsFloating](params: D2S.Params[V]):
           nodePosition(query.broadcastTo(takenNodes.shape))
       nodeDecoder.forTraining(encodedDocument, takenNodes, queryNodes)
 
-    val (nodeClass, construction, startX, startY, endX, endY, midX, midY) =
+    val (nodeClass, startX, startY, endX, endY) =
       answeredNodes.vmap(Axis[PoolQuery]): answered =>
         val scored = nodeHead(answered)
-        (scored.nodeClass, scored.construction, scored.startX, scored.startY, scored.endX, scored.endY, scored.midX, scored.midY)
+        (scored.nodeClass, scored.startX, scored.startY, scored.endX, scored.endY)
 
-    (carriedNodes, NodeQueryLogits(nodeClass, construction, startX, startY, endX, endY, midX, midY))
+    (carriedNodes, NodeQueryLogits(nodeClass, startX, startY, endX, endY))
 
   // Writing a record down one node at a time, as [[predict]] would have it at every slot, but
   // projecting at each step only what the step adds.
@@ -79,7 +82,7 @@ class D2S[V: IsFloating](params: D2S.Params[V]):
   /** Takes `node`, a record of one node, at `slot`, for the slots after it to read: the node as the
     * decoder carries it, and the taken nodes with it among them.
     */
-  def take(documentCache: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32], node: RecordNodes[Node]): (Tensor1[Embedding, V], List[KVCache[Node, V]]) =
+  def take(documentCache: List[KVCache[Patch, V]], taken: List[KVCache[Node, V]], slot: Tensor0[Int32], node: FloorplanNodes[Node]): (Tensor1[Embedding, V], List[KVCache[Node, V]]) =
     val embedded = nodePosition.injectAt(slot)(embedNodes(node).squeeze(Axis[Node]))
     nodeDecoder.take(documentCache, taken, slot, embedded)
 
@@ -94,24 +97,18 @@ object D2S:
 
   /** [[NodeLogits]] at every query slot. */
   case class NodeQueryLogits[V](
-      nodeClass: Tensor3[PoolQuery, Node, NodeClasses, V],
-      construction: Tensor3[PoolQuery, Node, IsConstruction, V],
+      nodeClass: Tensor3[PoolQuery, Node, FloorplanClasses, V],
       startX: Tensor3[PoolQuery, Node, Pixel, V],
       startY: Tensor3[PoolQuery, Node, Pixel, V],
       endX: Tensor3[PoolQuery, Node, Pixel, V],
-      endY: Tensor3[PoolQuery, Node, Pixel, V],
-      midX: Tensor3[PoolQuery, Node, Pixel, V],
-      midY: Tensor3[PoolQuery, Node, Pixel, V]
+      endY: Tensor3[PoolQuery, Node, Pixel, V]
   ):
     def at(query: Int): NodeLogits[V] = NodeLogits(
       nodeClass.slice(Axis[PoolQuery].at(query)),
-      construction.slice(Axis[PoolQuery].at(query)),
       startX.slice(Axis[PoolQuery].at(query)),
       startY.slice(Axis[PoolQuery].at(query)),
       endX.slice(Axis[PoolQuery].at(query)),
-      endY.slice(Axis[PoolQuery].at(query)),
-      midX.slice(Axis[PoolQuery].at(query)),
-      midY.slice(Axis[PoolQuery].at(query))
+      endY.slice(Axis[PoolQuery].at(query))
     )
 
   object NodeQueryLogits:
@@ -162,16 +159,14 @@ object D2S:
       val embeddingExtent = Axis[Embedding] -> embedding
       val embeddingMixedExtent = Axis[EmbeddingMixed] -> embedding * 4
       val partExtent = Axis[PartEmbedding] -> embedding / 8
-      val nodeClassExtent = Axis[dataset.NodeClasses] -> NodeClass.values.length
-      val constructionExtent = Axis[IsConstruction] -> 2
+      val nodeClassExtent = Axis[FloorplanClasses] -> FloorplanClass.values.length
       val pixelExtent = Axis[Pixel] -> canvas
       val nodeExtent = Axis[Node] -> nodes
-      // A node embedding is put together from its class, whether it is construction geometry, and
-      // the six coordinates a class can place.
-      val nodePartExtent = Axis[NodePart |*| PartEmbedding] -> 8 * partExtent.size
+      // A node embedding is put together from its class and the four coordinates of its two ends.
+      val nodePartExtent = Axis[NodePart |*| PartEmbedding] -> 5 * partExtent.size
 
-      val (startXKey, startYKey, endXKey, endYKey, midXKey, midYKey, nodeClassKey, constructionKey, nodeProjectionKey) = nodeEmbedderKey.splitToTuple(9)
-      val (classHeadKey, constructionHeadKey, startXHeadKey, startYHeadKey, endXHeadKey, endYHeadKey, midXHeadKey, midYHeadKey) = nodeHeadKey.splitToTuple(8)
+      val (startXKey, startYKey, endXKey, endYKey, nodeClassKey, nodeProjectionKey) = nodeEmbedderKey.splitToTuple(6)
+      val (classHeadKey, startXHeadKey, startYHeadKey, endXHeadKey, endYHeadKey) = nodeHeadKey.splitToTuple(5)
 
       Params(
         encoder = DocumentEncoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, Axis[DocumentEncoder.EmbeddingMixed] -> embeddingMixedExtent.size, encoderKey),
@@ -179,24 +174,18 @@ object D2S:
           decoder = NodeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, nodeDecoderKey),
           embedder = NodeEmbedder.Params(
             nodeClass = VocabularyEmbedder.Params.init(nodeClassExtent, partExtent, nodeClassKey),
-            construction = VocabularyEmbedder.Params.init(constructionExtent, partExtent, constructionKey),
             startX = VocabularyEmbedder.Params.init(pixelExtent, partExtent, startXKey),
             startY = VocabularyEmbedder.Params.init(pixelExtent, partExtent, startYKey),
             endX = VocabularyEmbedder.Params.init(pixelExtent, partExtent, endXKey),
             endY = VocabularyEmbedder.Params.init(pixelExtent, partExtent, endYKey),
-            midX = VocabularyEmbedder.Params.init(pixelExtent, partExtent, midXKey),
-            midY = VocabularyEmbedder.Params.init(pixelExtent, partExtent, midYKey),
             projection = AffineLayer.Params.init(nodePartExtent, embeddingExtent, nodeProjectionKey)
           ),
           head = NodeHead.Params(
             nodeClass = AffineLayer.Params.init(embeddingExtent, nodeClassExtent, classHeadKey),
-            construction = AffineLayer.Params.init(embeddingExtent, constructionExtent, constructionHeadKey),
             startX = AffineLayer.Params.init(embeddingExtent, pixelExtent, startXHeadKey),
             startY = AffineLayer.Params.init(embeddingExtent, pixelExtent, startYHeadKey),
             endX = AffineLayer.Params.init(embeddingExtent, pixelExtent, endXHeadKey),
-            endY = AffineLayer.Params.init(embeddingExtent, pixelExtent, endYHeadKey),
-            midX = AffineLayer.Params.init(embeddingExtent, pixelExtent, midXHeadKey),
-            midY = AffineLayer.Params.init(embeddingExtent, pixelExtent, midYHeadKey)
+            endY = AffineLayer.Params.init(embeddingExtent, pixelExtent, endYHeadKey)
           ),
           queries = Init.xavierUniform(Axis[PoolQuery] -> queries, embeddingExtent, nodeTokenKey),
           positions = LearnedAbsolutePositionalInjector.Params.lecunNormal(nodeExtent, embeddingExtent, nodePositionKey)

@@ -79,21 +79,30 @@ object FloorplanRelationship:
   def indicator[V: IsFloating](vtype: VType[V])(holds: FloorplanRelationship => Boolean): Tensor1[FloorplanRelationships, V] =
     Tensor1(Axis[FloorplanRelationships], vtype).fromArray(values.map(relationship => if holds(relationship) then 1f else 0f))
 
-/** What a floor plan's drawing encodes: its nodes along `Node`, each a class and the two ends of a
-  * segment as a fraction of the drawing's side, and its relationships along `Edge`, naming the nodes
-  * they relate by their position. The positions a record does not reach hold [[FloorplanClass.NoNode]]
-  * and [[FloorplanRelationship.NoRelationship]].
+/** The nodes of a floor plan, laid out along `Node`: each a class and the two ends of a segment, as a
+  * fraction of the drawing's side. The positions a record does not reach hold [[FloorplanClass.NoNode]]
+  * and are placed nowhere.
   */
-case class FloorplanRecord[Node, Edge](
+case class FloorplanNodes[Node](
     nodeClass: Tensor1[Node, Int32],
     startX: Tensor1[Node, Float32],
     startY: Tensor1[Node, Float32],
     endX: Tensor1[Node, Float32],
-    endY: Tensor1[Node, Float32],
+    endY: Tensor1[Node, Float32]
+)
+
+/** The relationships between those nodes, laid out along `Edge`, naming the nodes they relate by
+  * their position along `Node`. The positions a record does not reach hold
+  * [[FloorplanRelationship.NoRelationship]].
+  */
+case class FloorplanEdges[Edge](
     relationship: Tensor1[Edge, Int32],
     subject: Tensor1[Edge, Int32],
     obj: Tensor1[Edge, Int32]
 )
+
+/** What a floor plan's drawing encodes: its nodes, and the relationships between them. */
+case class FloorplanRecord[Node, Edge](nodes: FloorplanNodes[Node], edges: FloorplanEdges[Edge])
 
 /** [[FloorplanRecord]] for a batch of floor plans along the axis `S`. A model that predicts no
   * relationships reads the nodes alone.
@@ -107,7 +116,80 @@ case class FloorplanRecordBatch[S, Node, Edge](
     relationship: Tensor2[S, Edge, Int32],
     subject: Tensor2[S, Edge, Int32],
     obj: Tensor2[S, Edge, Int32]
-)
+):
+
+  /** The same records, laid out again in `nodeSlots` and `edgeSlots` positions: their nodes by the
+    * rank of their class, lowest first, their relationships in any order, each in a fresh random
+    * order within a rank, and the positions they do not reach last. Drawn on the device.
+    *
+    * @param classRank Ranks [[FloorplanClass.NoNode]] above every class, so that the positions a
+    *                  record does not reach come last. Ranking every other class the same lays the
+    *                  nodes out in any order.
+    */
+  def permuted(
+      key: Key,
+      nodeSlots: AxisExtent[Node],
+      edgeSlots: AxisExtent[Edge],
+      classRank: Tensor1[FloorplanClasses, Float32] = FloorplanClass.indicator(VType[Float32])(!_.isNode)
+  )(using Label[S], Label[Node], Label[Edge]): FloorplanRecordBatch[S, Node, Edge] =
+    val plans = nodeClass.shape.extent(Axis[S])
+    val (heldNodes, heldEdges) = (nodeClass.shape(Axis[Node]), relationship.shape(Axis[Edge]))
+    require(heldNodes <= nodeSlots.size, s"records of $heldNodes nodes do not fit in ${nodeSlots.size}")
+    require(heldEdges <= edgeSlots.size, s"records of $heldEdges relationships do not fit in ${edgeSlots.size}")
+    val (emptyNodes, emptyEdges) = (Axis[Node] -> (nodeSlots.size - heldNodes), Axis[Edge] -> (edgeSlots.size - heldEdges))
+    def nowhere(placed: Tensor2[S, Node, Float32]) = concatenate(placed, Tensor(Shape(plans, emptyNodes), VType[Float32]).fill(0f), Axis[Node])
+    def nothing(named: Tensor2[S, Edge, Int32]) = concatenate(named, Tensor(Shape(plans, emptyEdges), VType[Int32]).fill(0), Axis[Edge])
+    val paddedClass = concatenate(nodeClass, Tensor(Shape(plans, emptyNodes), VType[Int32]).fill(FloorplanClass.NoNode.id), Axis[Node])
+    val paddedRelationship = concatenate(relationship, Tensor(Shape(plans, emptyEdges), VType[Int32]).fill(FloorplanRelationship.NoRelationship.id), Axis[Edge])
+
+    val (forNodes, forEdges) = key.split2()
+    val (nodeKeys, edgeKeys) = (forNodes.splitToTensor(plans), forEdges.splitToTensor(plans))
+    val (classes, startXs, startYs, endXs, endYs, nodeOrders) =
+      zipvmap(Axis[S])(paddedClass, nowhere(startX), nowhere(startY), nowhere(endX), nowhere(endY), nodeKeys):
+        case (nodeClass, startX, startY, endX, endY, key) =>
+          val order = FloorplanRecordBatch.inOrder(classRank.slice(Axis[FloorplanClasses].at(nodeClass)), key.item)
+          def reordered[V](placed: Tensor1[Node, V]) = placed.slice(Axis[Node].at(order))
+          (reordered(nodeClass), reordered(startX), reordered(startY), reordered(endX), reordered(endY), order)
+    val (relationships, subjects, objs) =
+      zipvmap(Axis[S])(paddedRelationship, nothing(subject), nothing(obj), nodeOrders, edgeKeys):
+        case (relationship, subject, obj, nodeOrder, key) =>
+          val notThere = FloorplanRelationship.indicator(VType[Float32])(!_.isRelationship).slice(Axis[FloorplanRelationships].at(relationship))
+          val order = FloorplanRecordBatch.inOrder(notThere, key.item)
+          val related = relationship.slice(Axis[Edge].at(order))
+          // A relationship names the nodes it relates by their position, and a node that sat at
+          // `at` before sits at `renamed(at)` now.
+          val renamed = nodeOrder.argsort(Axis[Node])
+          def moved(named: Tensor1[Edge, Int32]) = renamed.slice(Axis[Node].at(named.slice(Axis[Edge].at(order))))
+          val (movedSubject, movedObj) = (moved(subject), moved(obj))
+          def is(holds: FloorplanRelationship => Boolean) =
+            val marked = FloorplanRelationship.indicator(VType[Float32])(holds).slice(Axis[FloorplanRelationships].at(related))
+            marked > Tensor.like(marked).fill(0f)
+          // A symmetric relationship names the two it relates in ascending order, and a position
+          // holding no relationship relates nothing.
+          val none = Tensor.like(movedSubject).fill(0)
+          (
+            related,
+            where(is(_.isRelationship), where(is(_.isSymmetric), minimum(movedSubject, movedObj), movedSubject), none),
+            where(is(_.isRelationship), where(is(_.isSymmetric), maximum(movedSubject, movedObj), movedObj), none)
+          )
+    FloorplanRecordBatch(classes, startXs, startYs, endXs, endYs, relationships, subjects, objs)
+
+object FloorplanRecordBatch:
+
+  /** A batch of records laid out in order, along `batch`. */
+  def of[S: Label, Node: Label, Edge: Label](records: Seq[FloorplanGraph], batch: Axis[S], nodes: AxisExtent[Node], edges: AxisExtent[Edge]): FloorplanRecordBatch[S, Node, Edge] =
+    val laidOut = records.map(_.record(nodes, edges))
+    def stacked[L: Label, V](read: FloorplanRecord[Node, Edge] => Tensor1[L, V]) = stack(laidOut.map(read), batch)
+    FloorplanRecordBatch(
+      stacked(_.nodes.nodeClass), stacked(_.nodes.startX), stacked(_.nodes.startY), stacked(_.nodes.endX), stacked(_.nodes.endY),
+      stacked(_.edges.relationship), stacked(_.edges.subject), stacked(_.edges.obj)
+    )
+
+  /** The order that reads the positions by ascending `rank`, shuffled within a rank. */
+  private def inOrder[L: Label](rank: Tensor1[L, Float32], key: Key): Tensor1[L, Int32] =
+    val slots = rank.shape.extent(Axis[L])
+    val shuffle = dimwit.Random.permutation(slots)(key).asFloat(VType[Float32])
+    (rank *! slots.size.toFloat + shuffle).argsort(Axis[L])
 
 /** Axis of the floor plans of a part. */
 private trait Plans derives Label
@@ -127,6 +209,8 @@ private trait Plans derives Label
   */
 object SyntheticFloorplans:
 
+  /** What a run names the corpus by on its command line and in what it writes. */
+  val name = "synthetic-floorplans"
   val repoId = "benikm91/synthetic-floorplans-for-transcription"
 
   /** The side of the drawings in pixels. */
@@ -176,14 +260,8 @@ final class SyntheticFloorplans[W: Label, H: Label, C: Label, Node: Label, Edge:
         Sample(
           image.squeeze(Axis[Plans]),
           FloorplanRecord(
-            records.nodeClass.slice(plan),
-            records.startX.slice(plan),
-            records.startY.slice(plan),
-            records.endX.slice(plan),
-            records.endY.slice(plan),
-            records.relationship.slice(plan),
-            records.subject.slice(plan),
-            records.obj.slice(plan)
+            FloorplanNodes(records.nodeClass.slice(plan), records.startX.slice(plan), records.startY.slice(plan), records.endX.slice(plan), records.endY.slice(plan)),
+            FloorplanEdges(records.relationship.slice(plan), records.subject.slice(plan), records.obj.slice(plan))
           )
         )
 

@@ -1,9 +1,14 @@
-package d2s.eval
+package d2s.sketch.eval
 
 import d2s.*
+import d2s.sketch.*
 import d2s.model.*
+import d2s.sketch.model.*
 import d2s.train.*
+import d2s.sketch.train.*
 import d2s.config.*
+import d2s.sketch.config.*
+import d2s.eval.chosen
 import NodeHead.NodeLogits
 import dataset.Corpus
 import dataset.DrawingDataset
@@ -56,7 +61,7 @@ def scoreSetTranscriber(setup: D2SSetup, size: String, split: Split): Unit =
       .flatMap(batch => batch.map(sample => RecordGraph.of(sample.target).copy(edges = Seq.empty)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val csv = Metrics.Csv("d2s", setup.corpus, size, split, Runs.parameters(checkpoints.loadLatest[D2STrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("d2s", setup.corpus.name, size, split, Runs.parameters(checkpoints.loadLatest[D2STrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
   val scored = split match
@@ -199,10 +204,6 @@ def answered(scorer: NodeHead[Float32], logits: NodeLogits[Float32]): (RecordNod
     (chosen(logits.endX) + chosen(logits.endY)) * carries(_.numPoints > 1) +
     (chosen(logits.midX) + chosen(logits.midY)) * carries(_.numPoints > 2)
   (decided, score)
-
-/** The log probability of the value a position's scores are highest for. */
-def chosen[Slot: Label, L: Label](logits: Tensor2[Slot, L, Float32]): Tensor1[Slot, Float32] =
-  logits.logSoftmax(Axis[L]).max(Axis[L])
 
 /** How many nodes of each class a record holds, for the header of a drawing of it. */
 def counted(record: RecordGraph): String =

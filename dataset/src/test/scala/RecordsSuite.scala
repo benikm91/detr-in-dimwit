@@ -40,7 +40,7 @@ class RecordsSuite extends FunSuite:
       Metrics.Row(10000, None, 8f, Seq(detected, detected.copy(nodesExact = true), detected.copy(nodesExact = true, isExact = true))),
       Metrics.Row(20000, Some(0.5f), 8f, Seq(detected))
     )
-    val csv = Metrics.Csv("test", Corpus.LShape, "xs", Split.Validation, parameters = 123, trainingSeconds = Some(45))
+    val csv = Metrics.Csv("test", Corpus.LShape.name, "xs", Split.Validation, parameters = 123, trainingSeconds = Some(45))
     rows.foreach(row => csv.append(Seq(row)))
     val lines = java.nio.file.Files.readAllLines(csv.path)
     java.nio.file.Files.delete(csv.path)

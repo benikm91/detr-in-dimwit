@@ -1,25 +1,19 @@
-package d2g.config
+package d2s.floorplan.config
 
-import d2g.*
-import d2g.model.*
-import d2g.train.*
-import d2g.eval.*
-import d2s.NodeOrder
 import d2s.config.D2SModelConfiguration
-import dataset.Corpus
+import d2s.floorplan.NodeOrder
 import dataset.Runs
+import syntheticFloorplansDataset.SyntheticFloorplans
 
-/** Setup for a D2G experiment. */
-case class D2GSetup(
-    corpus: Corpus,
-
+/** Setup for a D2S experiment on the synthetic floor plans. */
+case class D2SSetup(
     // Model configuration
     numLayers: Int = 3,
     numHeads: Int = 4,
     embedding: Int = 128,
     queryPool: Int = 6,
     /** Whether the nodes of a record are written down in any order or in an order of their classes. */
-    nodeOrder: NodeOrder = NodeOrder.SimplestFirst,
+    nodeOrder: NodeOrder = NodeOrder.Free,
 
     // Train configuration
     checkpointRoot: String,
@@ -43,16 +37,14 @@ case class D2GSetup(
     seed: Int = 42
 ):
 
-  val nodeSlots: Int = corpus.maxNodes + 1 // One more due to the end prediction
-  val edgeSlots: Int = corpus.maxEdges + 1 // One more due to the end prediction
+  val nodeSlots: Int = SyntheticFloorplans.maxNodes + 1 // One more due to the end prediction
 
-  override def toString: String = s"D2GSetup(${corpus.repoId}, layers=$numLayers, order=$nodeOrder, heads=$numHeads, embedding=$embedding, nodes=$nodeSlots, edges=$edgeSlots, samples=$numSamples, batch=$batchSize)"
+  override def toString: String = s"D2SSetup(${SyntheticFloorplans.repoId}, layers=$numLayers, order=$nodeOrder, heads=$numHeads, embedding=$embedding, nodes=$nodeSlots, samples=$numSamples, batch=$batchSize)"
 
-object D2GSetup:
+object D2SSetup:
 
-  def apply(corpus: Corpus, size: D2SModelConfiguration): D2GSetup = D2GSetup(
-    corpus = corpus,
-    checkpointRoot = s"${Runs.checkpointDir}/d2g/${corpus.name}-${size.name}",
+  def apply(size: D2SModelConfiguration): D2SSetup = D2SSetup(
+    checkpointRoot = s"${Runs.checkpointDir}/d2s/${SyntheticFloorplans.name}-${size.name}",
     numLayers = size.numLayers,
     numHeads = size.numHeads,
     embedding = size.embedding

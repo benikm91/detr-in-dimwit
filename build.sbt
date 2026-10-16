@@ -77,7 +77,7 @@ lazy val detr = project
 
 lazy val d2s = project
   .in(file("d2s"))
-  .dependsOn(dataset, documentEncoder)
+  .dependsOn(dataset, syntheticFloorplansDataset, documentEncoder)
   .settings(name := "d2s")
   .settings(modelSettings)
 

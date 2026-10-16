@@ -1,8 +1,9 @@
 import d2s.*
-import d2s.eval.Transcriber
-import d2s.eval.answered
+import d2s.sketch.eval.Transcriber
+import d2s.sketch.eval.answered
 import d2s.model.*
-import d2s.model.NodeHead.NodeLogits
+import d2s.sketch.model.*
+import d2s.sketch.model.NodeHead.NodeLogits
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split

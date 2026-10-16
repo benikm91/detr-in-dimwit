@@ -19,8 +19,8 @@ object Metrics:
     * appended as each checkpoint is scored, so a run cut short keeps the checkpoints it reached. A
     * percentage over nothing — a detector's relationships — is left blank.
     */
-  class Csv(model: String, corpus: Corpus, size: String, split: DrawingDataset.Split, parameters: Int, trainingSeconds: Option[Long]):
-    val path = Path.of(Runs.outputDir, s"$model-${corpus.name}-$size-${split.fileName}.csv")
+  class Csv(model: String, corpus: String, size: String, split: DrawingDataset.Split, parameters: Int, trainingSeconds: Option[Long]):
+    val path = Path.of(Runs.outputDir, s"$model-$corpus-$size-${split.fileName}.csv")
     Files.createDirectories(path.getParent)
     Files.writeString(path, Header + "\n")
 
@@ -30,7 +30,7 @@ object Metrics:
         val scored = row.scored
         Seq(
           model,
-          corpus.name,
+          corpus,
           size,
           row.step,
           row.threshold.fold("")(_.toString),

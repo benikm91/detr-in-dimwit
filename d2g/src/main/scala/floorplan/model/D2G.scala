@@ -1,33 +1,29 @@
-package d2g.model
+package d2g.floorplan.model
 
 import d2g.*
-import d2g.train.*
-import d2g.eval.*
-import d2g.config.*
+import d2g.model.*
 import d2s.model.*
-import d2s.model.D2S.NodeQueryLogits
-import dataset.EdgeClass
-import dataset.NodeClass
-import dataset.EdgeClasses
-import dataset.NodeClasses
-import dataset.Record
-import dataset.RecordBatch
-import dataset.RecordEdges
-import dataset.RecordNodes
+import d2s.floorplan.model.D2S
+import d2s.floorplan.model.D2S.NodeQueryLogits
+import d2s.floorplan.model.NodeEmbedder.PartEmbedding
 import deepwit.attention.KVCache
 import deepwit.base.AffineLayer
-import documentEncoder.DocumentEncoder
 import deepwit.embedder.LearnedAbsolutePositionalInjector
 import deepwit.embedder.VocabularyEmbedder
 import deepwit.init.Init
+import EdgeEmbedder.EdgePart
 import EdgeHead.EdgeLogits
-import NodeHead.NodeLogits
-import dimwit.stats.Uniform
 import dimwit.*
+import syntheticFloorplansDataset.FloorplanClass
+import syntheticFloorplansDataset.FloorplanEdges
+import syntheticFloorplansDataset.FloorplanRecord
+import syntheticFloorplansDataset.FloorplanRelationship
+import syntheticFloorplansDataset.FloorplanRelationships
 
 import scala.language.implicitConversions
 
-/** Document-to-graph model: a [[D2S]] for the nodes, and the relationships on top.
+/** Document-to-graph model: a [[D2S]] for the nodes of a floor plan, and the relationships between
+  * them on top.
   *
   * 1. The document (or: image) is embedded by a vision transformer to a sequence of patch embeddings.
   * 2. The graph is predicted in two stages:
@@ -52,19 +48,19 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   private val pool = set.pool
 
   /** What two queries of the pool answer. Queries selected randomly. */
-  def logits(document: Tensor3[Width, Height, Channel, V], taken: Record[Node, Edge], asked: Key): Scores[V] =
+  def logits(document: Tensor3[Width, Height, Channel, V], taken: FloorplanRecord[Node, Edge], asked: Key): Scores[V] =
     val randomQueryIds = Random.permutation(Axis[PoolQuery] -> pool)(asked).slice(Axis[PoolQuery].at(0 until 2))
     predict(encodeDocument(document), taken, randomQueryIds, randomQueryIds)
 
   /** What every query of the pool answers, in one reading. */
-  def logitsPerQuery(encoded: Tensor2[Patch, Embedding, V], taken: Record[Node, Edge]): Scores[V] =
+  def logitsPerQuery(encoded: Tensor2[Patch, Embedding, V], taken: FloorplanRecord[Node, Edge]): Scores[V] =
     val allQueryIds = Tensor1(Axis[PoolQuery], VType[Int32]).fromArray(Array.range(0, pool))
     predict(encoded, taken, allQueryIds, allQueryIds)
 
   /** What each asked query answers at every slot. */
   private def predict(
       encodedDocument: Tensor2[Patch, Embedding, V],
-      taken: Record[Node, Edge],
+      taken: FloorplanRecord[Node, Edge],
       nodeQueryIds: Tensor1[PoolQuery, Int32],
       edgeQueryIds: Tensor1[PoolQuery, Int32]
   ): Scores[V] =
@@ -73,7 +69,7 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
 
     val (_, answeredEdges) =
       val nodeSource =
-        val nodesPresentMask = !(taken.nodes.nodeClass elementEquals_! NodeClass.NoNode.id)
+        val nodesPresentMask = !(taken.nodes.nodeClass elementEquals_! FloorplanClass.NoNode.id)
         NodeSource(carriedNodes, nodesPresentMask)
       val takenEdges = edgePosition(embedEdges(taken.edges))
       val queryEdges = params.edges.queries.slice(Axis[PoolQuery].at(edgeQueryIds)) // take queries and broadcast along context
@@ -81,12 +77,12 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
           edgePosition(query.broadcastTo(takenEdges.shape))
       edgeDecoder.forTraining(encodedDocument, nodeSource, takenEdges, queryEdges)
 
-    val (edgeClass, subject, obj) =
+    val (relationship, subject, obj) =
       answeredEdges.vmap(Axis[PoolQuery]): answered =>
         val scored = edgeHead(answered)
-        (scored.edgeClass, scored.subject, scored.obj)
+        (scored.relationship, scored.subject, scored.obj)
 
-    Scores(nodes, EdgeQueryLogits(edgeClass, subject, obj))
+    Scores(nodes, EdgeQueryLogits(relationship, subject, obj))
 
   /** Every edge decoder block's keys and values of the encoded document and of the written `nodes`,
     * which every relationship step reads.
@@ -99,7 +95,7 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
     edgeDecoder.nothingTaken(slots)
 
   /** Takes `edge`, a record of one relationship, at `slot`, for the slots after it to read. */
-  def takeEdge(sources: List[EdgeSources[V]], taken: List[KVCache[Edge, V]], slot: Tensor0[Int32], edge: RecordEdges[Edge]): List[KVCache[Edge, V]] =
+  def takeEdge(sources: List[EdgeSources[V]], taken: List[KVCache[Edge, V]], slot: Tensor0[Int32], edge: FloorplanEdges[Edge]): List[KVCache[Edge, V]] =
     edgeDecoder.take(sources, taken, slot, edgePosition.injectAt(slot)(embedEdges(edge).squeeze(Axis[Edge])))
 
   /** What the pool answers at relationship `slot`, given the relationships taken before it: a
@@ -120,12 +116,12 @@ object D2G:
 
   /** [[EdgeLogits]] at every query slot. */
   case class EdgeQueryLogits[V](
-      edgeClass: Tensor3[PoolQuery, Edge, EdgeClasses, V],
+      relationship: Tensor3[PoolQuery, Edge, FloorplanRelationships, V],
       subject: Tensor3[PoolQuery, Edge, LinkedNode, V],
       obj: Tensor3[PoolQuery, Edge, LinkedNode, V]
   ):
     def at(query: Int): EdgeLogits[V] = EdgeLogits(
-      edgeClass.slice(Axis[PoolQuery].at(query)),
+      relationship.slice(Axis[PoolQuery].at(query)),
       subject.slice(Axis[PoolQuery].at(query)),
       obj.slice(Axis[PoolQuery].at(query))
     )
@@ -180,27 +176,27 @@ object D2G:
       val embeddingExtent = Axis[Embedding] -> embedding
       val embeddingMixedExtent = Axis[EmbeddingMixed] -> embedding * 4
       val partExtent = Axis[PartEmbedding] -> embedding / 8
-      val edgeClassExtent = Axis[dataset.EdgeClasses] -> EdgeClass.values.length
+      val relationshipExtent = Axis[FloorplanRelationships] -> FloorplanRelationship.values.length
       val edgeExtent = Axis[Edge] -> edges
       val linkedExtent = Axis[LinkedNode] -> nodes
       // A relationship embedding is put together from its class and the two nodes it relates.
       val edgePartExtent = Axis[EdgePart |*| PartEmbedding] -> 3 * partExtent.size
 
-      val (subjectKey, objKey, edgeClassKey, edgeProjectionKey) = edgeEmbedderKey.splitToTuple(4)
-      val (edgeClassHeadKey, subjectHeadKey, objHeadKey) = edgeHeadKey.splitToTuple(3)
+      val (subjectKey, objKey, relationshipKey, edgeProjectionKey) = edgeEmbedderKey.splitToTuple(4)
+      val (relationshipHeadKey, subjectHeadKey, objHeadKey) = edgeHeadKey.splitToTuple(3)
 
       Params(
         set = D2S.Params.init(numLayers, numHeads, embedding, nodes, queries, canvas, setKey),
         edges = EdgeParams(
           decoder = EdgeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, edgeDecoderKey),
           embedder = EdgeEmbedder.Params(
-            edgeClass = VocabularyEmbedder.Params.init(edgeClassExtent, partExtent, edgeClassKey),
+            relationship = VocabularyEmbedder.Params.init(relationshipExtent, partExtent, relationshipKey),
             subject = VocabularyEmbedder.Params.init(linkedExtent, partExtent, subjectKey),
             obj = VocabularyEmbedder.Params.init(linkedExtent, partExtent, objKey),
             projection = AffineLayer.Params.init(edgePartExtent, embeddingExtent, edgeProjectionKey)
           ),
           head = EdgeHead.Params(
-            edgeClass = AffineLayer.Params.init(embeddingExtent, edgeClassExtent, edgeClassHeadKey),
+            relationship = AffineLayer.Params.init(embeddingExtent, relationshipExtent, relationshipHeadKey),
             subject = AffineLayer.Params.init(embeddingExtent, linkedExtent, subjectHeadKey),
             obj = AffineLayer.Params.init(embeddingExtent, linkedExtent, objHeadKey)
           ),

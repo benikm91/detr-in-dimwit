@@ -1,4 +1,5 @@
 import d2s.*
+import d2s.sketch.NodeOrder
 import dataset.NodeClass
 import dataset.Point
 import dataset.RecordBatch

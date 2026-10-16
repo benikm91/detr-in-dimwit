@@ -1,8 +1,11 @@
-package d2s.train
+package d2s.sketch.train
 
 import d2s.*
+import d2s.sketch.*
 import d2s.model.*
+import d2s.sketch.model.*
 import d2s.config.*
+import d2s.sketch.config.*
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split

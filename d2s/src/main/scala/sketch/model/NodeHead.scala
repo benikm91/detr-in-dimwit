@@ -1,6 +1,8 @@
-package d2s.model
+package d2s.sketch.model
 
 import d2s.*
+import d2s.sketch.*
+import d2s.model.*
 import dataset.EdgeClass
 import dataset.EdgeClasses
 import dataset.NodeClass

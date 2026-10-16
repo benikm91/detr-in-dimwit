@@ -1,9 +1,6 @@
 package d2g.model
 
 import d2g.*
-import d2g.train.*
-import d2g.eval.*
-import d2g.config.*
 import d2s.model.*
 import deepwit.activation.gelu
 import deepwit.attention.AttentionMask

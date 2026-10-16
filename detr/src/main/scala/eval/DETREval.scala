@@ -75,7 +75,7 @@ def scoreDetector(setup: DETRSetup, size: String, split: Split): Unit =
       .map(sample => (RecordGraph.of(sample.target).copy(edges = Seq.empty), RecordGraph.of(detect(sample.image))))
       .toSeq
 
-  val csv = Metrics.Csv("detr", setup.corpus, size, split, Runs.parameters(checkpoints.loadLatest[TrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("detr", setup.corpus.name, size, split, Runs.parameters(checkpoints.loadLatest[TrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
   val scored = split match

@@ -1,8 +1,12 @@
+package d2s.sketch.eval
+
 import d2s.*
+import d2s.sketch.*
 import d2s.config.*
+import d2s.sketch.config.*
 import d2s.model.*
-import d2s.eval.Transcriber
-import d2s.train.D2STrainState
+import d2s.sketch.model.*
+import d2s.sketch.train.D2STrainState
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
@@ -24,10 +28,8 @@ import java.nio.file.Path
   * validation drawing is shown as it was drawn, beside the record the model wrote down on a canvas
   * of its own. The pictures land beside the metrics in `OUTPUT_DIR`.
   */
-@main
-def d2sDraw(corpus: String, size: String): Unit =
+def drawSetTranscriber(setup: D2SSetup, size: String): Unit =
   dimwit.initialize()
-  val setup = D2SSetup(Corpus.named(corpus), D2SModelConfiguration.named(size))
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
