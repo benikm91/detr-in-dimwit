@@ -27,7 +27,7 @@ def drawSetTranscriber(setup: D2SSetup, size: String): Unit =
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
 
-  val plans = open(Split.Validation).samples.take(Rows * Across).toSeq
+  val plans = open(setup, Split.Validation).samples.take(Rows * Across).toSeq
   val transcriber = Transcriber(Axis[Node] -> setup.nodeSlots, WrittenTogether)
 
   /** The plans as they were drawn, read once since they do not change. */

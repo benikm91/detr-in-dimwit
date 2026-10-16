@@ -22,17 +22,39 @@ def parts(repo_id, split):
     return sorted((name, held[name]["plans"]) for name in held if name == split or name.startswith(split + "-"))
 
 
-def drawings(repo_id, part):
-    """The images of a part, memory mapped so that only what is read is read."""
-    return np.load(_file(repo_id, "%s_images.npy" % part), mmap_mode="r")
+def drawings(repo_id, part, canvas):
+    """The images of a part at ``canvas`` pixels a side, memory mapped so that only what is read is
+    read. A smaller side is the stored one averaged down, every pixel the mean of the block it
+    covers, so that a thin line turns grey rather than vanishing."""
+    stored = np.load(_file(repo_id, "%s_images.npy" % part), mmap_mode="r")
+    side = stored.shape[1]
+    if side % canvas != 0:
+        raise ValueError("drawings of %d pixels do not average down to %d" % (side, canvas))
+    return stored if canvas == side else _AveragedDown(stored, side // canvas)
 
 
-def records(repo_id, part, canvas, nodes, edges, classes, relationships):
+class _AveragedDown:
+    """Drawings read ``factor`` times smaller a side than they are stored, a slice at a time."""
+
+    def __init__(self, stored, factor):
+        self.stored, self.factor = stored, factor
+
+    def __len__(self):
+        return len(self.stored)
+
+    def __getitem__(self, at):
+        held = np.asarray(self.stored[at], dtype=np.float32)
+        rows, columns = held.shape[-2] // self.factor, held.shape[-1] // self.factor
+        blocks = held.reshape(held.shape[:-2] + (rows, self.factor, columns, self.factor))
+        return np.rint(blocks.mean(axis=(-3, -1))).astype(np.uint8)
+
+
+def records(repo_id, part, side, nodes, edges, classes, relationships):
     """``(node_class, start_x, start_y, end_x, end_y, relationship, subject, obj)`` of every plan of a
     part, padded to ``nodes`` nodes and ``edges`` relationships.
 
     ``classes`` and ``relationships`` name the class and relationship of every id, the first naming
-    what pads. A point is held as a fraction of the ``canvas`` side.
+    what pads. A point is held as a fraction of the ``side`` the drawings are stored at.
     """
     class_id = {name: at for at, name in enumerate(classes)}
     relationship_id = {name: at for at, name in enumerate(relationships)}
@@ -52,8 +74,8 @@ def records(repo_id, part, canvas, nodes, edges, classes, relationships):
         for at, node in enumerate(record["nodes"]):
             (x1, y1), (x2, y2) = node["points"]
             node_class[plan, at] = class_id[node["class"]]
-            start_x[plan, at], start_y[plan, at] = x1 / canvas, y1 / canvas
-            end_x[plan, at], end_y[plan, at] = x2 / canvas, y2 / canvas
+            start_x[plan, at], start_y[plan, at] = x1 / side, y1 / side
+            end_x[plan, at], end_y[plan, at] = x2 / side, y2 / side
         for at, related in enumerate(record["relationships"]):
             relationship[plan, at] = relationship_id[related["type"]]
             subject[plan, at], obj[plan, at] = related["nodes"]

@@ -42,7 +42,7 @@ def scoreTranscriber(setup: D2GSetup, size: String, split: Split): Unit =
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
   val (nodes, edges) = (Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots)
-  val data = open(split)
+  val data = open(setup, split)
   println(s"pool of ${setup.queryPool} queries, ${data.numSamples} plans\n")
 
   val transcriber = Transcriber(nodes, edges, TranscribedTogether)
@@ -63,11 +63,11 @@ def scoreTranscriber(setup: D2GSetup, size: String, split: Split): Unit =
   scored.foreach: step =>
     println(s"scoring checkpoint $step")
     val plans = transcribed(checkpoints.load[D2GTrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
-    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, plans.map((target, written) => FloorplanScoring.score(target, written, tolerance / SyntheticFloorplans.canvas))))
+    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, plans.map((target, written) => FloorplanScoring.score(target, written, tolerance / setup.canvas))))
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-      println(s"transcripts written to ${FloorplanTranscripts.write("d2g", size, split, step, plans)}")
+      println(s"transcripts written to ${FloorplanTranscripts.write("d2g", size, split, step, setup.canvas, plans)}")
 
 /** Plots what a trained model transcribes: every plan as it was drawn, the record it was drawn
   * from, and the record the model wrote down, each drawn over the plan. Note that touching the
@@ -81,7 +81,7 @@ def plotTranscriber(setup: D2GSetup): Unit =
   val params = checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params
   val transcriber = Transcriber(Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
-    open(split)
+    open(setup, split)
       .samples
       .take(3)
       .zipWithIndex
@@ -177,5 +177,5 @@ class Transcriber(nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: In
     val filled = documents.padTo(drawings, documents.last)
     FloorplanGraph.of(jitTranscribe(params, stack(filled, Axis[Drawing]))).take(documents.size)
 
-private def open(split: Split) =
-  SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split)
+private def open(setup: D2GSetup, split: Split) =
+  SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split, setup.canvas)

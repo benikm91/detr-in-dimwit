@@ -145,14 +145,15 @@ object FloorplanScoring:
   *  "matched":   {"0": [null, ...], "2": [1, ...], "4": [1, ...], "8": [1, ...]}}
   * }}}
   *
-  * Points are in pixels. The predicted nodes are in the order the model wrote them down. `matched`
-  * holds, at every tolerance, the target node each predicted node stands for, or `null`.
+  * Points are in the pixels the drawings are stored at, as in the dataset. The predicted nodes are in
+  * the order the model wrote them down. `matched` holds, at every tolerance in pixels of the
+  * `canvas` the model read, the target node each predicted node stands for, or `null`.
   */
 object FloorplanTranscripts:
 
-  def write(model: String, size: String, split: Split, step: Int, plans: Seq[(FloorplanGraph, FloorplanGraph)]): Path =
-    val canvas = SyntheticFloorplans.canvas
-    def point(at: Point) = f"[${at.x * canvas}%.2f, ${at.y * canvas}%.2f]"
+  def write(model: String, size: String, split: Split, step: Int, canvas: Int, plans: Seq[(FloorplanGraph, FloorplanGraph)]): Path =
+    val side = SyntheticFloorplans.storedSide
+    def point(at: Point) = f"[${at.x * side}%.2f, ${at.y * side}%.2f]"
     def node(at: FloorplanNode) = s"""{"class": "${at.nodeClass.recordName}", "points": [${point(at.start)}, ${point(at.end)}]}"""
     def edge(at: FloorplanEdge) = s"""{"type": "${at.relationship.recordName}", "nodes": [${at.subject}, ${at.obj}]}"""
     def record(at: FloorplanGraph) =

@@ -203,7 +203,7 @@ private trait Plans derives Label
   * {{{
   * dimwit.initialize()
   *
-  * val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
+  * val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train, canvas = SyntheticFloorplans.storedSide)
   * val batch = data.batches(Axis[Batch] -> 64, afterSteps = 0).next()
   * }}}
   */
@@ -213,8 +213,8 @@ object SyntheticFloorplans:
   val name = "synthetic-floorplans"
   val repoId = "benikm91/synthetic-floorplans-for-transcription"
 
-  /** The side of the drawings in pixels. */
-  val canvas = 512
+  /** The side the drawings are stored at in pixels, which a record's points are given in. */
+  val storedSide = 512
 
   /** The most nodes and relationships a record of the training split holds, which every slot is
     * sized from.
@@ -222,8 +222,12 @@ object SyntheticFloorplans:
   val maxNodes = 73
   val maxRelationships = 101
 
-  /** Opens a split. A split is read in its parts — train in nine of 50,000 plans — each read when it
-    * is reached, so that only one part's records are held at a time; its drawings stay memory mapped.
+  /** Opens a split, its drawings read at `canvas` pixels a side: [[storedSide]] or a divisor of it,
+    * every pixel then the mean of the block it covers. A record's points are fractions of the side,
+    * so they are the same at any `canvas`.
+    *
+    * A split is read in its parts — train in nine of 50,000 plans — each read when it is reached, so
+    * that only one part's records are held at a time; its drawings stay memory mapped.
     */
   def open[W: Label, H: Label, C: Label, Node: Label, Edge: Label](
       width: Axis[W],
@@ -231,11 +235,12 @@ object SyntheticFloorplans:
       channel: Axis[C],
       node: Axis[Node],
       edge: Axis[Edge]
-  )(split: Split): SyntheticFloorplans[W, H, C, Node, Edge] =
+  )(split: Split, canvas: Int): SyntheticFloorplans[W, H, C, Node, Edge] =
+    require(storedSide % canvas == 0, s"drawings of $storedSide pixels do not average down to $canvas")
     val parts = module.parts(repoId, split.fileName).as[Seq[py.Dynamic]].map: part =>
       (part.applyDynamic("__getitem__")(0).as[String], part.applyDynamic("__getitem__")(1).as[Int])
     require(parts.nonEmpty, s"no part of the split '${split.fileName}' in $repoId")
-    new SyntheticFloorplans(parts)
+    new SyntheticFloorplans(parts, canvas)
 
   private[syntheticFloorplansDataset] lazy val module: py.Dynamic =
     PythonModules("synthetic_floorplans", "./syntheticFloorplansDataset/src/main/resources/python")
@@ -243,7 +248,9 @@ object SyntheticFloorplans:
 /** A single split of the synthetic floor plans. Use [[SyntheticFloorplans.open]] to create one. */
 final class SyntheticFloorplans[W: Label, H: Label, C: Label, Node: Label, Edge: Label] private[syntheticFloorplansDataset] (
     /** Every part of the split, by name, and how many plans it holds, in seed order. */
-    val parts: Seq[(String, Int)]
+    val parts: Seq[(String, Int)],
+    /** The side the drawings are read at, in pixels. */
+    val canvas: Int
 ):
   import SyntheticFloorplans.*
 
@@ -287,14 +294,14 @@ final class SyntheticFloorplans[W: Label, H: Label, C: Label, Node: Label, Edge:
         val pixels = images.applyDynamic("__getitem__")(py.Dynamic.global.slice(from, from + batch.size))
         Batch(liftPyTensor[(S, H, W), UInt8](pixels), recordsIn(parsed, batch, from))
 
-  override def toString: String = s"SyntheticFloorplans($repoId, plans=$numSamples, parts=${parts.size})"
+  override def toString: String = s"SyntheticFloorplans($repoId, plans=$numSamples, parts=${parts.size}, canvas=$canvas)"
 
   /** A part's drawings, memory mapped, and its records, parsed on the host. */
   private def read(part: Int): (py.Dynamic, py.Dynamic) =
     val name = parts(part)._1
     (
-      module.drawings(repoId, name),
-      module.records(repoId, name, canvas, maxNodes, maxRelationships,
+      module.drawings(repoId, name, canvas),
+      module.records(repoId, name, storedSide, maxNodes, maxRelationships,
         FloorplanClass.values.toSeq.map(_.recordName).toPythonCopy, FloorplanRelationship.values.toSeq.map(_.recordName).toPythonCopy)
     )
 

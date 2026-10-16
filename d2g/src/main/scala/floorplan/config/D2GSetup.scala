@@ -12,6 +12,10 @@ case class D2GSetup(
     numHeads: Int = 4,
     embedding: Int = 128,
     queryPool: Int = 6,
+    /** The side the drawings are read at, in pixels: the stored ones averaged down. It is also how
+      * many pixels a coordinate chooses from.
+      */
+    canvas: Int = 128,
     /** Whether the nodes of a record are written down in any order or in an order of their classes. */
     nodeOrder: NodeOrder = NodeOrder.WallsFirst,
 
@@ -40,7 +44,7 @@ case class D2GSetup(
   val nodeSlots: Int = SyntheticFloorplans.maxNodes + 1 // One more due to the end prediction
   val edgeSlots: Int = SyntheticFloorplans.maxRelationships + 1 // One more due to the end prediction
 
-  override def toString: String = s"D2GSetup(${SyntheticFloorplans.repoId}, layers=$numLayers, order=$nodeOrder, heads=$numHeads, embedding=$embedding, nodes=$nodeSlots, edges=$edgeSlots, samples=$numSamples, batch=$batchSize)"
+  override def toString: String = s"D2GSetup(${SyntheticFloorplans.repoId}, layers=$numLayers, order=$nodeOrder, heads=$numHeads, embedding=$embedding, canvas=$canvas, nodes=$nodeSlots, edges=$edgeSlots, samples=$numSamples, batch=$batchSize)"
 
 object D2GSetup:
 

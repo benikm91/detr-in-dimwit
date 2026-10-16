@@ -77,7 +77,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
 
   val nodes = Axis[Node] -> setup.nodeSlots
   val edges = Axis[Edge] -> setup.edgeSlots
-  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train)
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train, setup.canvas)
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 
@@ -94,7 +94,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
     nodes = setup.nodeSlots,
     edges = setup.edgeSlots,
     queries = setup.queryPool,
-    canvas = SyntheticFloorplans.canvas,
+    canvas = setup.canvas,
     key = initKey
   )
 
@@ -102,7 +102,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
-  val nodeLoss = RemainingNodeLoss(VType[Float32], SyntheticFloorplans.canvas, setup.nodeOrder)
+  val nodeLoss = RemainingNodeLoss(VType[Float32], setup.canvas, setup.nodeOrder)
   val edgeLoss = RemainingEdgeLoss(VType[Float32])
 
   /** The mean loss over the drawings of a batch, whatever axis `S` they lie along. */

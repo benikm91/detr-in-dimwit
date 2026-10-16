@@ -12,6 +12,10 @@ case class D2TokSetup(
     numLayers: Int = 3,
     numHeads: Int = 4,
     embedding: Int = 128,
+    /** The side the drawings are read at, in pixels: the stored ones averaged down. It is also how
+      * many pixels a coordinate chooses from.
+      */
+    canvas: Int = 128,
     order: SequenceOrder = SequenceOrder.Random,
 
     // Train configuration
@@ -39,10 +43,10 @@ case class D2TokSetup(
     seed: Int = 0
 ):
 
-  val words: Words = Words(SyntheticFloorplans.canvas)
+  val words: Words = Words(canvas)
   val tokens: Int = words.tokens(SyntheticFloorplans.maxNodes)
 
-  override def toString: String = s"D2TokSetup(${SyntheticFloorplans.repoId}, layers=$numLayers, order=${order.name}, heads=$numHeads, embedding=$embedding, words=${words.size}, tokens=$tokens, samples=$numSamples, batch=$batchSize, seed=$seed)"
+  override def toString: String = s"D2TokSetup(${SyntheticFloorplans.repoId}, layers=$numLayers, order=${order.name}, heads=$numHeads, embedding=$embedding, canvas=$canvas, words=${words.size}, tokens=$tokens, samples=$numSamples, batch=$batchSize, seed=$seed)"
 
 object D2TokSetup:
 

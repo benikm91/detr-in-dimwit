@@ -42,7 +42,7 @@ def scoreSetTranscriber(setup: D2SSetup, size: String, split: Split): Unit =
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
   val nodes = Axis[Node] -> setup.nodeSlots
-  val data = open(split)
+  val data = open(setup, split)
   println(s"pool of ${setup.queryPool} queries, ${data.numSamples} drawings\n")
 
   val transcriber = Transcriber(nodes, TranscribedTogether)
@@ -65,11 +65,11 @@ def scoreSetTranscriber(setup: D2SSetup, size: String, split: Split): Unit =
   scored.foreach: step =>
     println(s"scoring checkpoint $step")
     val drawings = transcribed(checkpoints.load[D2STrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
-    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => FloorplanScoring.score(target, written, tolerance / SyntheticFloorplans.canvas))))
+    val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => FloorplanScoring.score(target, written, tolerance / setup.canvas))))
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-      println(s"transcripts written to ${FloorplanTranscripts.write("d2s", size, split, step, drawings)}")
+      println(s"transcripts written to ${FloorplanTranscripts.write("d2s", size, split, step, setup.canvas, drawings)}")
 
 /** Plots what a trained model transcribes: every plan as it was drawn, the nodes of the record it
   * was drawn from, and the nodes the model wrote down, each drawn over the plan. Note that touching
@@ -83,7 +83,7 @@ def plotSetTranscriber(setup: D2SSetup): Unit =
   val params = checkpoints.loadLatest[D2STrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params
   val transcriber = Transcriber(Axis[Node] -> setup.nodeSlots)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
-    open(split)
+    open(setup, split)
       .samples
       .take(3)
       .zipWithIndex
@@ -163,8 +163,8 @@ class Transcriber(nodes: AxisExtent[Node], drawings: Int = 1):
     val filled = documents.padTo(drawings, documents.last)
     FloorplanGraph.of(jitTranscribe(params, stack(filled, Axis[Drawing]))).take(documents.size)
 
-private[floorplan] def open(split: Split) =
-  SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(split)
+private[floorplan] def open(setup: D2SSetup, split: Split) =
+  SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(split, setup.canvas)
 
 /** The likeliest of what the pool answers at `slot` — the node a drawing that is still `writing`
   * takes there, nothing for one that is not — and whether it is still writing after it.

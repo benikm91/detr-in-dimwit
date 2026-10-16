@@ -74,7 +74,7 @@ def trainWordTranscriber(setup: D2TokSetup): Unit =
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numTotalSteps steps")
 
   val tokens = Axis[Token] -> setup.tokens
-  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train)
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train, setup.canvas)
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 
@@ -123,7 +123,7 @@ def trainWordTranscriber(setup: D2TokSetup): Unit =
   ) =
     val images = drawingsOf(pixels, Axis[Channel])
     val (nextLinearization, forThisStep) = state.linearization.splitToTuple(2)
-    val written = setup.order.laidOut(records, forThisStep, SyntheticFloorplans.canvas)
+    val written = setup.order.laidOut(records, forThisStep, setup.canvas)
     val lossScale = state.lossScale
     val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
       (params: D2Tok.Params[Float32]) => lossScale.scaled(cost(images, written)(params))
