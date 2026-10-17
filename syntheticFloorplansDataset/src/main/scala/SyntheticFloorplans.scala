@@ -297,14 +297,18 @@ final class SyntheticFloorplans[W: Label, H: Label, C: Label, Node: Label, Edge:
 
   override def toString: String = s"SyntheticFloorplans($repoId, plans=$numSamples, parts=${parts.size}, canvas=$canvas)"
 
-  /** A part's drawings, memory mapped, and its records, parsed on the host. */
-  private def read(part: Int): (py.Dynamic, py.Dynamic) =
-    val name = parts(part)._1
-    (
-      module.drawings(repoId, name, canvas),
-      module.records(repoId, name, storedSide, maxNodes, maxRelationships,
-        FloorplanClass.values.toSeq.map(_.recordName).toPythonCopy, FloorplanRelationship.values.toSeq.map(_.recordName).toPythonCopy)
-    )
+  /** A part's drawings, memory mapped, and its records, parsed on the host: each read the first time
+    * it is asked for and kept. Training comes back to every part many times, and parsing a part's
+    * records takes far longer than training on them.
+    */
+  private final class Part(name: String):
+    lazy val drawings: py.Dynamic = module.drawings(repoId, name, canvas)
+    lazy val records: py.Dynamic = module.records(repoId, name, storedSide, maxNodes, maxRelationships,
+      FloorplanClass.values.toSeq.map(_.recordName).toPythonCopy, FloorplanRelationship.values.toSeq.map(_.recordName).toPythonCopy)
+
+  private val held: IndexedSeq[Part] = parts.map((name, _) => Part(name)).toIndexedSeq
+
+  private def read(part: Int): (py.Dynamic, py.Dynamic) = (held(part).drawings, held(part).records)
 
   /** The records of the plans from `from` on, cut from the parsed ones. */
   private def recordsIn[S: Label](parsed: py.Dynamic, rows: AxisExtent[S], from: Int): FloorplanRecordBatch[S, Node, Edge] =
