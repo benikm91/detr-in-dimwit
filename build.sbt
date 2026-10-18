@@ -71,7 +71,7 @@ lazy val modelSettings = Seq(
 
 lazy val detr = project
   .in(file("detr"))
-  .dependsOn(dataset, documentEncoder)
+  .dependsOn(dataset, syntheticFloorplansDataset, documentEncoder)
   .settings(name := "detr")
   .settings(modelSettings)
 

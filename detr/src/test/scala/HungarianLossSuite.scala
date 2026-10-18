@@ -1,7 +1,7 @@
-package detr.train
+package detr.sketch.train
 
 import detr.*
-import detr.model.NodeHead.NodeLogits
+import detr.sketch.model.NodeHead.NodeLogits
 import dataset.NodeClass
 import dataset.NodeClasses
 import dataset.IsConstruction

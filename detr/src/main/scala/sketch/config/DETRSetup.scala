@@ -1,9 +1,6 @@
-package detr.config
+package detr.sketch.config
 
-import detr.*
-import detr.model.*
-import detr.train.*
-import detr.eval.*
+import detr.config.DETRModelConfiguration
 import dataset.Corpus
 import dataset.Runs
 
@@ -77,7 +74,7 @@ case class DETRSetup(
 
 object DETRSetup:
 
-  def apply(corpus: Corpus, size: DETR.Size): DETRSetup = DETRSetup(
+  def apply(corpus: Corpus, size: DETRModelConfiguration): DETRSetup = DETRSetup(
     corpus = corpus,
     checkpointRoot = checkpointRoot(corpus, size),
     numQueries = queries(corpus),
@@ -86,7 +83,7 @@ object DETRSetup:
     embedding = size.embedding
   )
 
-  def checkpointRoot(corpus: Corpus, size: DETR.Size): String = s"${Runs.checkpointDir}/detr/${corpus.name}-${size.name}"
+  def checkpointRoot(corpus: Corpus, size: DETRModelConfiguration): String = s"${Runs.checkpointDir}/detr/${corpus.name}-${size.name}"
 
   /** The generated corpora get about three queries per object a drawing can hold, which is the
     * headroom the l-shape runs converged with. The sketch corpora get one query per node a drawing

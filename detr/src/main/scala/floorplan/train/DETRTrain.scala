@@ -1,13 +1,9 @@
-package detr.train
+package detr.floorplan.train
 
 import detr.*
 import detr.model.*
-import detr.eval.*
-import detr.config.*
-import dataset.Corpus
-import dataset.RecordBatch
-import dataset.RecordNodes
-import dataset.DrawingDataset
+import detr.floorplan.model.*
+import detr.floorplan.config.*
 import dataset.History
 import dataset.DrawingDataset.Split
 import dataset.drawingsOf
@@ -38,6 +34,10 @@ import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
 import dimwit.TreeOf.ops.asFloats
 
+import syntheticFloorplansDataset.FloorplanNodes
+import syntheticFloorplansDataset.FloorplanRecordBatch
+import syntheticFloorplansDataset.SyntheticFloorplans
+
 import scala.language.implicitConversions
 
 private trait Batch derives Label
@@ -56,7 +56,7 @@ case class TrainState(
     loss: Tensor0[Float32]
 )
 
-/** Trains a detector on the corpus its [[DETRSetup]] names.
+/** Trains a detector on the synthetic floor plans.
   *
   * The model runs in Float16 against Float32 master weights, the loss and its matching in
   * Float32. A [[LossScale]] keeps the small gradients from rounding to zero, and a step whose
@@ -80,7 +80,7 @@ def trainDetector(setup: DETRSetup): Unit =
   require(numTotalSteps % checkpointEvery == 0, s"$numTotalSteps steps do not end on a checkpoint, which is where the cooldown ends")
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numTotalSteps steps")
 
-  val data = DrawingDataset.open(setup.corpus)(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train)
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train, setup.canvas)
 
   /** Warmup, then the rate held, then a cosine cooldown over the last stretch. Adam orbits a
     * solution at a distance the rate sets, which is what the cooldown closes; holding the rate
@@ -97,28 +97,28 @@ def trainDetector(setup: DETRSetup): Unit =
     numHeads = setup.numHeads,
     embedding = setup.embedding,
     numQueries = setup.numQueries,
-    canvas = setup.corpus.canvas,
+    canvas = setup.canvas,
     key = Random.Key(setup.seed)
   )
 
   val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
-  val loss = HungarianLoss(VType[Float32], setup.corpus.canvas)
+  val loss = HungarianLoss(VType[Float32], setup.canvas)
 
   def cost(
       imgs: Tensor4[Batch |@| X, Width, Height, Channel, Float32],
-      records: RecordBatch[Batch |@| X, Node, Relationship]
+      records: FloorplanRecordBatch[Batch |@| X, Node, Relationship]
   )(params: DETR.Params[Float32]): Tensor0[Float32] =
     val model = DETR(params.asFloats(VType[Float16]))
-    zipvmap(Axis[Batch |@| X])(imgs.asFloat(VType[Float16]), records.nodeClass, records.construction, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY):
-      case (img, nodeClass, construction, startX, startY, endX, endY, midX, midY) =>
-        loss(model.logits(img).asFloats(VType[Float32]), RecordNodes(nodeClass, construction, startX, startY, endX, endY, midX, midY))
+    zipvmap(Axis[Batch |@| X])(imgs.asFloat(VType[Float16]), records.nodeClass, records.startX, records.startY, records.endX, records.endY):
+      case (img, nodeClass, startX, startY, endX, endY) =>
+        loss(model.logits(img).asFloats(VType[Float32]), FloorplanNodes(nodeClass = nodeClass, startX = startX, startY = startY, endX = endX, endY = endY))
     .mean
 
   def gradientStep(
       pixels: Tensor3[Batch |@| X, Height, Width, UInt8],
-      records: RecordBatch[Batch |@| X, Node, Relationship],
+      records: FloorplanRecordBatch[Batch |@| X, Node, Relationship],
       state: TrainState
   ) =
     val lossScale = state.lossScale
@@ -141,22 +141,19 @@ def trainDetector(setup: DETRSetup): Unit =
     * sees one axis.
     */
   def shard(
-      batch: dataset.Batch[Batch, Width, Height, RecordBatch[Batch, Node, Relationship]]
-  ): (Tensor3[Batch |@| X, Height, Width, UInt8], RecordBatch[Batch |@| X, Node, Relationship]) =
+      batch: dataset.Batch[Batch, Width, Height, FloorplanRecordBatch[Batch, Node, Relationship]]
+  ): (Tensor3[Batch |@| X, Height, Width, UInt8], FloorplanRecordBatch[Batch |@| X, Node, Relationship]) =
     val over = Axis[Batch] -> MeshAxis[X]
     val records = batch.target
     (
       batch.pixels.shard(mesh, over),
-      RecordBatch(
+      FloorplanRecordBatch(
         nodeClass = records.nodeClass.shard(mesh, over),
-        construction = records.construction.shard(mesh, over),
         startX = records.startX.shard(mesh, over),
         startY = records.startY.shard(mesh, over),
         endX = records.endX.shard(mesh, over),
         endY = records.endY.shard(mesh, over),
-        midX = records.midX.shard(mesh, over),
-        midY = records.midY.shard(mesh, over),
-        edgeClass = records.edgeClass.shard(mesh, over),
+        relationship = records.relationship.shard(mesh, over),
         subject = records.subject.shard(mesh, over),
         obj = records.obj.shard(mesh, over)
       )

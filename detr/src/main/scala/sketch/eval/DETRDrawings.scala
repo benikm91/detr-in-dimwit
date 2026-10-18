@@ -1,7 +1,9 @@
+package detr.sketch.eval
+
 import detr.*
-import detr.config.*
-import detr.model.*
-import detr.train.*
+import detr.sketch.config.*
+import detr.sketch.model.*
+import detr.sketch.train.*
 import dataset.Corpus
 import dataset.DrawingDataset
 import dataset.DrawingDataset.Split
@@ -21,10 +23,8 @@ import java.nio.file.Path
   * Every validation drawing is shown as it was drawn, beside what the model detected on a canvas
   * of its own. The pictures land beside the metrics in `OUTPUT_DIR`.
   */
-@main
-def detrDraw(corpus: String, size: String): Unit =
+def drawDetector(setup: DETRSetup, size: String): Unit =
   dimwit.initialize()
-  val setup = DETRSetup(Corpus.named(corpus), DETR.Size.named(size))
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")

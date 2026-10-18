@@ -1,7 +1,8 @@
-package detr.train
+package detr.sketch.train
 
 import detr.*
-import detr.model.*
+import detr.train.*
+import detr.sketch.model.*
 import dataset.NodeClass
 import dataset.NodeClasses
 import dataset.RecordNodes
@@ -47,18 +48,6 @@ class HungarianLoss[V: IsFloating](vtype: VType[V], canvas: Int) extends ((NodeL
     val ends = placed(logits.endX, target.endX) + placed(logits.endY, target.endY)
     val middles = placed(logits.midX, target.midX) + placed(logits.midY, target.midY)
     placed(logits.startX, target.startX) + placed(logits.startY, target.startY) + ends *! runsOn + middles *! bends
-
-  /** The cross entropy of every query's scores against the value every node holds. */
-  private def costOfValue[L: Label](logits: Tensor2[Query, L, V], values: Tensor1[Node, Int32]): Tensor2[Query, Node, V] =
-    logNormalizer(logits) -! logits.slice(Axis[L].at(values))
-
-  /** The cross entropy of every query's scores against one class. */
-  private def costOfClass(logits: Tensor2[Query, NodeClasses, V], id: Int): Tensor1[Query, V] =
-    logNormalizer(logits) - logits.slice(Axis[NodeClasses].at(id))
-
-  private def logNormalizer[L: Label](logits: Tensor2[Query, L, V]): Tensor1[Query, V] =
-    val peak = logits.max(Axis[L])
-    peak + (logits -! peak).exp.sum(Axis[L]).log
 
   private def indices[L: Label](extent: AxisExtent[L]): Tensor1[L, Int32] =
     Tensor1(extent.axis, VType[Int32]).fromArray(Array.range(0, extent.size))

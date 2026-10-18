@@ -1,9 +1,5 @@
 package detr
 
-import detr.model.*
-import detr.train.*
-import detr.eval.*
-import detr.config.*
 import dimwit.*
 
 export documentEncoder.{Width, Height, Channel, Patch}

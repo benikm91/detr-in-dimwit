@@ -1,4 +1,4 @@
-package detr.model
+package detr.sketch.model
 
 import detr.*
 import dataset.NodeClass

@@ -67,6 +67,10 @@ object FloorplanGraph:
     read(nodes.nodeClass.toArray, nodes.startX.toArray, nodes.startY.toArray, nodes.endX.toArray, nodes.endY.toArray,
       record.edges.relationship.toArray, record.edges.subject.toArray, record.edges.obj.toArray)
 
+  /** The nodes of a layout alone, as a plan holding no relationships. */
+  def of[Node: Label](nodes: FloorplanNodes[Node]): FloorplanGraph =
+    read(nodes.nodeClass.toArray, nodes.startX.toArray, nodes.startY.toArray, nodes.endX.toArray, nodes.endY.toArray, Array.empty, Array.empty, Array.empty)
+
   /** Every record of a batch, read to the host — once for the batch, not once per plan. */
   def of[S: Label, Node: Label, Edge: Label](records: FloorplanRecordBatch[S, Node, Edge]): Seq[FloorplanGraph] =
     val (nodeClass, startX, startY, endX, endY) = (records.nodeClass.toArray, records.startX.toArray, records.startY.toArray, records.endX.toArray, records.endY.toArray)
