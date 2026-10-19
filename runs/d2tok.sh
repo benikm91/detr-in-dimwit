@@ -29,8 +29,8 @@
 
 set -euo pipefail
 
-STAGE="${1:?say which stage to run: train, eval or test}"
-[[ $STAGE == train || $STAGE == eval || $STAGE == test ]] || { echo "no stage named '$STAGE': train, eval or test" >&2; exit 2; }
+STAGE="${1:?say which stage to run: train, eval, test or draw}"
+[[ $STAGE == train || $STAGE == eval || $STAGE == test || $STAGE == draw ]] || { echo "no stage named '$STAGE': train, eval, test or draw" >&2; exit 2; }
 
 : "${CACHE_DIR:?set CACHE_DIR to a directory that outlives the job, where the corpora are cached}"
 : "${OUTPUT_DIR:?set OUTPUT_DIR to a directory that outlives the job, where the metrics are written}"
@@ -147,6 +147,7 @@ JSON
       train) sbt "d2tok/runMain d2tokTrain $corpus $size $order $seed" ;;
       eval) sbt "d2tok/runMain d2tokEval $corpus $size" ;;
       test) sbt "d2tok/runMain d2tokTest $corpus $size" ;;
+      draw) sbt "d2tok/runMain d2tokDraw $corpus $size" ;;
     esac
   ' d2tok "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" "$SEED" "$ORDER" &
 

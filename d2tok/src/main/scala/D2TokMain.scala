@@ -15,6 +15,7 @@ import syntheticFloorplansDataset.SyntheticFloorplans
   * [[d2tokTrain]] trains a run in an order, from a seed.
   * [[d2tokEval]] scores the newest run of that corpus and size (greedy decoding).
   * [[d2tokTest]] scores its last checkpoint on the test split.
+  * [[d2tokDraw]] writes what every checkpoint transcribed as a picture.
   */
 
 @main
@@ -31,6 +32,11 @@ def d2tokEval(corpus: String, size: String): Unit = score(corpus, size, Split.Va
 
 @main
 def d2tokTest(corpus: String, size: String): Unit = score(corpus, size, Split.Test)
+
+@main
+def d2tokDraw(corpus: String, size: String): Unit =
+  if corpus == SyntheticFloorplans.name then d2tok.floorplan.eval.drawWordTranscriber(d2tok.floorplan.config.D2TokSetup(D2TokModelConfiguration.named(size)), size)
+  else d2tok.sketch.eval.drawWordTranscriber(d2tok.sketch.config.D2TokSetup(Corpus.named(corpus), D2TokModelConfiguration.named(size)), size)
 
 private def score(corpus: String, size: String, split: Split): Unit =
   if corpus == SyntheticFloorplans.name then
