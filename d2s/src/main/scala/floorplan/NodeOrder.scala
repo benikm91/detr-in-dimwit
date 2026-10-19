@@ -27,7 +27,7 @@ enum NodeOrder:
 
 object NodeOrder:
 
-  private val wallsFirst = Seq(FloorplanClass.OutsideWall, FloorplanClass.InsideWall, FloorplanClass.Door, FloorplanClass.OutsideDoor, FloorplanClass.Window)
+  private val wallsFirst = Seq(FloorplanClass.OutsideWall, FloorplanClass.InsideWall, FloorplanClass.OutsideDoor, FloorplanClass.Door, FloorplanClass.Window)
 
   /** The walls first, then what stands in them: an opening written later can be placed against the
     * wall it stands in.
