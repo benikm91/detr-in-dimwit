@@ -20,7 +20,7 @@ lazy val munit = "org.scalameta" %% "munit" % "1.0.0" % Test
 
 lazy val root = project
   .in(file("."))
-  .aggregate(dataset, syntheticFloorplansDataset, documentEncoder, detr, d2s, d2g, d2seq, d2tok)
+  .aggregate(dataset, syntheticFloorplansDataset, documentEncoder, detr, detrBucket, d2s, d2g, d2seq, d2tok)
   .settings(
     name := "detr-root",
     publish / skip := true
@@ -73,6 +73,12 @@ lazy val detr = project
   .in(file("detr"))
   .dependsOn(dataset, syntheticFloorplansDataset, documentEncoder)
   .settings(name := "detr")
+  .settings(modelSettings)
+
+lazy val detrBucket = project
+  .in(file("detr-bucket"))
+  .dependsOn(detr) // DETR's decoder and matching, with queries split by class.
+  .settings(name := "detr-bucket")
   .settings(modelSettings)
 
 lazy val d2s = project
