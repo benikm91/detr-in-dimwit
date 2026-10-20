@@ -21,11 +21,11 @@ case class D2SSetup(
 
     // Train configuration
     checkpointRoot: String,
-    /** 100k steps of 512 plans, about 114 passes over the training split: 10k steps of warmup, 70k
-      * at the full learning rate and a 20k cooldown, with a checkpoint every 10k.
+    /** 200k steps of 512 plans, about 228 passes over the training split: 10k steps of warmup, 150k
+      * at the full learning rate and a 40k cooldown, with a checkpoint every 10k.
       */
     checkpointEverySamples: Int = 40_000 * 128,
-    numSamples: Int = 400_000 * 128,
+    numSamples: Int = 800_000 * 128,
     batchSize: Int = 512,
     learningRate: Float = 3e-4f,
     /** Adam's memory of how large the gradients are, about 1 / (1 − β₂) steps. Short enough that a
@@ -40,7 +40,7 @@ case class D2SSetup(
     weightDecay: Float = 0.05f,
     maxGradientNorm: Float = 1f,
     warmupSamples: Int = 40_000 * 128,
-    cooldownSamples: Int = 80_000 * 128,
+    cooldownSamples: Int = 160_000 * 128,
     seed: Int = 42
 ):
 
