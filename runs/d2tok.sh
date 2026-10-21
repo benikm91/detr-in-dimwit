@@ -46,7 +46,7 @@ export SIZE="${SIZE:-s}"
 export SEED="${SEED:-0}"
 
 # Which order a run writes the nodes of a record in — the names either `SequenceOrder` knows: random,
-# kept, class or position.
+# kept or position, and class for sketches or walls-first for floor plans.
 export ORDER="${ORDER:-random}"
 
 # Which branch the container builds, as pushed to GitHub — a change that is not pushed is not

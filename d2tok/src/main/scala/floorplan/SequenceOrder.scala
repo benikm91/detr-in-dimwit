@@ -19,10 +19,10 @@ enum SequenceOrder(val name: String):
   /** The order the dataset stores a record's nodes in. */
   case Kept extends SequenceOrder("kept")
 
-  /** Class by class — outside walls, inside walls, doors, outside doors, then windows — and in a
-    * fresh random order within a class.
+  /** Class by class — outside walls, inside walls, outside doors, doors, then windows — and in a
+    * fresh random order within a class: the walls first, then what stands in them.
     */
-  case ByClass extends SequenceOrder("class")
+  case WallsFirst extends SequenceOrder("walls-first")
 
   /** Top to bottom and left to right by the pixel a node starts on, then by its class and the pixel
     * it ends on: one order for every record, none of it drawn at random.
@@ -39,17 +39,17 @@ enum SequenceOrder(val name: String):
     this match
       case Random     => records.permuted(key, nodes, relationships)
       case Kept       => records
-      case ByClass    => records.permuted(key, nodes, relationships, SequenceOrder.classRank)
+      case WallsFirst => records.permuted(key, nodes, relationships, SequenceOrder.classRank)
       case ByPosition => SequenceOrder.byPosition(records, canvas)
 
 object SequenceOrder:
   def named(name: String): SequenceOrder = values.find(_.name == name).getOrElse(sys.error(s"no order named '$name': ${values.map(_.name).mkString(", ")}"))
 
-  /** Where every class comes in [[ByClass]]: the classes not listed, [[FloorplanClass.NoNode]] among
+  /** Where every class comes in [[WallsFirst]]: the classes not listed, [[FloorplanClass.NoNode]] among
     * them, after the ones that are.
     */
   private def classRank: Tensor1[FloorplanClasses, Float32] =
-    val classes = Seq(FloorplanClass.OutsideWall, FloorplanClass.InsideWall, FloorplanClass.Door, FloorplanClass.OutsideDoor, FloorplanClass.Window)
+    val classes = Seq(FloorplanClass.OutsideWall, FloorplanClass.InsideWall, FloorplanClass.OutsideDoor, FloorplanClass.Door, FloorplanClass.Window)
     Tensor1(Axis[FloorplanClasses], VType[Float32]).fromArray(FloorplanClass.values.map(nodeClass => classes.indexOf(nodeClass) match
       case -1 => classes.size.toFloat
       case at => at.toFloat

@@ -45,9 +45,9 @@ class FloorplanWordsSuite extends munit.FunSuite:
   test("by position, a plan is written top to bottom and left to right, by class where two start on the same pixel"):
     assertEquals(laidOut(SequenceOrder.ByPosition, 1), Seq(plan.nodes(1), plan.nodes(3), plan.nodes(2), plan.nodes(4), plan.nodes(0)))
 
-  test("by class, a plan is written walls first, in any order within a class"):
+  test("walls first, a plan is written class by class, in any order within a class"):
     val orders = (1 to 10).map: seed =>
-      val written = laidOut(SequenceOrder.ByClass, seed)
+      val written = laidOut(SequenceOrder.WallsFirst, seed)
       assertEquals(written.map(_.nodeClass), Seq(FloorplanClass.OutsideWall, FloorplanClass.OutsideWall, FloorplanClass.InsideWall, FloorplanClass.Door, FloorplanClass.Window), s"seed $seed")
       written
     assert(orders.distinct.size > 1, "the two outside walls come in either order")
