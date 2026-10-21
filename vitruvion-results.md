@@ -5,14 +5,16 @@ construction flag), on the Vitruvion split of SketchGraphs: 6–16 primitives pe
 on a 64 grid, 128 px renders. Test split: 82,181 sketches.
 
 All models are `s-deep`, about 11.3M parameters, the same document encoder, trained for 270k steps
-(learning rate cooldown from 216k), three seeds each. The scores are of the last checkpoint on the
-test split, mean ± standard deviation over the seeds.
+(learning rate cooldown from 216k), three seeds each unless a table says otherwise. The scores are
+of the last checkpoint on the test split, mean ± standard deviation over the seeds. Where every
+number comes from is at the end.
 
 ## The models
 
 | model | what it writes | in which order |
 |---|---|---|
 | **DETR** | all nodes at once, from 16 queries, Hungarian matching | none |
+| **DETR, buckets** | as DETR, but from 64 queries in four class buckets (16 point, 16 line, 16 circle, 16 arc queries); a query only says whether it answers with a node of its bucket's class, and the matching is done bucket by bucket | none |
 | **d2s** | the next node, trained against the set of the nodes still to write | none (*free*), or class by class (*class*, *class reversed*) |
 | **d2seq** | the next node, one embedding per node, teacher-forced | a fresh random order (*random*), or the corpus's creation order (*kept*) |
 | **d2tok** | the next word of the record: a type word, then the coordinate words | *random*, *kept*, as for d2seq; *class*; *position* (top to bottom, left to right) |
@@ -27,35 +29,59 @@ written. PF1 is counted as [DAVINCI](https://arxiv.org/abs/2410.22857) counts it
 test sketches, a tolerance of 5 of Vitruvion's 64 bins (5.43 px on our renders), the construction
 flag ignored.
 
-| model | order | parameters | sketches exactly right | node F1 | nodes found | nodes right | PF1 |
-|---|---|---|---|---|---|---|---|
-| d2seq | random | 11.41M | 0.1 ± 0.0 | 18.6 ± 0.4 | 22.0 ± 0.6 | 16.2 ± 0.3 | – |
-| d2seq | kept | 11.41M | 23.8 ± 0.3 | 70.4 ± 0.4 | 71.2 ± 0.3 | 69.7 ± 0.4 | 73.7 |
-| d2s | free | 11.41M | 52.9 ± 0.3 | 86.3 ± 0.2 | 83.2 ± 0.2 | 89.7 ± 0.2 | 88.7 |
-| d2s | class | 11.41M | 57.7 ± 0.1 | 88.4 ± 0.1 | 86.0 ± 0.0 | 91.0 ± 0.1 | 90.7 |
-| d2s | class reversed | 11.41M | 58.1 ± 0.1 | 88.9 ± 0.1 | 86.5 ± 0.1 | 91.4 ± 0.1 | 91.1 |
-| DETR | – | 11.32M | 54.1 ± 0.3 | 89.7 ± 0.1 | 88.8 ± 0.1 | 90.5 ± 0.1 | 91.7 |
-| d2tok | random | 11.21M | **61.7 ± 0.0** | **90.5 ± 0.1** | **89.4 ± 0.0** | **91.7 ± 0.1** | **92.4** |
-| d2tok | kept | 11.21M | 53.7 ± 0.2 | 86.6 ± 0.1 | 86.4 ± 0.1 | 86.9 ± 0.1 | 88.9 |
-| d2tok | class | 11.21M | *running* | | | | |
-| d2tok | position | 11.21M | *running* | | | | |
-| *DAVINCI, its paper* | | | | | | | *91.7* |
+| model | order | parameters | seeds | sketches exactly right | node F1 | nodes found | nodes right | PF1 |
+|---|---|---|---|---|---|---|---|---|
+| d2seq | random | 11.41M | 3 | 0.1 ± 0.0 | 18.6 ± 0.4 | 22.0 ± 0.6 | 16.2 ± 0.3 | 21.9 |
+| d2seq | kept | 11.41M | 3 | 23.8 ± 0.2 | 70.4 ± 0.4 | 71.2 ± 0.3 | 69.7 ± 0.4 | 73.7 |
+| d2s | free | 11.41M | 3 | 52.9 ± 0.3 | 86.3 ± 0.2 | 83.1 ± 0.2 | 89.7 ± 0.2 | 88.7 |
+| d2s | class | 11.41M | 3 | 57.7 ± 0.1 | 88.4 ± 0.1 | 86.0 ± 0.0 | 91.0 ± 0.1 | 90.7 |
+| d2s | class reversed | 11.41M | 3 | 58.1 ± 0.1 | 88.9 ± 0.1 | 86.5 ± 0.1 | 91.3 ± 0.0 | 91.1 |
+| DETR | – | 11.32M | 3 | 54.1 ± 0.3 | 89.6 ± 0.1 | 88.8 ± 0.1 | 90.5 ± 0.1 | 91.7 |
+| DETR, buckets | – | 11.33M | 1 | *test not scored yet; see the validation table* | | | | |
+| d2tok | random | 11.21M | 3 | **61.6 ± 0.0** | **90.5 ± 0.1** | **89.4 ± 0.0** | **91.7 ± 0.1** | **92.4** |
+| d2tok | kept | 11.21M | 3 | 53.7 ± 0.2 | 86.6 ± 0.1 | 86.3 ± 0.1 | 86.9 ± 0.1 | 88.9 |
+| d2tok | class | 11.21M | 1 | 61.1 | 90.2 | 89.2 | 91.4 | 92.2 |
+| d2tok | position | 11.21M | 1 | 56.2 | 87.8 | 87.3 | 88.2 | 90.3 |
+| *DAVINCI, its paper* | | | | | | | | *91.7* |
 
 ### Sketches exactly right, by tolerance
 
-| model | order | 2 px | 4 px | 8 px |
-|---|---|---|---|---|
-| d2seq | kept | 22.1 | 23.8 | 25.7 |
-| d2s | free | 50.3 | 52.9 | 54.4 |
-| d2s | class | 55.3 | 57.7 | 59.0 |
-| d2s | class reversed | 55.5 | 58.1 | 59.5 |
-| DETR | – | 51.8 | 54.1 | 55.4 |
-| d2tok | random | **60.0** | **61.7** | **62.4** |
-| d2tok | kept | 51.9 | 53.7 | 54.7 |
+| model | order | seeds | 2 px | 4 px | 8 px |
+|---|---|---|---|---|---|
+| d2seq | kept | 3 | 22.1 | 23.8 | 25.7 |
+| d2s | free | 3 | 50.3 | 52.9 | 54.4 |
+| d2s | class | 3 | 55.3 | 57.7 | 59.0 |
+| d2s | class reversed | 3 | 55.5 | 58.1 | 59.5 |
+| DETR | – | 3 | 51.8 | 54.1 | 55.4 |
+| d2tok | random | 3 | **59.9** | **61.6** | **62.4** |
+| d2tok | kept | 3 | 51.9 | 53.7 | 54.7 |
+| d2tok | class | 1 | 59.5 | 61.1 | 61.9 |
+| d2tok | position | 1 | 54.7 | 56.2 | 56.9 |
+
+### Validation, for the runs whose test is not scored yet
+
+The same measures on the validation split (41,089 sketches), last checkpoint; validation and test
+agree to within half a point for every configuration scored on both.
+
+| model | order | seeds | sketches exactly right | node F1 | nodes found | nodes right | PF1 |
+|---|---|---|---|---|---|---|---|
+| DETR | – | 3 | 54.0 ± 0.4 | 89.6 ± 0.1 | 88.8 ± 0.1 | 90.5 ± 0.1 | 91.9 |
+| DETR, buckets | – | 1 | 52.6 | 90.2 | 88.7 | 91.8 | 92.2 |
+
+### What the orders and the buckets say
+
+- **d2tok writes as well in class order as in a random one** (61.1 against 61.6, one seed against
+  three), but **a fixed order of position costs it 5 points** (56.2). For d2s the class order is
+  worth 5 points over a free one; for d2tok it is worth nothing.
+- **The buckets make DETR more precise and no better.** Split by class, its queries write fewer
+  nodes that are not in the target (91.8 % right against 90.5 %) and find as many (88.7 %), but
+  whole sketches come out right slightly less often (52.6 against 54.0 on validation, below all
+  three DETR seeds). One seed; by the effect sizes this comparison is after, a null result.
 
 ## What the errors are
 
-From `analyse_vitruvion_errors.py`, at 4 px, as % of target nodes, mean over seeds. A missed node is
+From `analyse_vitruvion_errors.py`, at 4 px, as % of target nodes, mean over seeds. It covers the
+configurations with three seeds; d2tok class and position and the bucketed DETR are not in it. A missed node is
 explained by an extra node written in its place where there is one; that extra node is not counted
 again.
 
@@ -99,7 +125,8 @@ From `plot_vitruvion.py` (validation, every 10k steps):
 
 - **Parameters:** the same budget, 11.2–11.4M; d2tok is the smallest.
 - **Training compute:** the same number of steps, batch size and schedule. Wall clock from the runs
-  that were not resumed: d2tok about 47k s, d2seq about 47k s, DETR about 48k s, d2s about 53k s.
+  that were not resumed: d2tok about 47k s, d2seq about 47k s, DETR about 48k s, d2s about 53k s,
+  DETR with buckets about 62k s (its four matchings per sketch).
   These are on mixed GPUs and only a rough guide.
 - **Inference compute:** d2tok runs one decoder step per word, up to 7 words per node (a type word
   and up to 6 coordinate words for an arc). A 16-node sketch can take up to 113 sequential steps.
@@ -113,7 +140,84 @@ From `plot_vitruvion.py` (validation, every 10k steps):
 ## Reproduce
 
 ```
+python3 table_vitruvion.py
 uv run --with matplotlib --with pandas python plot_vitruvion.py
 uv run --with matplotlib --with pandas --with numpy python analyse_vitruvion_errors.py
 uv run --with matplotlib --with numpy python draw_transcripts.py <out> results/runs/vitruvion-d2tok-random-seed0 results/runs/vitruvion-final-d2po --disagree
 ```
+
+## Where the numbers come from
+
+Everything above is recomputed by `table_vitruvion.py` from the run folders under `results/runs/`, as
+synced from the cluster (`~/.detr-cache/output/<run>`). Every run folder holds the scores
+(`*-val.csv`, `*-test.csv`), the last checkpoint's transcripts (`*-<split>-270000.jsonl`), the
+training history (`checkpoints/…/history.csv`) and `*.environment.json`, which records the branch,
+the commit, the seed, the order and the GPUs the run trained on.
+
+### The runs
+
+| configuration | run folders | seeds | branch @ commit |
+|---|---|---|---|
+| d2seq, random | `vitruvion-d2seq-random-seed{0,1,42}` | 0, 1, 42 | `d2seq` @ a5d935b |
+| d2seq, kept | `vitruvion-d2seq-kept-seed{0,1,42}` | 0, 1, 42 | `d2seq` @ a5d935b |
+| d2s, free | `vitruvion-final-d2s`, `vitruvion-final-d2s-seed0`, `-seed1` | 42, 0, 1 | `vitruvion-final-free` @ 659c978 (seed 42), 5d58113 (0, 1) |
+| d2s, class | `vitruvion-final-d2po`, `vitruvion-final-d2po-seed0`, `-seed1` | 42, 0, 1 | `vitruvion-final` @ af22722 (42), 32545df (0, 1) |
+| d2s, class reversed | `vitruvion-final-d2po-reversed-seed{0,1,42}` | 0, 1, 42 | `vitruvion-final` @ e56991c |
+| DETR | `vitruvion-final-detr-q16`, `-seed1`, `-seed42` | 0, 1, 42 | `vitruvion-final` @ af22722 (0), 32545df (1, 42) |
+| DETR, buckets | `vitruvion-detr-bucket-seed0` | 0 | `synthetic-floorplans` @ 72f81e7 |
+| d2tok, random | `vitruvion-d2tok-random-seed{0,1,42}` | 0, 1, 42 | `d2tok` @ f065982 |
+| d2tok, kept | `vitruvion-d2tok-kept-seed{0,1,42}` | 0, 1, 42 | `d2tok` @ f065982 |
+| d2tok, class | `vitruvion-d2tok-class-seed0` | 0 | `d2tok` @ fe1858b |
+| d2tok, position | `vitruvion-d2tok-position-seed0` | 0 | `d2tok` @ fe1858b |
+
+- The runs without a seed in their folder name predate the seed option and trained from their
+  setup's default: 42 for d2s, 0 for DETR.
+- The orders: d2s *class* writes points, lines, circles, then arcs (simplest first), *class
+  reversed* the other way round; d2tok *class* writes points, lines, circles, arcs, then annotations;
+  *kept* is the order the corpus stores a sketch's primitives in, its creation order; *position* is
+  top to bottom and left to right by the pixel a primitive starts on.
+- The bucketed DETR's validation was scored only from 240k to 270k: its eval job ran out of its
+  10-hour limit, scoring the newest checkpoints first. Its test is still to be scored.
+
+### What every run shares
+
+- **Data:** the Vitruvion split of SketchGraphs as published at
+  [benikm91/sketch-graph-vitruvion](https://huggingface.co/datasets/benikm91/sketch-graph-vitruvion)
+  (folder `records`): Vitruvion's own 128 px renders and splits, at most 16 primitives per sketch;
+  41,089 validation and 82,181 test sketches. The constraints the files also hold are not read.
+- **Recipe:** 270k steps of 512 sketches, 138.24M in all (about 90 passes over the training split).
+  Learning rate 3e-4, a linear warmup over the first 250 steps, held, then a cosine cooldown to 0
+  over the last 54k steps (from 216k). AdamW, β₂ 0.98, weight decay 0.05, gradients clipped to a
+  global norm of 1. The models run in Float16 against Float32 master weights, with a loss scale. A
+  checkpoint every 10k steps.
+- **Size:** `s-deep`: six layers on either side, 256 wide, eight heads, the same vision transformer
+  encoder (16 × 16 px patches). d2s asks a pool of 6 learned queries per slot, DETR has 16 queries,
+  the bucketed DETR 64.
+- **Hardware:** two V100 32 GB per run, the batch split over them.
+- **Decoding:** greedy for every model; d2tok's words are not constrained to well-formed records.
+
+### The measures
+
+- The eval stage writes one CSV row per checkpoint and tolerance (0, 2, 4 and 8 px of the 128 px
+  canvas); the test split is scored at the last checkpoint only. No checkpoint is selected: every
+  number is the last checkpoint's.
+- **Nodes found** is recall (target nodes matched / target nodes), **nodes right** is precision
+  (written nodes matched / written nodes), **node F1** their harmonic mean. A sketch is **exactly
+  right** when every target node is matched and nothing else is written.
+- **Matching:** a written node matches a target node of the same class and construction flag whose
+  every point lies within the tolerance in x and in y. The matching is greedy (`RecordScoring`): the
+  target nodes in their order each take the first written node still free that fits. An optimal
+  matching could only find more, and at looser tolerances greedy matching can lose a sketch an
+  optimal one keeps; on the floor plans this moved the 4 px numbers by at most 0.1 points.
+- **PF1** is recomputed from the transcripts as [DAVINCI](https://arxiv.org/abs/2410.22857)
+  (section 4) counts it: the first 5,000 test sketches, a primitive found when its class and every
+  coordinate lie within 5 of the 64 bins a sketch unit is quantised to (5.43 px on these renders),
+  the construction flag ignored, pooled over the sketches. DAVINCI's 91.7 is quoted from its paper,
+  not re-run.
+- **Mean ± standard deviation** over the seeds present (the sample standard deviation); a single
+  seed has none. The CSVs hold two decimals, so a mean can differ from an earlier copy by 0.1
+  (d2tok random once read 61.7).
+- **Training time** is the CSV's `training_seconds`, summed over the jobs of a run. Four early runs
+  (`vitruvion-final-d2s`, `vitruvion-final-d2po`, `vitruvion-final-d2po-seed0` and
+  `vitruvion-final-detr-q16`) record only their last job's time, 12–20k s, so the wall clock under
+  *Is the comparison fair?* is taken from runs trained in one go.
