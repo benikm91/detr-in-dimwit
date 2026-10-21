@@ -5,7 +5,7 @@
 #SBATCH --account=cai_cv
 #SBATCH --gres=gpu:4
 #SBATCH --exclude=irvine,salinas
-#SBATCH --time=6:00:00
+#SBATCH --time=20:00:00
 #SBATCH --output=/cluster/home/%u/.logs/slurm/%j/%x_%j.out
 #SBATCH --error=/cluster/home/%u/.logs/slurm/%j/%x_%j.err
 #SBATCH --signal=B:USR1@600
