@@ -27,8 +27,15 @@ class D2Tok[V: IsFloating](params: D2Tok.Params[V]):
 
   /** The scores of the word at every position, read from the words `read` up to it. */
   def logits(document: Tensor3[Width, Height, Channel, V], read: Tensor1[Token, Int32]): Tensor2[Token, Word, V] =
-    decoder(encodeDocument(document), wordPosition(read.vmap(Axis[Token])(embedWord)))
-      .vmap(Axis[Token])(nextWord)
+    scored(carried(encodeDocument(document), read))
+
+  /** What the decoder makes of every position, read from the words `read` up to it. */
+  def carried(encodedDocument: Tensor2[Patch, Embedding, V], read: Tensor1[Token, Int32]): Tensor2[Token, Embedding, V] =
+    decoder(encodedDocument, wordPosition(read.vmap(Axis[Token])(embedWord)))
+
+  /** The scores of the word at every position the decoder `carried`. */
+  def scored(carried: Tensor2[Token, Embedding, V]): Tensor2[Token, Word, V] =
+    carried.vmap(Axis[Token])(nextWord)
 
   // Writing the words down one at a time, as [[logits]] would have them at every position, but
   // projecting at each step only what the step adds.
