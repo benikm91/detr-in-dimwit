@@ -41,6 +41,11 @@ case class D2TokGraphSetup(
       */
     weightDecay: Float = 0.05f,
     maxGradientNorm: Float = 1f,
+    /** How much of a relationship's target node is spread evenly over every node it could name
+      * instead: naming the right node then has a best score short of certainty, which the training
+      * stops pushing towards.
+      */
+    linkSmoothing: Float = 0.1f,
     warmupSamples: Int = 40_000 * 128,
     cooldownSamples: Int = 160_000 * 128,
     seed: Int = 0

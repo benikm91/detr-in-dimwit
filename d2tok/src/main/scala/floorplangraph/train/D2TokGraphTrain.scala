@@ -107,7 +107,8 @@ def trainGraphTranscriber(setup: D2TokGraphSetup): Unit =
 
   /** The mean loss over the drawings of a batch, whatever axis `S` they lie along: the cross
     * entropy of every word of a record, the end of its nodes and of its relationships among them,
-    * against the words before it, the node words and the relationship words weighed alike.
+    * against the words before it, the node words and the relationship words weighed alike. A word
+    * that names a node a relationship links spreads some of its target over every node instead.
     */
   def cost[S: Label](
       images: Tensor4[S, Width, Height, Channel, Float32],
@@ -122,12 +123,22 @@ def trainGraphTranscriber(setup: D2TokGraphSetup): Unit =
           concatenate(Tensor0(start).prependAxis(Axis[L]), written.slice(Axis[L].at(0 until written.shape(Axis[L]) - 1)), Axis[L])
         val present = !(nodeClass elementEquals_! FloorplanClass.NoNode.id)
         val (nodeScores, relationshipScores) = model.logits(image, readAfter(setup.words.start, nodeWords), setup.words.perNode, present, readAfter(setup.relationshipWords.start, relationshipWords))
-        /** The cross entropy of the words up to their end. */
-        def missed[L: Label](scored: Tensor2[L, Word, Float16], written: Tensor1[L, Int32], count: Tensor0[Int32]) =
+        /** What the words up to their end cost, each word what `cost` makes of the log
+          * probabilities its scores give every word.
+          */
+        def missed[L: Label](scored: Tensor2[L, Word, Float16], written: Tensor1[L, Int32], count: Tensor0[Int32])(cost: (Tensor1[Word, Float32], Tensor0[Int32]) => Tensor0[Float32]) =
           val positions = Tensor1(Axis[L]).fromRange(0 until written.shape(Axis[L]))
-          val each = zipvmap(Axis[L])(scored.asFloat(VType[Float32]), written)((scores, word) => -scores.logSoftmax(Axis[Word]).slice(Axis[Word].at(word)))
+          val each = zipvmap(Axis[L])(scored.asFloat(VType[Float32]), written)((scores, word) => cost(scores.logSoftmax(Axis[Word]), word))
           (each * (positions <=! (count - 1)).asFloat(VType[Float32])).sum
-        (missed(nodeScores, nodeWords, nodeCount) + missed(relationshipScores, relationshipWords, relationshipCount)) / (nodeCount + relationshipCount).asFloat(VType[Float32])
+        def surprise(logProbabilities: Tensor1[Word, Float32], word: Tensor0[Int32]) = -logProbabilities.slice(Axis[Word].at(word))
+        def smoothedWhereNaming(logProbabilities: Tensor1[Word, Float32], word: Tensor0[Int32]) =
+          val numbers = setup.relationshipWords.numbers
+          val namesNode = word >= numbers.start and word < numbers.end
+          val spread = -logProbabilities.slice(Axis[Word].at(numbers)).mean
+          where(namesNode, surprise(logProbabilities, word) * (1f - setup.linkSmoothing) + spread * setup.linkSmoothing, surprise(logProbabilities, word))
+        val missedNodes = missed(nodeScores, nodeWords, nodeCount)(surprise)
+        val missedRelationships = missed(relationshipScores, relationshipWords, relationshipCount)(smoothedWhereNaming)
+        (missedNodes + missedRelationships) / (nodeCount + relationshipCount).asFloat(VType[Float32])
     .mean
 
   def gradientStep[S: Label](

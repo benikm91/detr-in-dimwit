@@ -103,7 +103,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
   println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
 
   val nodeLoss = RemainingNodeLoss(VType[Float32], setup.canvas, setup.nodeOrder)
-  val edgeLoss = RemainingEdgeLoss(VType[Float32])
+  val edgeLoss = RemainingEdgeLoss(VType[Float32], setup.linkSmoothing)
 
   /** The mean loss over the drawings of a batch, whatever axis `S` they lie along. */
   def cost[S: Label](

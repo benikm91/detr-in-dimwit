@@ -14,8 +14,11 @@ import scala.language.implicitConversions
 
 /** What a floor plan's relationships cost, predicted the way [[d2s.floorplan.train.RemainingNodeLoss]]
   * predicts its nodes — a relationship carries the nodes it relates where a node carries its points.
+  *
+  * @param linkSmoothing How much of each node a relationship relates is spread evenly over every
+  *                      node instead.
   */
-class RemainingEdgeLoss[V: IsFloating](vtype: VType[V])
+class RemainingEdgeLoss[V: IsFloating](vtype: VType[V], linkSmoothing: Float)
     extends ((D2G.EdgeQueryLogits[V], FloorplanEdges[Edge]) => Tensor0[V]):
 
   /** Axis of the record's relationships seen as candidates to answer with rather than as positions. */
@@ -41,7 +44,8 @@ class RemainingEdgeLoss[V: IsFloating](vtype: VType[V])
     */
   private def dissimilarity(logits: EdgeLogits[V], target: FloorplanEdges[Edge]): Tensor2[Edge, Candidate, V] =
     def named(scores: Tensor2[Edge, LinkedNode, V], end: Tensor1[Edge, Int32]) =
-      costOfValue(scores, end.relabelTo(Axis[Candidate]))
+      val spread = logNormalizer(scores) - scores.mean(Axis[LinkedNode])
+      spread *! linkSmoothing +! costOfValue(scores, end.relabelTo(Axis[Candidate])) *! (1f - linkSmoothing)
     costOfValue(logits.relationship, target.relationship.relabelTo(Axis[Candidate])) +
       named(logits.subject, target.subject) +
       named(logits.obj, target.obj)

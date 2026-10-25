@@ -26,6 +26,9 @@ class RelationshipWords(nodes: Int):
   val start: Int = end + 1
   val size: Int = start + 1
 
+  /** The words that name a node, by its number. */
+  val numbers: Range = relationships.size until end
+
   /** The words every relationship writes: its type, and the numbers of the two nodes it links. */
   val perRelationship: Int = 3
 
@@ -51,9 +54,8 @@ class RelationshipWords(nodes: Int):
 
   /** The relationships `words` write, up to their end, or to the first word that does not fit where it stands. */
   def read(words: Seq[Int]): Seq[FloorplanEdge] =
-    def isNumber(word: Int) = word >= relationships.size && word < end
     Iterator.unfold(words):
-      case typed +: subject +: obj +: rest if typed < relationships.size && isNumber(subject) && isNumber(obj) =>
+      case typed +: subject +: obj +: rest if typed < relationships.size && numbers.contains(subject) && numbers.contains(obj) =>
         Some((FloorplanEdge(relationships(typed), subject - relationships.size, obj - relationships.size), rest))
       case _ => None
     .toSeq
