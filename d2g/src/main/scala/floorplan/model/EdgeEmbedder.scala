@@ -1,7 +1,6 @@
 package d2g.floorplan.model
 
 import d2g.*
-import d2s.floorplan.model.NodeEmbedder.PartEmbedding
 import deepwit.base.AffineLayer
 import deepwit.embedder.VocabularyEmbedder
 import dimwit.*
@@ -10,33 +9,25 @@ import syntheticFloorplansDataset.FloorplanRelationships
 
 import scala.language.implicitConversions
 
-import EdgeEmbedder.EdgePart
-
-/** Transforms a floor plan's relationship — what it is, and the two nodes it relates — into a single
-  * embedding vector.
+/** Transforms a floor plan's relationship into a single embedding vector: what it is, and the two
+  * nodes it relates as `nodes` carries them.
   */
-class EdgeEmbedder[V: IsFloating](params: EdgeEmbedder.Params[V]) extends (FloorplanEdges[Edge] => Tensor2[Edge, Embedding, V]):
+class EdgeEmbedder[V: IsFloating](params: EdgeEmbedder.Params[V]):
 
   private val relationship = VocabularyEmbedder(params.relationship)
-  private val subject = VocabularyEmbedder(params.subject)
-  private val obj = VocabularyEmbedder(params.obj)
-  private val project = AffineLayer(params.projection)
+  private val subject = AffineLayer(params.subject)
+  private val obj = AffineLayer(params.obj)
 
-  override def apply(edges: FloorplanEdges[Edge]): Tensor2[Edge, Embedding, V] =
-    zipvmap(Axis[Edge])(edges.relationship, edges.subject, edges.obj):
-      case (related, subj, ob) =>
-        val parts = Seq(relationship(related), subject(subj), obj(ob))
-        project(stack(parts, Axis[EdgePart]).flatten((Axis[EdgePart], Axis[PartEmbedding])))
+  def apply(edges: FloorplanEdges[Edge], nodes: Tensor2[Node, Embedding, V]): Tensor2[Edge, Embedding, V] =
+    val (subjects, objs) = (nodes.slice(Axis[Node].at(edges.subject)), nodes.slice(Axis[Node].at(edges.obj)))
+    edges.relationship.vmap(Axis[Edge])(relationship) + subjects.vmap(Axis[Edge])(subject) + objs.vmap(Axis[Edge])(obj)
 
 object EdgeEmbedder:
 
-  trait EdgePart derives Label // The parts an edge embedding is composed of
-
   case class Params[V](
-      relationship: VocabularyEmbedder.Params[FloorplanRelationships, PartEmbedding, V],
-      subject: VocabularyEmbedder.Params[LinkedNode, PartEmbedding, V],
-      obj: VocabularyEmbedder.Params[LinkedNode, PartEmbedding, V],
-      projection: AffineLayer.Params[EdgePart |*| PartEmbedding, Embedding, V]
+      relationship: VocabularyEmbedder.Params[FloorplanRelationships, Embedding, V],
+      subject: AffineLayer.Params[Embedding, Embedding, V],
+      obj: AffineLayer.Params[Embedding, Embedding, V]
   )
 
   object Params:

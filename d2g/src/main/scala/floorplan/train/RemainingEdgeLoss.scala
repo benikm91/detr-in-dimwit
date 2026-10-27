@@ -14,17 +14,13 @@ import scala.language.implicitConversions
 
 /** What a floor plan's relationships cost, predicted the way [[d2s.floorplan.train.RemainingNodeLoss]]
   * predicts its nodes — a relationship carries the nodes it relates where a node carries its points.
-  *
-  * @param linkSmoothing How much of each node a relationship relates is spread evenly over every
-  *                      node instead.
   */
-class RemainingEdgeLoss[V: IsFloating](vtype: VType[V], linkSmoothing: Float)
-    extends ((D2G.EdgeQueryLogits[V], FloorplanEdges[Edge]) => Tensor0[V]):
+class RemainingEdgeLoss[V: IsFloating](vtype: VType[V]):
 
   /** Axis of the record's relationships seen as candidates to answer with rather than as positions. */
   private type Candidate = Prime[Edge]
 
-  override def apply(answered: D2G.EdgeQueryLogits[V], target: FloorplanEdges[Edge]): Tensor0[V] =
+  def apply(answered: D2G.EdgeQueryLogits[V], target: FloorplanEdges[Edge]): Tensor0[V] =
     require(answered.relationship.shape(Axis[PoolQuery]) == 2, "the loss pairs two answers")
     val (a, b) = (answered.at(0), answered.at(1))
     val edges = target.relationship.shape.extent(Axis[Edge])
@@ -43,9 +39,8 @@ class RemainingEdgeLoss[V: IsFloating](vtype: VType[V], linkSmoothing: Float)
     * and the two nodes it relates. Only relationships are ever candidates, so both ends always count.
     */
   private def dissimilarity(logits: EdgeLogits[V], target: FloorplanEdges[Edge]): Tensor2[Edge, Candidate, V] =
-    def named(scores: Tensor2[Edge, LinkedNode, V], end: Tensor1[Edge, Int32]) =
-      val spread = logNormalizer(scores) - scores.mean(Axis[LinkedNode])
-      spread *! linkSmoothing +! costOfValue(scores, end.relabelTo(Axis[Candidate])) *! (1f - linkSmoothing)
+    def named(scores: Tensor2[Edge, Node, V], end: Tensor1[Edge, Int32]) =
+      costOfValue(scores, end.relabelTo(Axis[Candidate]))
     costOfValue(logits.relationship, target.relationship.relabelTo(Axis[Candidate])) +
       named(logits.subject, target.subject) +
       named(logits.obj, target.obj)

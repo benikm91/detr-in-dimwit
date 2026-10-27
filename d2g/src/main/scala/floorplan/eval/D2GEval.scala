@@ -141,13 +141,14 @@ class Transcriber(nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: In
           val (carried, nowTaken) = model.set.take(documentCache, taken, slot, FloorplanNodes(one(cls), one(sx), one(sy), one(ex), one(ey)))
           ((nowTaken, stillWriting), (node, carried))
       val (nodeClass, startX, startY, endX, endY) = writtenNodes
-      val sources = model.readForEdges(encoded, NodeSource(carried, !(nodeClass elementEquals_! FloorplanClass.NoNode.id)))
+      val written = NodeSource(carried, !(nodeClass elementEquals_! FloorplanClass.NoNode.id))
+      val sources = model.readForEdges(encoded, written)
       val (_, (relationship, subject, obj)) = scan(Axis[Edge])((model.noEdgeTaken(edges), Tensor0(true)), edgeSlots):
         case ((taken, writing), slot) =>
-          val (edge, stillWriting) = answeredEdgeAt(model, sources, taken, slot, writing)
+          val (edge, stillWriting) = answeredEdgeAt(model, written, sources, taken, slot, writing)
           def one[W](value: Tensor0[W]) = value.prependAxis(Axis[Edge])
           val (related, sub, ob) = edge
-          ((model.takeEdge(sources, taken, slot, FloorplanEdges(one(related), one(sub), one(ob))), stillWriting), edge)
+          ((model.takeEdge(written, sources, taken, slot, FloorplanEdges(one(related), one(sub), one(ob))), stillWriting), edge)
       (nodeClass, startX, startY, endX, endY, relationship, subject, obj)
     FloorplanRecordBatch(nodeClass, startX, startY, endX, endY, relationship, subject, obj)
 
@@ -155,8 +156,8 @@ class Transcriber(nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: In
     * is still `writing` takes there, nothing for one that is not — and whether it is still writing
     * after it.
     */
-  private def answeredEdgeAt(model: D2G[Float32], sources: List[EdgeSources[Float32]], taken: List[KVCache[Edge, Float32]], slot: Tensor0[Int32], writing: Tensor0[Bool]) =
-    val candidates = model.answerEdgeAt(sources, taken, slot)
+  private def answeredEdgeAt(model: D2G[Float32], nodes: NodeSource[Embedding, Float32], sources: List[EdgeSources[Float32]], taken: List[KVCache[Edge, Float32]], slot: Tensor0[Int32], writing: Tensor0[Bool]) =
+    val candidates = model.answerEdgeAt(nodes, sources, taken, slot)
     val said = model.edgeHead.decide(candidates)
     val score = chosen(candidates.relationship) + chosen(candidates.subject) + chosen(candidates.obj)
     val likeliest = Axis[Edge].at(score.argmax(Axis[Edge]))

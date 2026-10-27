@@ -51,18 +51,19 @@ class CachedEdgeDecodingSuite extends munit.FunSuite:
       case ((carried, taken), slot) =>
         val (carriedNode, nowTaken) = model.set.take(documentCache, taken, slot, oneNode(slot))
         (carried :+ carriedNode, nowTaken)
-    val sources = model.readForEdges(encoded, NodeSource(stack(carried, Axis[Node]), !(nodes.nodeClass elementEquals_! FloorplanClass.NoNode.id)))
+    val written = NodeSource(stack(carried, Axis[Node]), !(nodes.nodeClass elementEquals_! FloorplanClass.NoNode.id))
+    val sources = model.readForEdges(encoded, written)
 
     def oneEdge(values: Tensor1[Edge, Int32], slot: Int) = values.slice(Axis[Edge].at(slot, 1))
     (0 until edgeSlots).foldLeft(model.noEdgeTaken(Axis[Edge] -> edgeSlots)): (taken, slot) =>
-      val atSlot = model.answerEdgeAt(sources, taken, slot)
+      val atSlot = model.answerEdgeAt(written, sources, taken, slot)
       def assertSame[L: Label](name: String, cached: Tensor2[Edge, L, Float32], read: Tensor3[PoolQuery, Edge, L, Float32]) =
         val difference = (cached.relabel(Axis[Edge] -> Axis[PoolQuery]) - read.slice(Axis[Edge].at(slot))).abs.max.item
         assert(difference < 1e-4f, s"slot $slot, $name: the cached answer is off by $difference")
       assertSame("relationship", atSlot.relationship, whole.relationship)
       assertSame("subject", atSlot.subject, whole.subject)
       assertSame("object", atSlot.obj, whole.obj)
-      model.takeEdge(sources, taken, slot, FloorplanEdges(oneEdge(edges.relationship, slot), oneEdge(edges.subject, slot), oneEdge(edges.obj, slot)))
+      model.takeEdge(written, sources, taken, slot, FloorplanEdges(oneEdge(edges.relationship, slot), oneEdge(edges.subject, slot), oneEdge(edges.obj, slot)))
 
   test("the transcriber writes the nodes d2s would, and the relationships reading the whole record at every slot would"):
     val canvas = 64

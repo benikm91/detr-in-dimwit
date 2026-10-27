@@ -5,13 +5,11 @@ import d2g.model.*
 import d2s.model.*
 import d2s.floorplan.model.D2S
 import d2s.floorplan.model.D2S.NodeQueryLogits
-import d2s.floorplan.model.NodeEmbedder.PartEmbedding
 import deepwit.attention.KVCache
 import deepwit.base.AffineLayer
 import deepwit.embedder.LearnedAbsolutePositionalInjector
 import deepwit.embedder.VocabularyEmbedder
 import deepwit.init.Init
-import EdgeEmbedder.EdgePart
 import EdgeHead.EdgeLogits
 import dimwit.*
 import syntheticFloorplansDataset.FloorplanClass
@@ -67,11 +65,9 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
 
     val (carriedNodes, nodes) = set.predict(encodedDocument, taken.nodes, nodeQueryIds)
 
+    val nodeSource = NodeSource(carriedNodes, !(taken.nodes.nodeClass elementEquals_! FloorplanClass.NoNode.id))
     val (_, answeredEdges) =
-      val nodeSource =
-        val nodesPresentMask = !(taken.nodes.nodeClass elementEquals_! FloorplanClass.NoNode.id)
-        NodeSource(carriedNodes, nodesPresentMask)
-      val takenEdges = edgePosition(embedEdges(taken.edges))
+      val takenEdges = edgePosition(embedEdges(taken.edges, carriedNodes))
       val queryEdges = params.edges.queries.slice(Axis[PoolQuery].at(edgeQueryIds)) // take queries and broadcast along context
         .vmap(Axis[PoolQuery]): query =>
           edgePosition(query.broadcastTo(takenEdges.shape))
@@ -79,7 +75,7 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
 
     val (relationship, subject, obj) =
       answeredEdges.vmap(Axis[PoolQuery]): answered =>
-        val scored = edgeHead(answered)
+        val scored = edgeHead(answered, nodeSource)
         (scored.relationship, scored.subject, scored.obj)
 
     Scores(nodes, EdgeQueryLogits(relationship, subject, obj))
@@ -94,16 +90,16 @@ class D2G[V: IsFloating](params: D2G.Params[V]):
   def noEdgeTaken(slots: AxisExtent[Edge]): List[KVCache[Edge, V]] =
     edgeDecoder.nothingTaken(slots)
 
-  /** Takes `edge`, a record of one relationship, at `slot`, for the slots after it to read. */
-  def takeEdge(sources: List[EdgeSources[V]], taken: List[KVCache[Edge, V]], slot: Tensor0[Int32], edge: FloorplanEdges[Edge]): List[KVCache[Edge, V]] =
-    edgeDecoder.take(sources, taken, slot, edgePosition.injectAt(slot)(embedEdges(edge).squeeze(Axis[Edge])))
+  /** Takes `edge`, a record of one relationship between `nodes`, at `slot`, for the slots after it to read. */
+  def takeEdge(nodes: NodeSource[Embedding, V], sources: List[EdgeSources[V]], taken: List[KVCache[Edge, V]], slot: Tensor0[Int32], edge: FloorplanEdges[Edge]): List[KVCache[Edge, V]] =
+    edgeDecoder.take(sources, taken, slot, edgePosition.injectAt(slot)(embedEdges(edge, nodes.nodeEmbeddings).squeeze(Axis[Edge])))
 
   /** What the pool answers at relationship `slot`, given the relationships taken before it: a
-    * candidate relationship per query, in the order of the queries.
+    * candidate relationship between `nodes` per query, in the order of the queries.
     */
-  def answerEdgeAt(sources: List[EdgeSources[V]], taken: List[KVCache[Edge, V]], slot: Tensor0[Int32]): EdgeLogits[V] =
+  def answerEdgeAt(nodes: NodeSource[Embedding, V], sources: List[EdgeSources[V]], taken: List[KVCache[Edge, V]], slot: Tensor0[Int32]): EdgeLogits[V] =
     val asked = params.edges.queries.vmap(Axis[PoolQuery])(edgePosition.injectAt(slot))
-    edgeHead(edgeDecoder.answer(sources, taken, slot, asked).relabel(Axis[PoolQuery] -> Axis[Edge]))
+    edgeHead(edgeDecoder.answer(sources, taken, slot, asked).relabel(Axis[PoolQuery] -> Axis[Edge]), nodes)
 
 object D2G:
 
@@ -117,8 +113,8 @@ object D2G:
   /** [[EdgeLogits]] at every query slot. */
   case class EdgeQueryLogits[V](
       relationship: Tensor3[PoolQuery, Edge, FloorplanRelationships, V],
-      subject: Tensor3[PoolQuery, Edge, LinkedNode, V],
-      obj: Tensor3[PoolQuery, Edge, LinkedNode, V]
+      subject: Tensor3[PoolQuery, Edge, Node, V],
+      obj: Tensor3[PoolQuery, Edge, Node, V]
   ):
     def at(query: Int): EdgeLogits[V] = EdgeLogits(
       relationship.slice(Axis[PoolQuery].at(query)),
@@ -175,14 +171,10 @@ object D2G:
 
       val embeddingExtent = Axis[Embedding] -> embedding
       val embeddingMixedExtent = Axis[EmbeddingMixed] -> embedding * 4
-      val partExtent = Axis[PartEmbedding] -> embedding / 8
       val relationshipExtent = Axis[FloorplanRelationships] -> FloorplanRelationship.values.length
       val edgeExtent = Axis[Edge] -> edges
-      val linkedExtent = Axis[LinkedNode] -> nodes
-      // A relationship embedding is put together from its class and the two nodes it relates.
-      val edgePartExtent = Axis[EdgePart |*| PartEmbedding] -> 3 * partExtent.size
 
-      val (subjectKey, objKey, relationshipKey, edgeProjectionKey) = edgeEmbedderKey.splitToTuple(4)
+      val (subjectKey, objKey, relationshipKey) = edgeEmbedderKey.splitToTuple(3)
       val (relationshipHeadKey, subjectHeadKey, objHeadKey) = edgeHeadKey.splitToTuple(3)
 
       Params(
@@ -190,15 +182,14 @@ object D2G:
         edges = EdgeParams(
           decoder = EdgeDecoder.Params.xavierUniformDepthScaled(numLayers, numHeads, embeddingExtent, embeddingExtent, embeddingMixedExtent, edgeDecoderKey),
           embedder = EdgeEmbedder.Params(
-            relationship = VocabularyEmbedder.Params.init(relationshipExtent, partExtent, relationshipKey),
-            subject = VocabularyEmbedder.Params.init(linkedExtent, partExtent, subjectKey),
-            obj = VocabularyEmbedder.Params.init(linkedExtent, partExtent, objKey),
-            projection = AffineLayer.Params.init(edgePartExtent, embeddingExtent, edgeProjectionKey)
+            relationship = VocabularyEmbedder.Params.init(relationshipExtent, embeddingExtent, relationshipKey),
+            subject = AffineLayer.Params.init(embeddingExtent, embeddingExtent, subjectKey),
+            obj = AffineLayer.Params.init(embeddingExtent, embeddingExtent, objKey)
           ),
           head = EdgeHead.Params(
             relationship = AffineLayer.Params.init(embeddingExtent, relationshipExtent, relationshipHeadKey),
-            subject = AffineLayer.Params.init(embeddingExtent, linkedExtent, subjectHeadKey),
-            obj = AffineLayer.Params.init(embeddingExtent, linkedExtent, objHeadKey)
+            subject = Pointer.Params.init(embeddingExtent, subjectHeadKey),
+            obj = Pointer.Params.init(embeddingExtent, objHeadKey)
           ),
           queries = Init.xavierUniform(Axis[PoolQuery] -> queries, embeddingExtent, edgeTokenKey),
           positions = LearnedAbsolutePositionalInjector.Params.lecunNormal(edgeExtent, embeddingExtent, edgePositionKey)
