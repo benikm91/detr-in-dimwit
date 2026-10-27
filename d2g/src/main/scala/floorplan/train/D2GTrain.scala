@@ -3,7 +3,7 @@ package d2g.floorplan.train
 import d2g.*
 import d2g.floorplan.model.*
 import d2g.floorplan.config.*
-import d2s.floorplan.train.RemainingNodeLoss
+import d2s.floorplan.train.D2STrainState
 import dataset.DrawingDataset.Split
 import dataset.drawingsOf
 import dataset.History
@@ -39,14 +39,15 @@ import scala.language.implicitConversions
 
 case class D2GTrainState(
     params: D2G.Params[Float32],
-    optimizerState: LearningRateSchedulerState[D2G.Params[Float32], AdamState],
+    optimizerState: LearningRateSchedulerState[D2G.Params.EdgeParams[Float32], AdamState],
     lossScale: LossScale,
     skippedSteps: Tensor0[Int32],
     linearization: Key,
     loss: Tensor0[Float32]
 )
 
-/** Trains a graph transcription model on the synthetic floor plans.
+/** Trains a graph transcription model on the synthetic floor plans: the relationships, on top of
+  * the nodes of a trained [[d2s.floorplan.model.D2S]] that does not move.
   *
   * Every step draws a fresh linearization of every drawing's record, so the same drawing is seen
   * with its nodes in a different order each time it comes round — which is the point: an order
@@ -87,6 +88,10 @@ def trainTranscriber(setup: D2GSetup): Unit =
       .followBy(CosineDecay(setup.learningRate, setup.finalLearningRate, cooldownSteps))
   val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr, beta2 = setup.adamBeta2), setup.weightDecay), schedule)
 
+  val nodesFrom = TensorTreeCheckpointer.latestIn(setup.nodesFrom).getOrElse(sys.error(s"no run of d2s in ${setup.nodesFrom}"))
+  val nodeWriter = nodesFrom.loadLatest[D2STrainState].getOrElse(sys.error(s"no checkpoint of d2s in ${nodesFrom.rootPath}")).params
+  println(s"nodes written by ${nodesFrom.rootPath} at step ${nodesFrom.iterations.max}")
+
   val initialParams = D2G.Params.init(
     numLayers = setup.numLayers,
     numHeads = setup.numHeads,
@@ -96,13 +101,12 @@ def trainTranscriber(setup: D2GSetup): Unit =
     queries = setup.queryPool,
     canvas = setup.canvas,
     key = initKey
-  )
+  ).copy(set = nodeWriter)
 
   trait Parameter derives Label
-  val (flattenParams, _) = TensorTree.ravel(initialParams, Axis[Parameter])
-  println(s"parameters: ${flattenParams(initialParams).shape(Axis[Parameter])}")
+  val (flattenParams, _) = TensorTree.ravel(initialParams.edges, Axis[Parameter])
+  println(s"parameters trained: ${flattenParams(initialParams.edges).shape(Axis[Parameter])}")
 
-  val nodeLoss = RemainingNodeLoss(VType[Float32], setup.canvas, setup.nodeOrder)
   val edgeLoss = RemainingEdgeLoss(VType[Float32])
 
   /** The mean loss over the drawings of a batch, whatever axis `S` they lie along. */
@@ -116,7 +120,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
       case (image, nodeClass, startX, startY, endX, endY, relationship, subject, obj) =>
         val target = FloorplanRecord(FloorplanNodes(nodeClass, startX, startY, endX, endY), FloorplanEdges(relationship, subject, obj))
         val scored = model.logits(image, target, asked).asFloats(VType[Float32])
-        nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target.edges)
+        edgeLoss(scored.edges, target.edges)
     .mean
 
   def gradientStep[S: Label](
@@ -128,13 +132,13 @@ def trainTranscriber(setup: D2GSetup): Unit =
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
     val lossScale = state.lossScale
     val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
-      (params: D2G.Params[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges, setup.nodeOrder.classRank), forQueries)(params))
-    )(state.params)
+      (edgeParams: D2G.Params.EdgeParams[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges, setup.nodeOrder.classRank), forQueries)(state.params.copy(edges = edgeParams)))
+    )(state.params.edges)
     val gradients = lossScale.unscaled(scaledGradients)
-    val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)
+    val (edgeParams, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params.edges, state.optimizerState)
     val finite = allFinite(gradients)
     D2GTrainState(
-      select(finite, params, state.params),
+      state.params.copy(edges = select(finite, edgeParams, state.params.edges)),
       select(finite, optimizerState, state.optimizerState),
       lossScale.next(finite),
       where(finite, state.skippedSteps, state.skippedSteps + 1),
@@ -175,7 +179,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
     case Some(started) => TensorTreeCheckpointer(started.rootPath, overwrite = true)
     case None          => TensorTreeCheckpointer.newIn(setup.checkpointRoot)
   val taken = checkpointer.iterations.maxOption.getOrElse(0)
-  val initialState = if taken == 0 then D2GTrainState(initialParams, optimizer.init(initialParams), LossScale.initial(), 0, dataKey, 0f)
+  val initialState = if taken == 0 then D2GTrainState(initialParams, optimizer.init(initialParams.edges), LossScale.initial(), 0, dataKey, 0f)
     else checkpointer.load[D2GTrainState](taken).getOrElse(sys.error(s"checkpoint $taken of ${checkpointer.rootPath} will not load"))
   if taken > 0 then println(s"continuing ${checkpointer.rootPath} from step $taken")
   val history = History(checkpointer.rootPath)

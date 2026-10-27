@@ -19,6 +19,7 @@
 #
 #   SIZE=s \
 #   CACHE_DIR=$HOME/.detr-cache/corpora \
+#   NODES_DIR=$HOME/.detr-cache/output/<d2s run name>/checkpoints \
 #   OUTPUT_DIR=$HOME/.detr-cache/output/<run name> \
 #     sbatch runs/d2g.sh train
 #
@@ -27,6 +28,8 @@
 # OUTPUT_DIR is where `d2g-synthetic-floorplans-<size>-<split>.csv` ends up: what is left of the job once the
 # instance is wiped. CHECKPOINT_DIR is where the checkpoints go, under OUTPUT_DIR unless it is set
 # otherwise: the scoring job reads them back, and they are yours to delete once it has.
+# NODES_DIR holds the checkpoints of the d2s run, of the same size and order, whose nodes the
+# relationships are trained on; its weights stay as they are.
 
 set -euo pipefail
 
@@ -37,6 +40,8 @@ STAGE="${1:?say which stage to run: train, eval, test or draw}"
 : "${OUTPUT_DIR:?set OUTPUT_DIR to a directory that outlives the job, where the metrics are written}"
 export CACHE_DIR OUTPUT_DIR
 export CHECKPOINT_DIR="${CHECKPOINT_DIR:-$OUTPUT_DIR/checkpoints}"
+: "${NODES_DIR:?set NODES_DIR to the checkpoints of the d2s run that writes the nodes}"
+export NODES_DIR
 
 # The one corpus d2g reads, and how big a model — the names `D2SModelConfiguration` knows.
 export CORPUS=synthetic-floorplans
@@ -83,6 +88,7 @@ sarus run \
   --mount=type=bind,source="$CACHE_DIR",destination=/cache \
   --mount=type=bind,source="$OUTPUT_DIR",destination=/output \
   --mount=type=bind,source="$CHECKPOINT_DIR",destination=/checkpoints \
+  --mount=type=bind,source="$NODES_DIR",destination=/nodes,readonly \
   "$IMAGE" \
   bash -c '
     set -euo pipefail
@@ -103,6 +109,7 @@ sarus run \
     export HF_HUB_CACHE=/cache/huggingface-cache
     # Where a run keeps its checkpoints, and where scoring them writes the CSV.
     export CHECKPOINT_DIR=/checkpoints
+    export NODES_DIR=/nodes
     export OUTPUT_DIR=/output
 
     cd /usr/src
