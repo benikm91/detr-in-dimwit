@@ -25,11 +25,11 @@ case class D2GSetup(
       * weights stay as they are: only the relationships are trained.
       */
     nodesFrom: String,
-    /** 50k steps of 512 plans: 5k steps of warmup, 35k at the full learning rate and a 10k
-      * cooldown, with a checkpoint every 10k.
+    /** 200k steps of 512 plans, about 228 passes over the training split: 10k steps of warmup, 150k
+      * at the full learning rate and a 40k cooldown, with a checkpoint every 10k.
       */
     checkpointEverySamples: Int = 40_000 * 128,
-    numSamples: Int = 200_000 * 128,
+    numSamples: Int = 800_000 * 128,
     batchSize: Int = 512,
     learningRate: Float = 3e-4f,
     /** Adam's memory of how large the gradients are, about 1 / (1 − β₂) steps. Short enough that a
@@ -43,8 +43,8 @@ case class D2GSetup(
       */
     weightDecay: Float = 0.05f,
     maxGradientNorm: Float = 1f,
-    warmupSamples: Int = 20_000 * 128,
-    cooldownSamples: Int = 40_000 * 128,
+    warmupSamples: Int = 40_000 * 128,
+    cooldownSamples: Int = 160_000 * 128,
     seed: Int = 42
 ):
 
