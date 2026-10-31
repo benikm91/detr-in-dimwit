@@ -87,7 +87,7 @@ def fineTuneTranscriber(setup: D2GSetup, checkpoint: String): Unit =
   val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr, beta2 = setup.adamBeta2), setup.weightDecay), schedule)
 
   val nodeLoss = RemainingNodeLoss(VType[Float32], setup.canvas, setup.nodeOrder)
-  val edgeLoss = RemainingEdgeLoss(VType[Float32])
+  val edgeLoss = RemainingEdgeLoss(VType[Float32], setup.relationshipOrder)
 
   /** The mean loss over the drawings of a batch, whatever axis `S` they lie along. */
   def cost[S: Label](
@@ -100,7 +100,7 @@ def fineTuneTranscriber(setup: D2GSetup, checkpoint: String): Unit =
       case (image, nodeClass, startX, startY, endX, endY, relationship, subject, obj) =>
         val target = FloorplanRecord(FloorplanNodes(nodeClass, startX, startY, endX, endY), FloorplanEdges(relationship, subject, obj))
         val scored = model.logits(image, target, asked).asFloats(VType[Float32])
-        nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target.edges)
+        nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target)
     .mean
 
   def gradientStep[S: Label](
@@ -112,7 +112,7 @@ def fineTuneTranscriber(setup: D2GSetup, checkpoint: String): Unit =
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
     val lossScale = state.lossScale
     val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
-      (params: D2G.Params[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges, setup.nodeOrder.classRank), forQueries)(params))
+      (params: D2G.Params[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges, setup.nodeOrder.classRank, setup.relationshipOrder.startRank), forQueries)(params))
     )(state.params)
     val gradients = lossScale.unscaled(scaledGradients)
     val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)

@@ -107,7 +107,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
   val (flattenParams, _) = TensorTree.ravel(initialParams.edges, Axis[Parameter])
   println(s"parameters trained: ${flattenParams(initialParams.edges).shape(Axis[Parameter])}")
 
-  val edgeLoss = RemainingEdgeLoss(VType[Float32])
+  val edgeLoss = RemainingEdgeLoss(VType[Float32], setup.relationshipOrder)
 
   /** The mean loss over the drawings of a batch, whatever axis `S` they lie along. */
   def cost[S: Label](
@@ -120,7 +120,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
       case (image, nodeClass, startX, startY, endX, endY, relationship, subject, obj) =>
         val target = FloorplanRecord(FloorplanNodes(nodeClass, startX, startY, endX, endY), FloorplanEdges(relationship, subject, obj))
         val scored = model.logits(image, target, asked).asFloats(VType[Float32])
-        edgeLoss(scored.edges, target.edges)
+        edgeLoss(scored.edges, target)
     .mean
 
   def gradientStep[S: Label](
@@ -132,7 +132,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
     val lossScale = state.lossScale
     val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
-      (edgeParams: D2G.Params.EdgeParams[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges, setup.nodeOrder.classRank), forQueries)(state.params.copy(edges = edgeParams)))
+      (edgeParams: D2G.Params.EdgeParams[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges, setup.nodeOrder.classRank, setup.relationshipOrder.startRank), forQueries)(state.params.copy(edges = edgeParams)))
     )(state.params.edges)
     val gradients = lossScale.unscaled(scaledGradients)
     val (edgeParams, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params.edges, state.optimizerState)

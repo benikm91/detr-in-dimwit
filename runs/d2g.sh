@@ -69,12 +69,16 @@ export SEED="${SEED:-0}"
 # knows: free, walls-first or walls-last.
 export ORDER="${ORDER:-free}"
 
+# Which order a run writes the relationships of a record in — the names
+# `d2g.floorplan.RelationshipOrder.named` knows: free or by-kind.
+export RELATIONSHIP_ORDER="${RELATIONSHIP_ORDER:-free}"
+
 # Which branch the container builds, as pushed to GitHub — a change that is not pushed is not
 # run. Inherited by the scoring job this one queues, so both build the same one.
 export BRANCH="${BRANCH:-main}"
 
 mkdir -p "$CACHE_DIR" "$OUTPUT_DIR" "$CHECKPOINT_DIR"
-echo "running d2g $STAGE on $CORPUS at size $SIZE, order $ORDER, seed $SEED, from branch $BRANCH: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
+echo "running d2g $STAGE on $CORPUS at size $SIZE, order $ORDER, relationship order $RELATIONSHIP_ORDER, seed $SEED, from branch $BRANCH: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
 
 # Which run this job is, for looking its id up later by what it ran and where it wrote.
 printf '%s\td2g\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CORPUS" "$SIZE" "$STAGE" "$OUTPUT_DIR" "${SLURM_JOB_ID:-none}" \
@@ -116,7 +120,8 @@ sarus run \
     branch="$6"
     seed="$7"
     order="$8"
-    finetuneFrom="$9"
+    relationshipOrder="$9"
+    finetuneFrom="${10}"
 
     export TMPDIR=/tmp
 
@@ -149,6 +154,7 @@ sarus run \
   "size": "$size",
   "seed": "$seed",
   "order": "$order",
+  "relationshipOrder": "$relationshipOrder",
   "finetuneFrom": "$finetuneFrom",
   "slurmJobId": "$slurmJobId",
   "node": "$node",
@@ -168,13 +174,13 @@ JSON
     fi
 
     case "$stage" in
-      train) sbt "d2g/runMain d2gTrain $size $order $seed" ;;
-      finetune) sbt "d2g/runMain d2gFineTune $size $order $seed /finetuned/$(basename "$finetuneFrom")" ;;
+      train) sbt "d2g/runMain d2gTrain $size $order $relationshipOrder $seed" ;;
+      finetune) sbt "d2g/runMain d2gFineTune $size $order $relationshipOrder $seed /finetuned/$(basename "$finetuneFrom")" ;;
       eval) sbt "d2g/runMain d2gEval $size" ;;
       test) sbt "d2g/runMain d2gTest $size" ;;
       draw) sbt "d2g/runMain d2gDraw $size" ;;
     esac
-  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" "$SEED" "$ORDER" "${FINETUNE_FROM:-}" &
+  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" "$SEED" "$ORDER" "$RELATIONSHIP_ORDER" "${FINETUNE_FROM:-}" &
 
 wait $! || trained=$?
 

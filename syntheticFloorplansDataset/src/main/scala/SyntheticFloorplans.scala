@@ -119,18 +119,21 @@ case class FloorplanRecordBatch[S, Node, Edge](
 ):
 
   /** The same records, laid out again in `nodeSlots` and `edgeSlots` positions: their nodes by the
-    * rank of their class, lowest first, their relationships in any order, each in a fresh random
-    * order within a rank, and the positions they do not reach last. Drawn on the device.
+    * rank of their class, their relationships by the rank of the class of the node they start from,
+    * lowest first, each in a fresh random order within a rank, and the positions they do not reach
+    * last. Drawn on the device.
     *
     * @param classRank Ranks [[FloorplanClass.NoNode]] above every class, so that the positions a
     *                  record does not reach come last. Ranking every other class the same lays the
     *                  nodes out in any order.
+    * @param startRank Ranking every class the same lays the relationships out in any order.
     */
   def permuted(
       key: Key,
       nodeSlots: AxisExtent[Node],
       edgeSlots: AxisExtent[Edge],
-      classRank: Tensor1[FloorplanClasses, Float32] = FloorplanClass.indicator(VType[Float32])(!_.isNode)
+      classRank: Tensor1[FloorplanClasses, Float32] = FloorplanClass.indicator(VType[Float32])(!_.isNode),
+      startRank: Tensor1[FloorplanClasses, Float32] = FloorplanClass.indicator(VType[Float32])(_ => false)
   )(using Label[S], Label[Node], Label[Edge]): FloorplanRecordBatch[S, Node, Edge] =
     val plans = nodeClass.shape.extent(Axis[S])
     val (heldNodes, heldEdges) = (nodeClass.shape(Axis[Node]), relationship.shape(Axis[Edge]))
@@ -151,10 +154,11 @@ case class FloorplanRecordBatch[S, Node, Edge](
           def reordered[V](placed: Tensor1[Node, V]) = placed.slice(Axis[Node].at(order))
           (reordered(nodeClass), reordered(startX), reordered(startY), reordered(endX), reordered(endY), order)
     val (relationships, subjects, objs) =
-      zipvmap(Axis[S])(paddedRelationship, nothing(subject), nothing(obj), nodeOrders, edgeKeys):
-        case (relationship, subject, obj, nodeOrder, key) =>
+      zipvmap(Axis[S])(paddedRelationship, nothing(subject), nothing(obj), paddedClass, nodeOrders, edgeKeys):
+        case (relationship, subject, obj, nodeClass, nodeOrder, key) =>
           val notThere = FloorplanRelationship.indicator(VType[Float32])(!_.isRelationship).slice(Axis[FloorplanRelationships].at(relationship))
-          val order = FloorplanRecordBatch.inOrder(notThere, key.item)
+          val startsFrom = startRank.slice(Axis[FloorplanClasses].at(nodeClass.slice(Axis[Node].at(subject))))
+          val order = FloorplanRecordBatch.inOrder(startsFrom + notThere *! (startRank.max + 1f), key.item)
           val related = relationship.slice(Axis[Edge].at(order))
           // A relationship names the nodes it relates by their position, and a node that sat at
           // `at` before sits at `renamed(at)` now.
