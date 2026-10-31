@@ -54,7 +54,7 @@ def scoreTranscriber(setup: D2GSetup, size: String, split: Split): Unit =
       .flatMap(batch => batch.map(sample => FloorplanGraph.of(sample.target)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val csv = Metrics.Csv("d2g", SyntheticFloorplans.name, size, split, Runs.parameters(checkpoints.loadLatest[D2GTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("d2g", SyntheticFloorplans.name, size, split, Runs.parameters(checkpoints.loadLatest[SavedParams].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
   val scored = split match
@@ -62,7 +62,7 @@ def scoreTranscriber(setup: D2GSetup, size: String, split: Split): Unit =
     case _          => checkpoints.iterations.reverse
   scored.foreach: step =>
     println(s"scoring checkpoint $step")
-    val plans = transcribed(checkpoints.load[D2GTrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
+    val plans = transcribed(checkpoints.load[SavedParams](step).getOrElse(sys.error(s"no checkpoint $step")).params)
     val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, plans.map((target, written) => FloorplanScoring.score(target, written, tolerance / setup.canvas))))
     csv.append(measured)
     if step == checkpoints.iterations.last then
@@ -78,7 +78,7 @@ def plotTranscriber(setup: D2GSetup): Unit =
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
-  val params = checkpoints.loadLatest[D2GTrainState].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params
+  val params = checkpoints.loadLatest[SavedParams].getOrElse(sys.error(s"no checkpoint in ${checkpoints.rootPath}")).params
   val transcriber = Transcriber(Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots)
   val rows = Seq(Split.Validation, Split.Train).flatMap: split =>
     open(setup, split)

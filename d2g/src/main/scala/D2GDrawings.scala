@@ -1,7 +1,7 @@
 import d2g.*
 import d2g.floorplan.config.D2GSetup
 import d2g.floorplan.eval.Transcriber
-import d2g.floorplan.train.D2GTrainState
+import d2g.floorplan.train.SavedParams
 import d2s.config.D2SModelConfiguration
 import dataset.DrawingDataset.Split
 import dataset.DrawingTiles
@@ -41,7 +41,7 @@ def d2gDraw(size: String): Unit =
   val noRecord = FloorplanGraph(Seq.empty, Seq.empty)
 
   for step <- checkpoints.iterations do
-    val params = checkpoints.load[D2GTrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params
+    val params = checkpoints.load[SavedParams](step).getOrElse(sys.error(s"no checkpoint $step")).params
     val written = plans.grouped(WrittenTogether).flatMap(batch => transcriber(params, batch.map(_.image))).toSeq
     val eachPlan = documents.zip(written).map: (document, transcribed) =>
       Seq(FloorplanDrawing(noRecord, document, Axis[Channel]), FloorplanDrawing(transcribed, emptyCanvas, Axis[Channel]))

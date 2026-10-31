@@ -23,6 +23,13 @@
 #   OUTPUT_DIR=$HOME/.detr-cache/output/<run name> \
 #     sbatch runs/d2g.sh train
 #
+# A run of `train` is fine-tuned, every part of it, by the stage of its own, from one of its
+# checkpoints; it is scored by eval and test as any other:
+#
+#   FINETUNE_FROM=$HOME/.detr-cache/output/<run name>/checkpoints/d2g/<...>/<step>.pkl \
+#   SIZE=s CACHE_DIR=... OUTPUT_DIR=$HOME/.detr-cache/output/<new run name> \
+#     sbatch runs/d2g.sh finetune
+#
 # `runs/queue_d2g.sh` is the usual way in; `sbatch` hands the environment on to the job.
 # CACHE_DIR is where the floor plans land, so that the next job does not download them again.
 # OUTPUT_DIR is where `d2g-synthetic-floorplans-<size>-<split>.csv` ends up: what is left of the job once the
@@ -33,15 +40,23 @@
 
 set -euo pipefail
 
-STAGE="${1:?say which stage to run: train, eval, test or draw}"
-[[ $STAGE == train || $STAGE == eval || $STAGE == test || $STAGE == draw ]] || { echo "no stage named '$STAGE': train, eval, test or draw" >&2; exit 2; }
+STAGE="${1:?say which stage to run: train, finetune, eval, test or draw}"
+[[ $STAGE == train || $STAGE == finetune || $STAGE == eval || $STAGE == test || $STAGE == draw ]] || { echo "no stage named '$STAGE': train, finetune, eval, test or draw" >&2; exit 2; }
 
 : "${CACHE_DIR:?set CACHE_DIR to a directory that outlives the job, where the corpora are cached}"
 : "${OUTPUT_DIR:?set OUTPUT_DIR to a directory that outlives the job, where the metrics are written}"
 export CACHE_DIR OUTPUT_DIR
 export CHECKPOINT_DIR="${CHECKPOINT_DIR:-$OUTPUT_DIR/checkpoints}"
-: "${NODES_DIR:?set NODES_DIR to the checkpoints of the d2s run that writes the nodes}"
-export NODES_DIR
+# Each training stage reads a run that is already there, mounted into the container.
+mounts=()
+if [[ $STAGE == train ]]; then
+  : "${NODES_DIR:?set NODES_DIR to the checkpoints of the d2s run that writes the nodes}"
+  mounts+=(--mount=type=bind,source="$NODES_DIR",destination=/nodes,readonly)
+fi
+if [[ $STAGE == finetune ]]; then
+  : "${FINETUNE_FROM:?set FINETUNE_FROM to the checkpoint of the d2g run to fine-tune}"
+  mounts+=(--mount=type=bind,source="$(dirname "$FINETUNE_FROM")",destination=/finetuned,readonly)
+fi
 
 # The one corpus d2g reads, and how big a model — the names `D2SModelConfiguration` knows.
 export CORPUS=synthetic-floorplans
@@ -75,7 +90,7 @@ continueLater() {
   scontrol requeue "$SLURM_JOB_ID"
 }
 # Any other stage has nothing to carry on from, so it ignores the warning and runs to the limit.
-if [[ $STAGE == train ]]; then trap continueLater USR1; else trap '' USR1; fi
+if [[ $STAGE == train || $STAGE == finetune ]]; then trap continueLater USR1; else trap '' USR1; fi
 
 module load sarus/1.6.4
 
@@ -88,7 +103,7 @@ sarus run \
   --mount=type=bind,source="$CACHE_DIR",destination=/cache \
   --mount=type=bind,source="$OUTPUT_DIR",destination=/output \
   --mount=type=bind,source="$CHECKPOINT_DIR",destination=/checkpoints \
-  --mount=type=bind,source="$NODES_DIR",destination=/nodes,readonly \
+  "${mounts[@]}" \
   "$IMAGE" \
   bash -c '
     set -euo pipefail
@@ -101,6 +116,7 @@ sarus run \
     branch="$6"
     seed="$7"
     order="$8"
+    finetuneFrom="$9"
 
     export TMPDIR=/tmp
 
@@ -122,7 +138,7 @@ sarus run \
     # What produced the metrics beside it: the commits every part of the stack was built from, the
     # JAX that ran them, and the GPUs they ran on. Written before training, so that a run cut short
     # still says what it was.
-    if [[ $stage == train ]]; then
+    if [[ $stage == train || $stage == finetune ]]; then
       jaxVersion="$(uv run python -c "import jax; print(jax.__version__)" 2>/dev/null || echo unknown)"
       gpus="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | paste -sd ";" - || true)"
       [[ -n $gpus ]] || gpus=unknown
@@ -133,6 +149,7 @@ sarus run \
   "size": "$size",
   "seed": "$seed",
   "order": "$order",
+  "finetuneFrom": "$finetuneFrom",
   "slurmJobId": "$slurmJobId",
   "node": "$node",
   "gpus": "$gpus",
@@ -152,11 +169,12 @@ JSON
 
     case "$stage" in
       train) sbt "d2g/runMain d2gTrain $size $order $seed" ;;
+      finetune) sbt "d2g/runMain d2gFineTune $size $order $seed /finetuned/$(basename "$finetuneFrom")" ;;
       eval) sbt "d2g/runMain d2gEval $size" ;;
       test) sbt "d2g/runMain d2gTest $size" ;;
       draw) sbt "d2g/runMain d2gDraw $size" ;;
     esac
-  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" "$SEED" "$ORDER" &
+  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" "$SEED" "$ORDER" "${FINETUNE_FROM:-}" &
 
 wait $! || trained=$?
 
@@ -175,7 +193,7 @@ queueNext() {
   echo "queued $1 as $nextId"
 }
 case "$STAGE" in
-  train)
+  train | finetune)
     echo "job finished, checkpoints in $CHECKPOINT_DIR"
     queueNext eval
     ;;
