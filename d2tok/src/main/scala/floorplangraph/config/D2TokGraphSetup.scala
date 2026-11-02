@@ -6,7 +6,7 @@ import d2tok.floorplan.SequenceOrder
 import d2tok.floorplan.Words
 import d2tok.floorplangraph.*
 import dataset.Runs
-import syntheticFloorplansDataset.SyntheticFloorplans
+import syntheticFloorplansDataset.FloorplanCorpus
 
 /** Setup for a D2Tok experiment on the synthetic floor plans that writes their relationships too. */
 case class D2TokGraphSetup(
@@ -55,17 +55,17 @@ case class D2TokGraphSetup(
   require(nodeOrder != SequenceOrder.ByPosition, s"the relationships cannot follow the nodes in the order '${nodeOrder.name}'")
 
   val words: Words = Words(canvas)
-  val tokens: Int = words.tokens(SyntheticFloorplans.maxNodes)
+  val tokens: Int = words.tokens(FloorplanCorpus.Plain.maxNodes)
 
-  val relationshipWords: RelationshipWords = RelationshipWords(SyntheticFloorplans.maxNodes)
-  val relationshipTokens: Int = relationshipWords.tokens(SyntheticFloorplans.maxRelationships)
+  val relationshipWords: RelationshipWords = RelationshipWords(FloorplanCorpus.Plain.maxNodes)
+  val relationshipTokens: Int = relationshipWords.tokens(FloorplanCorpus.Plain.maxRelationships)
 
-  override def toString: String = s"D2TokGraphSetup(${SyntheticFloorplans.repoId}, layers=$numLayers, nodeOrder=${nodeOrder.name}, relationshipOrder=${relationshipOrder.name}, heads=$numHeads, embedding=$embedding, canvas=$canvas, words=${words.size}+${relationshipWords.size}, tokens=$tokens+$relationshipTokens, samples=$numSamples, batch=$batchSize, seed=$seed)"
+  override def toString: String = s"D2TokGraphSetup(${FloorplanCorpus.Plain.repoId}, layers=$numLayers, nodeOrder=${nodeOrder.name}, relationshipOrder=${relationshipOrder.name}, heads=$numHeads, embedding=$embedding, canvas=$canvas, words=${words.size}+${relationshipWords.size}, tokens=$tokens+$relationshipTokens, samples=$numSamples, batch=$batchSize, seed=$seed)"
 
 object D2TokGraphSetup:
 
   /** What a run names the corpus by on its command line and in what it writes. */
-  val corpus = s"${SyntheticFloorplans.name}-graph"
+  val corpus = s"${FloorplanCorpus.Plain.name}-graph"
 
   def apply(size: D2TokModelConfiguration): D2TokGraphSetup = D2TokGraphSetup(
     checkpointRoot = s"${Runs.checkpointDir}/d2tok/$corpus-${size.name}",

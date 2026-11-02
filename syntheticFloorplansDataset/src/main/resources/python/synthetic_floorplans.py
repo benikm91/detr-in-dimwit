@@ -1,13 +1,14 @@
 """The synthetic floor plans, as the arrays DimWit lifts them from. Everything else happens in Scala.
 
-The dataset (https://huggingface.co/datasets/benikm91/synthetic-floorplans-for-transcription) ships
-its splits as plain repository files: ``{part}_images.npy`` holds ``(N, 512, 512)`` uint8 drawings
+A corpus (e.g. https://huggingface.co/datasets/benikm91/synthetic-floorplans-for-transcription) ships
+its splits as plain repository files: ``{part}_images.npy`` holds ``(N, side, side)`` uint8 drawings
 (row index = y, white background, dark ink) and ``{part}_labels.jsonl`` one record per line, in the
-same order. A split is one part or, for train, the parts ``train-00`` to ``train-08``;
+same order. A split is one part or, for train, the parts ``train-00``, ``train-01`` and so on;
 ``metadata.json`` lists every part and how many plans it holds.
 
-A record holds its nodes -- each a class and the two ends of a segment, in the pixels of the drawing
--- and its relationships, each naming two nodes by their position.
+A record holds its nodes -- each a class and, unless it is a room, two points in the pixels of the
+drawing -- and its relationships, each naming two nodes by their position. A furnished plan's
+furniture, held apart from its record, is read as nodes of the record after the others.
 """
 
 import json
@@ -73,28 +74,33 @@ def records(repo_id, part, side, nodes, edges, classes, relationships):
     part, padded to ``nodes`` nodes and ``edges`` relationships.
 
     ``classes`` and ``relationships`` name the class and relationship of every id, the first naming
-    what pads. A point is held as a fraction of the ``side`` the drawings are stored at.
+    what pads. A point is held as a fraction of the ``side`` the drawings are stored at, and a room's
+    are 0.
     """
     class_id = {name: at for at, name in enumerate(classes)}
     relationship_id = {name: at for at, name in enumerate(relationships)}
+    # Parsed one at a time: a furnished plan's label also holds what its furniture is drawn from.
     with open(_file(repo_id, "%s_labels.jsonl" % part), encoding="utf-8") as labels:
-        held = [json.loads(label) for label in labels]
+        held = labels.readlines()
 
     node_class = np.zeros((len(held), nodes), dtype=np.int32)
     start_x, start_y, end_x, end_y = (np.zeros((len(held), nodes), dtype=np.float32) for _ in range(4))
     relationship = np.zeros((len(held), edges), dtype=np.int32)
     subject, obj = (np.zeros((len(held), edges), dtype=np.int32) for _ in range(2))
 
-    for plan, record in enumerate(held):
-        if len(record["nodes"]) > nodes:
-            raise ValueError("a record of %d nodes does not fit in %d" % (len(record["nodes"]), nodes))
+    for plan, label in enumerate(held):
+        record = json.loads(label)
+        held_nodes = record["nodes"] + record.get("furniture", {"nodes": []})["nodes"]
+        if len(held_nodes) > nodes:
+            raise ValueError("a record of %d nodes does not fit in %d" % (len(held_nodes), nodes))
         if len(record["relationships"]) > edges:
             raise ValueError("a record of %d relationships does not fit in %d" % (len(record["relationships"]), edges))
-        for at, node in enumerate(record["nodes"]):
-            (x1, y1), (x2, y2) = node["points"]
+        for at, node in enumerate(held_nodes):
             node_class[plan, at] = class_id[node["class"]]
-            start_x[plan, at], start_y[plan, at] = x1 / side, y1 / side
-            end_x[plan, at], end_y[plan, at] = x2 / side, y2 / side
+            if "points" in node:
+                (x1, y1), (x2, y2) = node["points"]
+                start_x[plan, at], start_y[plan, at] = x1 / side, y1 / side
+                end_x[plan, at], end_y[plan, at] = x2 / side, y2 / side
         for at, related in enumerate(record["relationships"]):
             relationship[plan, at] = relationship_id[related["type"]]
             subject[plan, at], obj[plan, at] = related["nodes"]

@@ -75,8 +75,8 @@ def trainSetTranscriber(setup: D2SSetup): Unit =
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numTotalSteps steps")
 
   val nodes = Axis[Node] -> setup.nodeSlots
-  val relationships = Axis[Relationship] -> SyntheticFloorplans.maxRelationships
-  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train, setup.canvas)
+  val relationships = Axis[Relationship] -> setup.corpus.maxRelationships
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(setup.corpus, Split.Train, setup.canvas)
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 

@@ -9,6 +9,7 @@ import dataset.greyLevels
 import dataset.Runs
 import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
+import syntheticFloorplansDataset.FloorplanCorpus
 import syntheticFloorplansDataset.FloorplanDrawing
 import syntheticFloorplansDataset.FloorplanGraph
 import syntheticFloorplansDataset.SyntheticFloorplans
@@ -16,20 +17,20 @@ import syntheticFloorplansDataset.SyntheticFloorplans
 import java.nio.file.Path
 
 /** Writes what every checkpoint of the newest run transcribed, one picture each:
-  * `sbt "d2g/runMain d2gDraw s"`.
+  * `sbt "d2g/runMain d2gDraw synthetic-floorplans s"`.
   *
   * Every validation plan is shown as it was drawn, beside the record the model wrote down on a
   * canvas of its own. The pictures land beside the metrics in `OUTPUT_DIR`.
   */
 @main
-def d2gDraw(size: String): Unit =
+def d2gDraw(corpus: String, size: String): Unit =
   dimwit.initialize()
-  val setup = D2GSetup(D2SModelConfiguration.named(size))
+  val setup = D2GSetup(FloorplanCorpus.named(corpus), D2SModelConfiguration.named(size))
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
 
-  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation, setup.canvas)
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(setup.corpus, Split.Validation, setup.canvas)
   val plans = data.samples.take(Rows * Across).toSeq
   val transcriber = Transcriber(Axis[Node] -> setup.nodeSlots, Axis[Edge] -> setup.edgeSlots, WrittenTogether)
 
@@ -45,7 +46,7 @@ def d2gDraw(size: String): Unit =
     val written = plans.grouped(WrittenTogether).flatMap(batch => transcriber(params, batch.map(_.image))).toSeq
     val eachPlan = documents.zip(written).map: (document, transcribed) =>
       Seq(FloorplanDrawing(noRecord, document, Axis[Channel]), FloorplanDrawing(transcribed, emptyCanvas, Axis[Channel]))
-    val picture = Path.of(Runs.outputDir, s"d2g-${SyntheticFloorplans.name}-$size-$step.png")
+    val picture = Path.of(Runs.outputDir, s"d2g-${setup.corpus.name}-$size-$step.png")
     DrawingTiles.write(eachPlan, Rows, Across, picture)
     println(s"step $step | ${written.size} plans written to $picture")
 

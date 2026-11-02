@@ -30,6 +30,7 @@ import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
 import dimwit.TreeOf.ops.asFloats
 
+import syntheticFloorplansDataset.FloorplanCorpus
 import syntheticFloorplansDataset.FloorplanNodes
 import syntheticFloorplansDataset.FloorplanRecordBatch
 import syntheticFloorplansDataset.SyntheticFloorplans
@@ -74,7 +75,7 @@ def trainWordTranscriber(setup: D2TokSetup): Unit =
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numTotalSteps steps")
 
   val tokens = Axis[Token] -> setup.tokens
-  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train, setup.canvas)
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(FloorplanCorpus.Plain, Split.Train, setup.canvas)
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 

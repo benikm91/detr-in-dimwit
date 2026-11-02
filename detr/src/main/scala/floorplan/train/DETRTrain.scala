@@ -34,6 +34,7 @@ import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
 import dimwit.TreeOf.ops.asFloats
 
+import syntheticFloorplansDataset.FloorplanCorpus
 import syntheticFloorplansDataset.FloorplanNodes
 import syntheticFloorplansDataset.FloorplanRecordBatch
 import syntheticFloorplansDataset.SyntheticFloorplans
@@ -80,7 +81,7 @@ def trainDetector(setup: DETRSetup): Unit =
   require(numTotalSteps % checkpointEvery == 0, s"$numTotalSteps steps do not end on a checkpoint, which is where the cooldown ends")
   println(s"$mesh on ${Jax.devices.head.platform}, $batchSize drawings per step, $numTotalSteps steps")
 
-  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train, setup.canvas)
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(FloorplanCorpus.Plain, Split.Train, setup.canvas)
 
   /** Warmup, then the rate held, then a cosine cooldown over the last stretch. Adam orbits a
     * solution at a distance the rate sets, which is what the cooldown closes; holding the rate

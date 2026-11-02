@@ -19,10 +19,10 @@ class SyntheticFloorplansSuite extends FunSuite:
   private trait Edge derives Label
   private trait Batch derives Label
 
-  private lazy val validation = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation, SyntheticFloorplans.storedSide)
+  private lazy val validation = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(FloorplanCorpus.Plain, Split.Validation, FloorplanCorpus.Plain.storedSide)
 
   test("the training split is its nine parts in seed order, and validation one part"):
-    val train = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train, SyntheticFloorplans.storedSide)
+    val train = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(FloorplanCorpus.Plain, Split.Train, FloorplanCorpus.Plain.storedSide)
     assertEquals(train.parts, (0 until 9).map(part => (s"train-0$part", 50_000)))
     assertEquals(validation.parts, Seq(("val", 5000)))
 
@@ -48,9 +48,23 @@ class SyntheticFloorplansSuite extends FunSuite:
           case FloorplanRelationship.In =>
             val belongs = if classes(subject(at)) == FloorplanClass.Door then FloorplanClass.InsideWall else FloorplanClass.OutsideWall
             assertEquals(classes(obj(at)), belongs, s"a ${classes(subject(at))} in a ${classes(obj(at))}")
+          case FloorplanRelationship.Borders        => fail("a plain plan has no rooms to border")
           case FloorplanRelationship.NoRelationship => ()
       val hosted = relationship.indices.filter(relationship(_) == FloorplanRelationship.In).map(subject).sorted
       assertEquals(hosted, drawn.filterNot(at => walls(classes(at))).sorted, "every opening stands in exactly one wall")
+
+  test("a furnished record holds its rooms, placed nowhere and bordered by walls and openings, and its furniture last, as boxes"):
+    val furnished = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(FloorplanCorpus.Furnished, Split.Validation, 128)
+    for sample <- furnished.samples.take(40) do
+      val plan = FloorplanGraph.of(sample.target)
+      val rooms = plan.nodes.indices.filterNot(plan.nodes(_).nodeClass.isPlaced)
+      val furniture = plan.nodes.indices.filter(plan.nodes(_).nodeClass.placement == Placement.Box)
+      assert(rooms.nonEmpty && furniture.nonEmpty, plan.counted)
+      assert(rooms.forall(at => plan.nodes(at).start == dataset.Point(0f, 0f) && plan.nodes(at).end == dataset.Point(0f, 0f)), "a room has no points")
+      assertEquals(furniture, plan.nodes.indices.takeRight(furniture.size), "the furniture comes after the plan's own nodes")
+      val borders = plan.edges.filter(_.relationship == FloorplanRelationship.Borders)
+      assert(borders.forall(edge => plan.nodes(edge.subject).nodeClass.placement == Placement.Segment && rooms.contains(edge.obj)), "a wall or opening borders a room")
+      assertEquals(borders.map(_.obj).toSet, rooms.toSet, "every room is bordered")
 
   test("the batches carry on where they left off, and wrap round at the end of the split"):
     val batch = Axis[Batch] -> 8
@@ -60,7 +74,7 @@ class SyntheticFloorplansSuite extends FunSuite:
     assertEquals(first(3).target.nodeClass.toArray.toSeq.map(_.toSeq), fourth.target.nodeClass.toArray.toSeq.map(_.toSeq))
     // 5,000 plans make 625 whole batches of 8: the 626th is the first again.
     assertEquals(first(625).target.startX.toArray.toSeq.map(_.toSeq), first(0).target.startX.toArray.toSeq.map(_.toSeq))
-    assertEquals(fourth.pixels.shape(Axis[Width]), SyntheticFloorplans.storedSide)
+    assertEquals(fourth.pixels.shape(Axis[Width]), FloorplanCorpus.Plain.storedSide)
 
   test("a record laid out again keeps its nodes, and its relationships between the same nodes"):
     trait Plan derives Label
@@ -97,18 +111,18 @@ class SyntheticFloorplansSuite extends FunSuite:
 
   test("a plan's record drawn on an empty canvas colours the pixels its nodes run through, and no others"):
     val plan = FloorplanGraph.of(validation.samples.next().target)
-    val canvas = Tensor(Shape2(Axis[Width] -> SyntheticFloorplans.storedSide, Axis[Height] -> SyntheticFloorplans.storedSide), VType[UInt8]).fill(255)
+    val canvas = Tensor(Shape2(Axis[Width] -> FloorplanCorpus.Plain.storedSide, Axis[Height] -> FloorplanCorpus.Plain.storedSide), VType[UInt8]).fill(255)
     val drawn = FloorplanDrawing(plan, canvas, Axis[Channel])
     val inked = drawn.slice(Axis[Channel].at(0)).asInt(VType[Int32]).toArray.map(_.map(_ != 255))
-    def at(point: dataset.Point) = ((point.x * SyntheticFloorplans.storedSide).round.min(SyntheticFloorplans.storedSide - 1), (point.y * SyntheticFloorplans.storedSide).round.min(SyntheticFloorplans.storedSide - 1))
+    def at(point: dataset.Point) = ((point.x * FloorplanCorpus.Plain.storedSide).round.min(FloorplanCorpus.Plain.storedSide - 1), (point.y * FloorplanCorpus.Plain.storedSide).round.min(FloorplanCorpus.Plain.storedSide - 1))
     for node <- plan.nodes; (x, y) <- Seq(at(node.start), at(node.end)) do
       assert(inked(x)(y), s"$node is not drawn at its end ($x, $y)")
     assert(inked.flatten.count(identity) < inked.flatten.length / 4, "the record covers a quarter of the canvas or more")
 
   test("drawings read at a smaller side are the stored ones averaged down, block by block"):
     val canvas = 128
-    val factor = SyntheticFloorplans.storedSide / canvas
-    val averaged = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Validation, canvas)
+    val factor = FloorplanCorpus.Plain.storedSide / canvas
+    val averaged = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(FloorplanCorpus.Plain, Split.Validation, canvas)
     def first(data: SyntheticFloorplans[Width, Height, Channel, Node, Edge]) = data.batches(Axis[Batch] -> 1, afterSteps = 0).next()
     val (stored, small) = (first(validation), first(averaged))
     assertEquals(small.pixels.shape(Axis[Width]), canvas)

@@ -12,12 +12,12 @@
 #SBATCH --requeue
 #SBATCH --open-mode=append
 #
-# Trains the graph transcriber on the synthetic floor plans, scores every checkpoint, and leaves the
-# metrics as one CSV.
+# Trains the graph transcriber on a corpus of synthetic floor plans, scores every checkpoint, and
+# leaves the metrics as one CSV.
 # The batch is split over the GPUs the job gets, so `--gres=gpu:N` sets how much of it each GPU
 # holds, not how big it is. `runs/queue_d2g.sh` asks for as many as the model size needs.
 #
-#   SIZE=s \
+#   CORPUS=synthetic-floorplans SIZE=s \
 #   CACHE_DIR=$HOME/.detr-cache/corpora \
 #   NODES_DIR=$HOME/.detr-cache/output/<d2s run name>/checkpoints \
 #   OUTPUT_DIR=$HOME/.detr-cache/output/<run name> \
@@ -32,10 +32,10 @@
 #
 # `runs/queue_d2g.sh` is the usual way in; `sbatch` hands the environment on to the job.
 # CACHE_DIR is where the floor plans land, so that the next job does not download them again.
-# OUTPUT_DIR is where `d2g-synthetic-floorplans-<size>-<split>.csv` ends up: what is left of the job once the
+# OUTPUT_DIR is where `d2g-<corpus>-<size>-<split>.csv` ends up: what is left of the job once the
 # instance is wiped. CHECKPOINT_DIR is where the checkpoints go, under OUTPUT_DIR unless it is set
 # otherwise: the scoring job reads them back, and they are yours to delete once it has.
-# NODES_DIR holds the checkpoints of the d2s run, of the same size and order, whose nodes the
+# NODES_DIR holds the checkpoints of the d2s run, of the same corpus, size and order, whose nodes the
 # relationships are trained on; its weights stay as they are.
 
 set -euo pipefail
@@ -58,8 +58,9 @@ if [[ $STAGE == finetune ]]; then
   mounts+=(--mount=type=bind,source="$(dirname "$FINETUNE_FROM")",destination=/finetuned,readonly)
 fi
 
-# The one corpus d2g reads, and how big a model — the names `D2SModelConfiguration` knows.
-export CORPUS=synthetic-floorplans
+# Which floor plans to train on and how big a model — the names `FloorplanCorpus` and
+# `D2SModelConfiguration` know.
+export CORPUS="${CORPUS:-synthetic-floorplans}"
 export SIZE="${SIZE:-s}"
 
 # Which seed a run trains from, so that a setting can be run again: SEED=1 for a repeat.
@@ -174,11 +175,11 @@ JSON
     fi
 
     case "$stage" in
-      train) sbt "d2g/runMain d2gTrain $size $order $relationshipOrder $seed" ;;
-      finetune) sbt "d2g/runMain d2gFineTune $size $order $relationshipOrder $seed /finetuned/$(basename "$finetuneFrom")" ;;
-      eval) sbt "d2g/runMain d2gEval $size" ;;
-      test) sbt "d2g/runMain d2gTest $size" ;;
-      draw) sbt "d2g/runMain d2gDraw $size" ;;
+      train) sbt "d2g/runMain d2gTrain $corpus $size $order $relationshipOrder $seed" ;;
+      finetune) sbt "d2g/runMain d2gFineTune $corpus $size $order $relationshipOrder $seed /finetuned/$(basename "$finetuneFrom")" ;;
+      eval) sbt "d2g/runMain d2gEval $corpus $size" ;;
+      test) sbt "d2g/runMain d2gTest $corpus $size" ;;
+      draw) sbt "d2g/runMain d2gDraw $corpus $size" ;;
     esac
   ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" "$SEED" "$ORDER" "$RELATIONSHIP_ORDER" "${FINETUNE_FROM:-}" &
 

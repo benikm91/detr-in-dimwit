@@ -4,7 +4,7 @@ import d2tok.*
 import d2tok.config.D2TokModelConfiguration
 import d2tok.floorplan.*
 import dataset.Runs
-import syntheticFloorplansDataset.SyntheticFloorplans
+import syntheticFloorplansDataset.FloorplanCorpus
 
 /** Setup for a D2Tok experiment on the synthetic floor plans. */
 case class D2TokSetup(
@@ -44,14 +44,14 @@ case class D2TokSetup(
 ):
 
   val words: Words = Words(canvas)
-  val tokens: Int = words.tokens(SyntheticFloorplans.maxNodes)
+  val tokens: Int = words.tokens(FloorplanCorpus.Plain.maxNodes)
 
-  override def toString: String = s"D2TokSetup(${SyntheticFloorplans.repoId}, layers=$numLayers, order=${order.name}, heads=$numHeads, embedding=$embedding, canvas=$canvas, words=${words.size}, tokens=$tokens, samples=$numSamples, batch=$batchSize, seed=$seed)"
+  override def toString: String = s"D2TokSetup(${FloorplanCorpus.Plain.repoId}, layers=$numLayers, order=${order.name}, heads=$numHeads, embedding=$embedding, canvas=$canvas, words=${words.size}, tokens=$tokens, samples=$numSamples, batch=$batchSize, seed=$seed)"
 
 object D2TokSetup:
 
   def apply(size: D2TokModelConfiguration): D2TokSetup = D2TokSetup(
-    checkpointRoot = s"${Runs.checkpointDir}/d2tok/${SyntheticFloorplans.name}-${size.name}",
+    checkpointRoot = s"${Runs.checkpointDir}/d2tok/${FloorplanCorpus.Plain.name}-${size.name}",
     numLayers = size.numLayers,
     numHeads = size.numHeads,
     embedding = size.embedding

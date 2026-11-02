@@ -10,6 +10,7 @@ import dimwit.*
 import dimwit.stats.Uniform
 import syntheticFloorplansDataset.FloorplanClass
 import syntheticFloorplansDataset.FloorplanClasses
+import syntheticFloorplansDataset.FloorplanCorpus
 import syntheticFloorplansDataset.FloorplanGraph
 import syntheticFloorplansDataset.FloorplanNode
 import syntheticFloorplansDataset.FloorplanNodes
@@ -56,14 +57,14 @@ class FloorplanDecodingSuite extends munit.FunSuite:
       nowTaken
 
   test("the transcriber writes what reading the whole record at every slot would"):
-    val nodes = Axis[Node] -> (SyntheticFloorplans.maxNodes + 1)
+    val nodes = Axis[Node] -> (FloorplanCorpus.Plain.maxNodes + 1)
     val untrained = D2S.Params.init(numLayers = 2, numHeads = 2, embedding = 32, nodes = nodes.size, queries = 3, canvas = 128, key = Random.Key(2))
     // An untrained model stops at once; one that never says it is done writes every slot.
     val classHead = untrained.nodes.head.nodeClass
     val neverDone = classHead.copy(bias = classHead.bias.set(Axis[FloorplanClasses].at(FloorplanClass.NoNode.id))(-100f))
     val params = untrained.copy(nodes = untrained.nodes.copy(head = untrained.nodes.head.copy(nodeClass = neverDone)))
     val model = D2S(params)
-    val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Validation, canvas = 128)
+    val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(FloorplanCorpus.Plain, Split.Validation, canvas = 128)
     val documents = data.samples.take(3).map(_.image).toSeq
     val read = jit((document: Tensor3[Width, Height, Channel, Float32], taken: FloorplanNodes[Node]) => model.logitsPerQuery(model.encodeDocument(document), taken))
 

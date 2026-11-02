@@ -31,6 +31,7 @@ import dimwit.tensor.Tensor4
 import dimwit.TreeOf.ops.asFloats
 
 import syntheticFloorplansDataset.FloorplanClass
+import syntheticFloorplansDataset.FloorplanCorpus
 import syntheticFloorplansDataset.FloorplanEdges
 import syntheticFloorplansDataset.FloorplanNodes
 import syntheticFloorplansDataset.FloorplanRecordBatch
@@ -79,7 +80,7 @@ def trainGraphTranscriber(setup: D2TokGraphSetup): Unit =
 
   val tokens = Axis[Token] -> setup.tokens
   val relationshipTokens = Axis[RelationshipToken] -> setup.relationshipTokens
-  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Train, setup.canvas)
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(FloorplanCorpus.Plain, Split.Train, setup.canvas)
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 
@@ -95,7 +96,7 @@ def trainGraphTranscriber(setup: D2TokGraphSetup): Unit =
     embedding = setup.embedding,
     nodeWords = setup.words.size,
     nodeTokens = setup.tokens,
-    nodes = SyntheticFloorplans.maxNodes,
+    nodes = FloorplanCorpus.Plain.maxNodes,
     relationshipWords = setup.relationshipWords.size,
     relationshipTokens = setup.relationshipTokens,
     key = initKey

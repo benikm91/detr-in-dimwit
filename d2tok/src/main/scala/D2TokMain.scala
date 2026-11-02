@@ -2,7 +2,7 @@ import d2tok.config.D2TokModelConfiguration
 import d2tok.floorplangraph.config.D2TokGraphSetup
 import dataset.Corpus
 import dataset.DrawingDataset.Split
-import syntheticFloorplansDataset.SyntheticFloorplans
+import syntheticFloorplansDataset.FloorplanCorpus
 
 /** Entry points for the D2Tok experiments, on a corpus (e.g., `vitruvion-primitives` or
   * `synthetic-floorplans`) at a model configuration (e.g., `s-deep`):
@@ -25,7 +25,7 @@ import syntheticFloorplansDataset.SyntheticFloorplans
 
 @main
 def d2tokTrain(corpus: String, size: String, order: String, seed: Int): Unit =
-  if corpus == SyntheticFloorplans.name then
+  if corpus == FloorplanCorpus.Plain.name then
     val setup = d2tok.floorplan.config.D2TokSetup(D2TokModelConfiguration.named(size))
     d2tok.floorplan.train.trainWordTranscriber(setup.copy(order = d2tok.floorplan.SequenceOrder.named(order), seed = seed))
   else
@@ -40,11 +40,11 @@ def d2tokTest(corpus: String, size: String): Unit = score(corpus, size, Split.Te
 
 @main
 def d2tokDraw(corpus: String, size: String): Unit =
-  if corpus == SyntheticFloorplans.name then d2tok.floorplan.eval.drawWordTranscriber(d2tok.floorplan.config.D2TokSetup(D2TokModelConfiguration.named(size)), size)
+  if corpus == FloorplanCorpus.Plain.name then d2tok.floorplan.eval.drawWordTranscriber(d2tok.floorplan.config.D2TokSetup(D2TokModelConfiguration.named(size)), size)
   else d2tok.sketch.eval.drawWordTranscriber(d2tok.sketch.config.D2TokSetup(Corpus.named(corpus), D2TokModelConfiguration.named(size)), size)
 
 private def score(corpus: String, size: String, split: Split): Unit =
-  if corpus == SyntheticFloorplans.name then
+  if corpus == FloorplanCorpus.Plain.name then
     d2tok.floorplan.eval.scoreWordTranscriber(d2tok.floorplan.config.D2TokSetup(D2TokModelConfiguration.named(size)), size, split)
   else
     d2tok.sketch.eval.scoreWordTranscriber(d2tok.sketch.config.D2TokSetup(Corpus.named(corpus), D2TokModelConfiguration.named(size)), size, split)

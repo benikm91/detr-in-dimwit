@@ -7,7 +7,6 @@ import d2s.train.*
 import EdgeHead.EdgeLogits
 import dimwit.*
 import d2g.floorplan.RelationshipOrder
-import syntheticFloorplansDataset.FloorplanClasses
 import syntheticFloorplansDataset.FloorplanEdges
 import syntheticFloorplansDataset.FloorplanRecord
 import syntheticFloorplansDataset.FloorplanRelationship
@@ -36,7 +35,7 @@ class RemainingEdgeLoss[V: IsFloating](vtype: VType[V], written: RelationshipOrd
     val candidates = written match
       case RelationshipOrder.Free   => remaining
       case RelationshipOrder.ByKind =>
-        val kind = written.startRank.slice(Axis[FloorplanClasses].at(record.nodes.nodeClass.slice(Axis[Node].at(target.subject))))
+        val kind = target.ranked(written.kindRank, record.nodes.nodeClass)
         val sameKind = kind.vmap(Axis[Edge])(own => kind.relabelTo(Axis[Candidate]) elementEquals_! own)
         remaining * sameKind.asFloat(vtype)
 

@@ -15,6 +15,7 @@ import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
 import dimwit.tensor.Tensor4
 
+import syntheticFloorplansDataset.FloorplanCorpus
 import syntheticFloorplansDataset.FloorplanGraph
 import syntheticFloorplansDataset.FloorplanScoring
 import syntheticFloorplansDataset.FloorplanTranscripts
@@ -34,7 +35,7 @@ def scoreGraphTranscriber(setup: D2TokGraphSetup, size: String, split: Split): U
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
-  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(split, setup.canvas)
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(FloorplanCorpus.Plain, split, setup.canvas)
   println(s"${data.numSamples} plans\n")
 
   val transcriber = Transcriber(setup, TranscribedTogether)
@@ -46,7 +47,7 @@ def scoreGraphTranscriber(setup: D2TokGraphSetup, size: String, split: Split): U
       .flatMap(batch => batch.map(sample => FloorplanGraph.of(sample.target)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val csv = Metrics.Csv(Model, SyntheticFloorplans.name, size, split, Runs.parameters(checkpoints.loadLatest[D2TokGraphTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv(Model, FloorplanCorpus.Plain.name, size, split, Runs.parameters(checkpoints.loadLatest[D2TokGraphTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
   val scored = split match
@@ -59,7 +60,7 @@ def scoreGraphTranscriber(setup: D2TokGraphSetup, size: String, split: Split): U
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-      println(s"transcripts written to ${FloorplanTranscripts.write(Model, size, split, step, setup.canvas, plans)}")
+      println(s"transcripts written to ${FloorplanTranscripts.write(Model, FloorplanCorpus.Plain, size, split, step, setup.canvas, plans)}")
 
 /** How many drawings are transcribed together. A batch is one traced computation, so this is what
   * the split costs in calls rather than in work.

@@ -3,6 +3,7 @@ package d2s.floorplan
 import dimwit.*
 import syntheticFloorplansDataset.FloorplanClass
 import syntheticFloorplansDataset.FloorplanClasses
+import syntheticFloorplansDataset.Placement
 
 /** The order a floor plan's nodes are written down in, one at a time. */
 enum NodeOrder:
@@ -27,10 +28,13 @@ enum NodeOrder:
 
 object NodeOrder:
 
-  private val wallsFirst = Seq(FloorplanClass.OutsideWall, FloorplanClass.InsideWall, FloorplanClass.OutsideDoor, FloorplanClass.Door, FloorplanClass.Window)
+  private val wallsFirst =
+    Seq(FloorplanClass.OutsideWall, FloorplanClass.InsideWall, FloorplanClass.OutsideDoor, FloorplanClass.Door, FloorplanClass.Window) ++
+      FloorplanClass.values.filter(nodeClass => nodeClass.isNode && !nodeClass.isPlaced) ++
+      FloorplanClass.values.filter(_.placement == Placement.Box)
 
   /** The walls first, then what stands in them: an opening written later can be placed against the
-    * wall it stands in.
+    * wall it stands in. Then the rooms, then the furniture, each class by class.
     */
   val WallsFirst: NodeOrder = ByClass(wallsFirst)
 

@@ -9,6 +9,7 @@ import dataset.greyLevels
 import dataset.Runs
 import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
+import syntheticFloorplansDataset.FloorplanCorpus
 import syntheticFloorplansDataset.FloorplanDrawing
 import syntheticFloorplansDataset.FloorplanGraph
 import syntheticFloorplansDataset.SyntheticFloorplans
@@ -27,7 +28,7 @@ def drawGraphTranscriber(setup: D2TokGraphSetup, size: String): Unit =
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
 
-  val plans = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(Split.Validation, setup.canvas).samples.take(Rows * Across).toSeq
+  val plans = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(FloorplanCorpus.Plain, Split.Validation, setup.canvas).samples.take(Rows * Across).toSeq
   val transcriber = Transcriber(setup, WrittenTogether)
 
   /** The plans as they were drawn, read once since they do not change. */
@@ -42,7 +43,7 @@ def drawGraphTranscriber(setup: D2TokGraphSetup, size: String): Unit =
     val written = plans.grouped(WrittenTogether).flatMap(batch => transcriber(params, batch.map(_.image))).toSeq
     val eachPlan = documents.zip(written).map: (document, transcribed) =>
       Seq(FloorplanDrawing(noRecord, document, Axis[Channel]), FloorplanDrawing(transcribed, emptyCanvas, Axis[Channel]))
-    val picture = Path.of(Runs.outputDir, s"$Model-${SyntheticFloorplans.name}-$size-$step.png")
+    val picture = Path.of(Runs.outputDir, s"$Model-${FloorplanCorpus.Plain.name}-$size-$step.png")
     DrawingTiles.write(eachPlan, Rows, Across, picture)
     println(s"step $step | ${written.size} plans written to $picture")
 

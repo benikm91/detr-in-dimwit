@@ -11,7 +11,6 @@ import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
 import syntheticFloorplansDataset.FloorplanDrawing
 import syntheticFloorplansDataset.FloorplanGraph
-import syntheticFloorplansDataset.SyntheticFloorplans
 
 import java.nio.file.Path
 
@@ -42,7 +41,7 @@ def drawSetTranscriber(setup: D2SSetup, size: String): Unit =
     val written = plans.grouped(WrittenTogether).flatMap(batch => transcriber(params, batch.map(_.image))).toSeq
     val eachPlan = documents.zip(written).map: (document, transcribed) =>
       Seq(FloorplanDrawing(noRecord, document, Axis[Channel]), FloorplanDrawing(transcribed, emptyCanvas, Axis[Channel]))
-    val picture = Path.of(Runs.outputDir, s"d2s-${SyntheticFloorplans.name}-$size-$step.png")
+    val picture = Path.of(Runs.outputDir, s"d2s-${setup.corpus.name}-$size-$step.png")
     DrawingTiles.write(eachPlan, Rows, Across, picture)
     println(s"step $step | ${written.size} plans written to $picture")
 

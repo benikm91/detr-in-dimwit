@@ -78,7 +78,7 @@ def fineTuneTranscriber(setup: D2GSetup, checkpoint: String): Unit =
 
   val nodes = Axis[Node] -> setup.nodeSlots
   val edges = Axis[Edge] -> setup.edgeSlots
-  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train, setup.canvas)
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(setup.corpus, Split.Train, setup.canvas)
 
   val schedule: LearningRateSchedule =
     LinearWarmup(setup.learningRate, warmupSteps)
@@ -112,7 +112,7 @@ def fineTuneTranscriber(setup: D2GSetup, checkpoint: String): Unit =
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
     val lossScale = state.lossScale
     val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
-      (params: D2G.Params[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges, setup.nodeOrder.classRank, setup.relationshipOrder.startRank), forQueries)(params))
+      (params: D2G.Params[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges, setup.nodeOrder.classRank, setup.relationshipOrder.kindRank), forQueries)(params))
     )(state.params)
     val gradients = lossScale.unscaled(scaledGradients)
     val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)

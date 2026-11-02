@@ -1,10 +1,13 @@
 """What a floor plan's record stands for, as a picture.
 
-Every node is drawn as the segment between its two points, in the colour of its
-class: the walls first, and the doors, outside doors and windows on top of the
-walls they stand in. Every relationship is a dashed connector between the
-middles of the two nodes it relates. The result is drawn over a drawing, so that
-a record can be compared pixel by pixel with the plan it was read from.
+Every wall, door and window is drawn as the segment between its two points, in
+the colour of its class: the walls first, and the doors, outside doors and
+windows on top of the walls they stand in. A piece of furniture is the box
+between its two corners, with a dot at the first, its back-left. A room has no
+place, so neither it nor what borders it is drawn. Every other relationship is a
+dashed connector between the middles of the two nodes it relates. The result is
+drawn over a drawing, so that a record can be compared pixel by pixel with the
+plan it was read from.
 """
 
 import numpy as np
@@ -17,15 +20,17 @@ NODES = {
     "outside door": (230, 140, 20),
     "window": (20, 160, 110),
 }
+FURNITURE = (110, 110, 110)
 RELATIONSHIPS = {
     "joined": (120, 40, 160),
     "in": (170, 120, 200),
 }
 
 
-def render(drawing, node_class, start_x, start_y, end_x, end_y, relationship, subject, obj, classes, relationships):
+def render(drawing, node_class, start_x, start_y, end_x, end_y, relationship, subject, obj, classes, placements, relationships):
     """``(width, height, 3)`` uint8 pixels of the record drawn over ``drawing``, a ``(width,
-    height)`` grey level image. ``classes`` and ``relationships`` name the ids in order."""
+    height)`` grey level image. ``classes`` and ``relationships`` name the ids in order, and
+    ``placements`` says how each class is placed: ``Segment``, ``Box`` or ``Nowhere``."""
     image = np.repeat(np.asarray(drawing, dtype=np.uint8)[:, :, None], 3, axis=2)
     start = list(zip(start_x, start_y))
     end = list(zip(end_x, end_y))
@@ -35,6 +40,13 @@ def render(drawing, node_class, start_x, start_y, end_x, end_y, relationship, su
         colour = RELATIONSHIPS.get(relationships[held])
         if colour is not None:
             _segment(image, middle[subject[at]], middle[obj[at]], colour, dashed=True)
+
+    for at, held in enumerate(node_class):
+        if placements[held] == "Box":
+            (sx, sy), (ex, ey) = start[at], end[at]
+            for corner, next_corner in [((sx, sy), (ex, sy)), ((ex, sy), (ex, ey)), ((ex, ey), (sx, ey)), ((sx, ey), (sx, sy))]:
+                _segment(image, corner, next_corner, FURNITURE)
+            _dot(image, sx, sy, FURNITURE, radius=1)
 
     walls_first = sorted(range(len(node_class)), key=lambda at: not classes[node_class[at]].endswith("wall"))
     for at in walls_first:

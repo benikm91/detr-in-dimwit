@@ -78,7 +78,7 @@ class D2TokGraphSuite extends munit.FunSuite:
 
   private def initialParams(seed: Int) = D2TokGraph.Params.init(
     numLayers = 2, numHeads = 2, embedding = 32,
-    nodeWords = setup.words.size, nodeTokens = setup.tokens, nodes = syntheticFloorplansDataset.SyntheticFloorplans.maxNodes,
+    nodeWords = setup.words.size, nodeTokens = setup.tokens, nodes = syntheticFloorplansDataset.FloorplanCorpus.Plain.maxNodes,
     relationshipWords = setup.relationshipWords.size, relationshipTokens = setup.relationshipTokens,
     key = Random.Key(seed)
   )
@@ -99,7 +99,7 @@ class D2TokGraphSuite extends munit.FunSuite:
         val firstEnd = nodeWords.indexOf(setup.words.end) match
           case -1  => nodeTokens.size
           case end => end
-        val present = Tensor1(Axis[Node], VType[Bool]).fromArray(Array.tabulate(syntheticFloorplansDataset.SyntheticFloorplans.maxNodes)(node => (node + 1) * setup.words.perNode <= firstEnd))
+        val present = Tensor1(Axis[Node], VType[Bool]).fromArray(Array.tabulate(syntheticFloorplansDataset.FloorplanCorpus.Plain.maxNodes)(node => (node + 1) * setup.words.perNode <= firstEnd))
         val readAgain = (0 until relationshipTokens.size).foldLeft(Seq.empty[Int]): (said, position) =>
           val read = Tensor1(relationshipTokens.axis, VType[Int32]).fromArray((setup.relationshipWords.start +: said).padTo(relationshipTokens.size, setup.relationshipWords.end).take(relationshipTokens.size).toArray)
           said :+ readWhole(document, readNodes, present, read).slice(Axis[RelationshipToken].at(position)).argmax(Axis[Word]).item

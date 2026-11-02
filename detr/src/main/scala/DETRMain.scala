@@ -1,7 +1,7 @@
 import detr.config.DETRModelConfiguration
 import dataset.Corpus
 import dataset.DrawingDataset.Split
-import syntheticFloorplansDataset.SyntheticFloorplans
+import syntheticFloorplansDataset.FloorplanCorpus
 
 /** The detector, on a corpus at a size — `sbt "detr/runMain detrTrain sketch s 0"`.
   *
@@ -15,7 +15,7 @@ import syntheticFloorplansDataset.SyntheticFloorplans
   */
 @main
 def detrTrain(corpus: String, size: String, seed: Int): Unit =
-  if corpus == SyntheticFloorplans.name then
+  if corpus == FloorplanCorpus.Plain.name then
     detr.floorplan.train.trainDetector(detr.floorplan.config.DETRSetup(DETRModelConfiguration.named(size)).copy(seed = seed))
   else
     detr.sketch.train.trainDetector(detr.sketch.config.DETRSetup(Corpus.named(corpus), DETRModelConfiguration.named(size)).copy(seed = seed))
@@ -28,16 +28,16 @@ def detrTest(corpus: String, size: String): Unit = score(corpus, size, Split.Tes
 
 @main
 def detrPlot(corpus: String, size: String): Unit =
-  if corpus == SyntheticFloorplans.name then detr.floorplan.eval.plotDetector(detr.floorplan.config.DETRSetup(DETRModelConfiguration.named(size)))
+  if corpus == FloorplanCorpus.Plain.name then detr.floorplan.eval.plotDetector(detr.floorplan.config.DETRSetup(DETRModelConfiguration.named(size)))
   else detr.sketch.eval.plotDetector(detr.sketch.config.DETRSetup(Corpus.named(corpus), DETRModelConfiguration.named(size)))
 
 @main
 def detrDraw(corpus: String, size: String): Unit =
-  if corpus == SyntheticFloorplans.name then detr.floorplan.eval.drawDetector(detr.floorplan.config.DETRSetup(DETRModelConfiguration.named(size)), size)
+  if corpus == FloorplanCorpus.Plain.name then detr.floorplan.eval.drawDetector(detr.floorplan.config.DETRSetup(DETRModelConfiguration.named(size)), size)
   else detr.sketch.eval.drawDetector(detr.sketch.config.DETRSetup(Corpus.named(corpus), DETRModelConfiguration.named(size)), size)
 
 private def score(corpus: String, size: String, split: Split): Unit =
-  if corpus == SyntheticFloorplans.name then
+  if corpus == FloorplanCorpus.Plain.name then
     detr.floorplan.eval.scoreDetector(detr.floorplan.config.DETRSetup(DETRModelConfiguration.named(size)), size, split)
   else
     detr.sketch.eval.scoreDetector(detr.sketch.config.DETRSetup(Corpus.named(corpus), DETRModelConfiguration.named(size)), size, split)

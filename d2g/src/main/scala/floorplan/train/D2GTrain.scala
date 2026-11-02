@@ -78,7 +78,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
 
   val nodes = Axis[Node] -> setup.nodeSlots
   val edges = Axis[Edge] -> setup.edgeSlots
-  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train, setup.canvas)
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(setup.corpus, Split.Train, setup.canvas)
 
   val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
 
@@ -132,7 +132,7 @@ def trainTranscriber(setup: D2GSetup): Unit =
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
     val lossScale = state.lossScale
     val (scaledCost, scaledGradients) = Autodiff.valueAndGrad(
-      (edgeParams: D2G.Params.EdgeParams[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges, setup.nodeOrder.classRank, setup.relationshipOrder.startRank), forQueries)(state.params.copy(edges = edgeParams)))
+      (edgeParams: D2G.Params.EdgeParams[Float32]) => lossScale.scaled(cost(images, records.permuted(forThisStep, nodes, edges, setup.nodeOrder.classRank, setup.relationshipOrder.kindRank), forQueries)(state.params.copy(edges = edgeParams)))
     )(state.params.edges)
     val gradients = lossScale.unscaled(scaledGradients)
     val (edgeParams, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params.edges, state.optimizerState)

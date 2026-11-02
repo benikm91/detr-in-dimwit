@@ -32,12 +32,12 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Node,
       endY = embeddings.vmap(Axis[Node])(endY)
     )
 
-  /** The scores settled. Settling on [[FloorplanClass.NoNode]] is where the nodes of a record stop,
-    * and a node that is not there is placed nowhere.
+  /** The scores settled. Settling on [[FloorplanClass.NoNode]] is where the nodes of a record stop.
+    * A node that is not there, or of a class that has no place, is placed nowhere.
     */
   def decide(logits: NodeLogits[V]): FloorplanNodes[Node] =
     val nodeClass = logits.nodeClass.argmax(Axis[FloorplanClasses])
-    val drawn = FloorplanClass.indicator(VType[Float32])(_.isNode).slice(Axis[FloorplanClasses].at(nodeClass))
+    val drawn = FloorplanClass.indicator(VType[Float32])(_.isPlaced).slice(Axis[FloorplanClasses].at(nodeClass))
     def placed(scores: Tensor2[Node, Pixel, V]) = Pixels.coordinates(scores.argmax(Axis[Pixel]), canvas) * drawn
     FloorplanNodes(nodeClass, placed(logits.startX), placed(logits.startY), placed(logits.endX), placed(logits.endY))
 

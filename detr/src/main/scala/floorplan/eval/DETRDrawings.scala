@@ -11,9 +11,9 @@ import dataset.Runs
 import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
 
+import syntheticFloorplansDataset.FloorplanCorpus
 import syntheticFloorplansDataset.FloorplanDrawing
 import syntheticFloorplansDataset.FloorplanGraph
-import syntheticFloorplansDataset.SyntheticFloorplans
 
 import java.nio.file.Path
 
@@ -42,7 +42,7 @@ def drawDetector(setup: DETRSetup, size: String): Unit =
     val detect = jit(DETR(checkpoints.load[TrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params).apply)
     val eachDrawing = drawings.zip(documents).map: (sample, document) =>
       Seq(FloorplanDrawing(noRecord, document, Axis[Channel]), FloorplanDrawing(FloorplanGraph.of(detect(sample.image)), emptyCanvas, Axis[Channel]))
-    val picture = Path.of(Runs.outputDir, s"detr-${SyntheticFloorplans.name}-$size-$step.png")
+    val picture = Path.of(Runs.outputDir, s"detr-${FloorplanCorpus.Plain.name}-$size-$step.png")
     DrawingTiles.write(eachDrawing, Rows, Across, picture)
     println(s"step $step | ${drawings.size} drawings written to $picture")
 

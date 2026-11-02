@@ -16,8 +16,8 @@ import me.shadaj.scalapy.py.SeqConverters
 import java.nio.file.Files
 import java.nio.file.Path
 
-/** One node of a floor plan, as the host holds it: its class, and the two ends of its segment as a
-  * fraction of the drawing's side.
+/** One node of a floor plan, as the host holds it: its class, and its two points (see [[Placement]])
+  * as a fraction of the drawing's side.
   */
 case class FloorplanNode(nodeClass: FloorplanClass, start: Point, end: Point)
 
@@ -95,12 +95,13 @@ object FloorplanGraph:
 
 /** Scoring a transcribed floor plan against the record its drawing was drawn from, as
   * [[RecordScoring]] scores the other corpora and in its terms: nodes are matched by what they say —
-  * their class and both ends within the tolerance — and relationships by the nodes they name.
+  * their class and both points within the tolerance, or for a room what borders it — and
+  * relationships by the nodes they name.
   */
 object FloorplanScoring:
 
   def score(target: FloorplanGraph, found: FloorplanGraph, tolerance: Float): RecordScoring.Scored =
-    val matched = matching(target.nodes, found.nodes, tolerance)
+    val matched = matching(target, found, tolerance)
     def multiset(edges: Seq[FloorplanEdge]) = edges.groupBy(identity).view.mapValues(_.length).toMap
     val wanted = multiset(target.edges.map(canonical))
     val present = multiset(found.edges.flatMap(resolve(matched)).map(canonical))
@@ -116,13 +117,25 @@ object FloorplanScoring:
       isExact = nodesExact && found.edges.length == present.values.sum && present == wanted
     )
 
-  /** Which found node stands for which target node, by slot. Greedy, as [[RecordScoring.matching]]. */
-  def matching(target: Seq[FloorplanNode], found: Seq[FloorplanNode], tolerance: Float): Map[Int, Int] =
-    target.zipWithIndex.foldLeft(Map.empty[Int, Int]):
-      case (matched, (node, index)) =>
-        found.indices
-          .find(slot => !matched.contains(slot) && isFound(node, found(slot), tolerance))
-          .fold(matched)(slot => matched + (slot -> index))
+  /** Which found node stands for which target node, by slot. Greedy, as [[RecordScoring.matching]].
+    *
+    * A room is found as the room of its class that borders the most of the same nodes; its
+    * borders are only known once the placed nodes are matched.
+    */
+  def matching(target: FloorplanGraph, found: FloorplanGraph, tolerance: Float): Map[Int, Int] =
+    val (rooms, placed) = target.nodes.indices.partition(!target.nodes(_).nodeClass.isPlaced)
+    val byPoints = placed.foldLeft(Map.empty[Int, Int]): (matched, index) =>
+      found.nodes.indices
+        .find(slot => !matched.contains(slot) && isFound(target.nodes(index), found.nodes(slot), tolerance))
+        .fold(matched)(slot => matched + (slot -> index))
+    def bordering(plan: FloorplanGraph, room: Int) =
+      plan.edges.collect { case FloorplanEdge(FloorplanRelationship.Borders, side, `room`) => side }.toSet
+    rooms.foldLeft(byPoints): (matched, index) =>
+      val wanted = bordering(target, index)
+      found.nodes.indices
+        .filter(slot => !matched.contains(slot) && found.nodes(slot).nodeClass == target.nodes(index).nodeClass)
+        .maxByOption(slot => bordering(found, slot).flatMap(byPoints.get).count(wanted))
+        .fold(matched)(slot => matched + (slot -> index))
 
   private def isFound(target: FloorplanNode, found: FloorplanNode, tolerance: Float): Boolean =
     def near(wanted: Point, at: Point) = (wanted.x - at.x).abs <= tolerance && (wanted.y - at.y).abs <= tolerance
@@ -139,8 +152,8 @@ object FloorplanScoring:
     if edge.relationship.isSymmetric && edge.subject > edge.obj then FloorplanEdge(edge.relationship, edge.obj, edge.subject) else edge
 
 /** What a model wrote down for every floor plan of a split, beside what the plan holds, in the
-  * dataset's own form: `<model>-synthetic-floorplans-<size>-<split>-<step>.jsonl` in
-  * [[Runs.outputDir]], one plan per line, in the order of the split.
+  * dataset's own form: `<model>-<corpus>-<size>-<split>-<step>.jsonl` in [[Runs.outputDir]], one plan
+  * per line, in the order of the split.
   *
   * {{{
   * {"plan": 0,
@@ -149,16 +162,19 @@ object FloorplanScoring:
   *  "matched":   {"0": [null, ...], "2": [1, ...], "4": [1, ...], "8": [1, ...]}}
   * }}}
   *
-  * Points are in the pixels the drawings are stored at, as in the dataset. The predicted nodes are in
+  * Points are in the pixels the drawings are stored at, as in the dataset, and a room has none. A
+  * furnished plan's furniture is among the nodes, not apart from them. The predicted nodes are in
   * the order the model wrote them down. `matched` holds, at every tolerance in pixels of the
   * `canvas` the model read, the target node each predicted node stands for, or `null`.
   */
 object FloorplanTranscripts:
 
-  def write(model: String, size: String, split: Split, step: Int, canvas: Int, plans: Seq[(FloorplanGraph, FloorplanGraph)]): Path =
-    val side = SyntheticFloorplans.storedSide
+  def write(model: String, corpus: FloorplanCorpus, size: String, split: Split, step: Int, canvas: Int, plans: Seq[(FloorplanGraph, FloorplanGraph)]): Path =
+    val side = corpus.storedSide
     def point(at: Point) = f"[${at.x * side}%.2f, ${at.y * side}%.2f]"
-    def node(at: FloorplanNode) = s"""{"class": "${at.nodeClass.recordName}", "points": [${point(at.start)}, ${point(at.end)}]}"""
+    def node(at: FloorplanNode) =
+      if at.nodeClass.isPlaced then s"""{"class": "${at.nodeClass.recordName}", "points": [${point(at.start)}, ${point(at.end)}]}"""
+      else s"""{"class": "${at.nodeClass.recordName}"}"""
     def edge(at: FloorplanEdge) = s"""{"type": "${at.relationship.recordName}", "nodes": [${at.subject}, ${at.obj}]}"""
     def record(at: FloorplanGraph) =
       s"""{"nodes": ${at.nodes.map(node).mkString("[", ", ", "]")}, "relationships": ${at.edges.map(edge).mkString("[", ", ", "]")}}"""
@@ -166,11 +182,11 @@ object FloorplanTranscripts:
     val lines = plans.zipWithIndex.map:
       case ((target, predicted), plan) =>
         val matched = Tolerances.map: tolerance =>
-          val standsFor = FloorplanScoring.matching(target.nodes, predicted.nodes, tolerance / canvas)
+          val standsFor = FloorplanScoring.matching(target, predicted, tolerance / canvas)
           s""""${tolerance.toInt}": ${predicted.nodes.indices.map(standsFor.get(_).fold("null")(_.toString)).mkString("[", ", ", "]")}"""
         s"""{"plan": $plan, "target": ${record(target)}, "predicted": ${record(predicted)}, "matched": ${matched.mkString("{", ", ", "}")}}"""
 
-    val path = Path.of(Runs.outputDir, s"$model-${SyntheticFloorplans.name}-$size-${split.fileName}-$step.jsonl")
+    val path = Path.of(Runs.outputDir, s"$model-${corpus.name}-$size-${split.fileName}-$step.jsonl")
     Files.createDirectories(path.getParent)
     Files.writeString(path, lines.mkString("", "\n", "\n"))
 
@@ -195,6 +211,7 @@ object FloorplanDrawing:
           plan.edges.map(_.subject).toPythonCopy,
           plan.edges.map(_.obj).toPythonCopy,
           FloorplanClass.values.map(_.recordName).toSeq.toPythonCopy,
+          FloorplanClass.values.map(_.placement.toString).toSeq.toPythonCopy,
           FloorplanRelationship.values.map(_.recordName).toSeq.toPythonCopy
         )
       )

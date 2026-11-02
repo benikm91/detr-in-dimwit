@@ -56,7 +56,7 @@ def scoreSetTranscriber(setup: D2SSetup, size: String, split: Split): Unit =
       .flatMap(batch => batch.map(sample => FloorplanGraph.of(sample.target).copy(edges = Seq.empty)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val csv = Metrics.Csv("d2s", SyntheticFloorplans.name, size, split, Runs.parameters(checkpoints.loadLatest[D2STrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("d2s", setup.corpus.name, size, split, Runs.parameters(checkpoints.loadLatest[D2STrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
   val scored = split match
@@ -69,7 +69,7 @@ def scoreSetTranscriber(setup: D2SSetup, size: String, split: Split): Unit =
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-      println(s"transcripts written to ${FloorplanTranscripts.write("d2s", size, split, step, setup.canvas, drawings)}")
+      println(s"transcripts written to ${FloorplanTranscripts.write("d2s", setup.corpus, size, split, step, setup.canvas, drawings)}")
 
 /** Plots what a trained model transcribes: every plan as it was drawn, the nodes of the record it
   * was drawn from, and the nodes the model wrote down, each drawn over the plan. Note that touching
@@ -164,7 +164,7 @@ class Transcriber(nodes: AxisExtent[Node], drawings: Int = 1):
     FloorplanGraph.of(jitTranscribe(params, stack(filled, Axis[Drawing]))).take(documents.size)
 
 private[floorplan] def open(setup: D2SSetup, split: Split) =
-  SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(split, setup.canvas)
+  SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(setup.corpus, split, setup.canvas)
 
 /** The likeliest of what the pool answers at `slot` — the node a drawing that is still `writing`
   * takes there, nothing for one that is not — and whether it is still writing after it.

@@ -54,7 +54,7 @@ def scoreTranscriber(setup: D2GSetup, size: String, split: Split): Unit =
       .flatMap(batch => batch.map(sample => FloorplanGraph.of(sample.target)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val csv = Metrics.Csv("d2g", SyntheticFloorplans.name, size, split, Runs.parameters(checkpoints.loadLatest[SavedParams].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("d2g", setup.corpus.name, size, split, Runs.parameters(checkpoints.loadLatest[SavedParams].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
   val scored = split match
@@ -67,7 +67,7 @@ def scoreTranscriber(setup: D2GSetup, size: String, split: Split): Unit =
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-      println(s"transcripts written to ${FloorplanTranscripts.write("d2g", size, split, step, setup.canvas, plans)}")
+      println(s"transcripts written to ${FloorplanTranscripts.write("d2g", setup.corpus, size, split, step, setup.canvas, plans)}")
 
 /** Plots what a trained model transcribes: every plan as it was drawn, the record it was drawn
   * from, and the record the model wrote down, each drawn over the plan. Note that touching the
@@ -179,4 +179,4 @@ class Transcriber(nodes: AxisExtent[Node], edges: AxisExtent[Edge], drawings: In
     FloorplanGraph.of(jitTranscribe(params, stack(filled, Axis[Drawing]))).take(documents.size)
 
 private def open(setup: D2GSetup, split: Split) =
-  SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(split, setup.canvas)
+  SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(setup.corpus, split, setup.canvas)

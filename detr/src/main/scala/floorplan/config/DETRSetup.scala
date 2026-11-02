@@ -2,7 +2,7 @@ package detr.floorplan.config
 
 import detr.config.DETRModelConfiguration
 import dataset.Runs
-import syntheticFloorplansDataset.SyntheticFloorplans
+import syntheticFloorplansDataset.FloorplanCorpus
 
 /** Everything a training run of the detector on the synthetic floor plans needs to know beyond the
   * model itself.
@@ -14,7 +14,7 @@ case class DETRSetup(
     checkpointRoot: String,
 
     /** How many objects the decoder may answer with: one query per node a plan can hold. */
-    numQueries: Int = SyntheticFloorplans.maxNodes,
+    numQueries: Int = FloorplanCorpus.Plain.maxNodes,
     numLayers: Int = 3,
     numHeads: Int = 4,
     embedding: Int = 128,
@@ -52,16 +52,16 @@ case class DETRSetup(
 
     seed: Int = 0
 ):
-  require(numQueries >= SyntheticFloorplans.maxNodes, s"$numQueries queries cannot answer for a plan of up to ${SyntheticFloorplans.maxNodes} nodes")
+  require(numQueries >= FloorplanCorpus.Plain.maxNodes, s"$numQueries queries cannot answer for a plan of up to ${FloorplanCorpus.Plain.maxNodes} nodes")
 
   override def toString: String =
-    s"DETRSetup(${SyntheticFloorplans.repoId}, layers=$numLayers, heads=$numHeads, embedding=$embedding, canvas=$canvas, " +
+    s"DETRSetup(${FloorplanCorpus.Plain.repoId}, layers=$numLayers, heads=$numHeads, embedding=$embedding, canvas=$canvas, " +
       s"queries=$numQueries, samples=$numSamples, batch=$batchSize)"
 
 object DETRSetup:
 
   def apply(size: DETRModelConfiguration): DETRSetup = DETRSetup(
-    checkpointRoot = s"${Runs.checkpointDir}/detr/${SyntheticFloorplans.name}-${size.name}",
+    checkpointRoot = s"${Runs.checkpointDir}/detr/${FloorplanCorpus.Plain.name}-${size.name}",
     numLayers = size.numLayers,
     numHeads = size.numHeads,
     embedding = size.embedding

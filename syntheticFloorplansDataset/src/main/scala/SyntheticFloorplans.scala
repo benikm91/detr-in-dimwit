@@ -20,32 +20,77 @@ trait FloorplanClasses derives Label
 /** Axis over the [[FloorplanRelationship]] values a relationship of a floor plan is classified into. */
 trait FloorplanRelationships derives Label
 
-/** What a node of a floor plan is: a wall, a door or a window, each a horizontal or vertical segment
-  * placed by its two ends, read rightwards or downwards.
+/** How a node of a floor plan is placed by its two points. */
+enum Placement:
+
+  /** Not at all: the node is its class alone. */
+  case Nowhere
+
+  /** As the ends of a horizontal or vertical segment, read rightwards or downwards. */
+  case Segment
+
+  /** As two corners of a box, its back-left and then its front-right, which also say which way it
+    * faces.
+    */
+  case Box
+
+/** What a node of a floor plan is: a wall, a door or a window, a room, or a piece of furniture.
   *
   * [[NoNode]] marks a position the record does not reach, which is also where a transcription of its
   * nodes stops.
   */
-enum FloorplanClass(val id: Int, val recordName: String):
+enum FloorplanClass(val id: Int, val recordName: String, val placement: Placement):
 
-  case NoNode extends FloorplanClass(0, "")
+  case NoNode extends FloorplanClass(0, "", Placement.Nowhere)
 
   /** A wall with the outside on one side, from a corner or junction to the next. */
-  case OutsideWall extends FloorplanClass(1, "outside wall")
+  case OutsideWall extends FloorplanClass(1, "outside wall", Placement.Segment)
 
   /** A wall with rooms on both sides, from a corner or junction to the next. */
-  case InsideWall extends FloorplanClass(2, "inside wall")
+  case InsideWall extends FloorplanClass(2, "inside wall", Placement.Segment)
 
   /** Placed by its jambs, in an inside wall. */
-  case Door extends FloorplanClass(3, "door")
+  case Door extends FloorplanClass(3, "door", Placement.Segment)
 
   /** Placed by its jambs, in an outside wall. */
-  case OutsideDoor extends FloorplanClass(4, "outside door")
+  case OutsideDoor extends FloorplanClass(4, "outside door", Placement.Segment)
 
   /** Placed by its jambs, in an outside wall. */
-  case Window extends FloorplanClass(5, "window")
+  case Window extends FloorplanClass(5, "window", Placement.Segment)
+
+  // A room is where the walls that border it say it is.
+  case Living extends FloorplanClass(6, "living", Placement.Nowhere)
+  case Kitchen extends FloorplanClass(7, "kitchen", Placement.Nowhere)
+  case Bedroom extends FloorplanClass(8, "bedroom", Placement.Nowhere)
+  case Bathroom extends FloorplanClass(9, "bathroom", Placement.Nowhere)
+  case Storage extends FloorplanClass(10, "storage", Placement.Nowhere)
+  case Balcony extends FloorplanClass(11, "balcony", Placement.Nowhere)
+
+  case Bed extends FloorplanClass(12, "bed", Placement.Box)
+  case Nightstand extends FloorplanClass(13, "nightstand", Placement.Box)
+  case Wardrobe extends FloorplanClass(14, "wardrobe", Placement.Box)
+  case Desk extends FloorplanClass(15, "desk", Placement.Box)
+  case Sofa extends FloorplanClass(16, "sofa", Placement.Box)
+  case Armchair extends FloorplanClass(17, "armchair", Placement.Box)
+  case CoffeeTable extends FloorplanClass(18, "coffee table", Placement.Box)
+  case Tv extends FloorplanClass(19, "tv", Placement.Box)
+  case Shelves extends FloorplanClass(20, "shelves", Placement.Box)
+  case Dining extends FloorplanClass(21, "dining", Placement.Box)
+  case Bistro extends FloorplanClass(22, "bistro", Placement.Box)
+  case Counter extends FloorplanClass(23, "counter", Placement.Box)
+  case Sink extends FloorplanClass(24, "sink", Placement.Box)
+  case Hob extends FloorplanClass(25, "hob", Placement.Box)
+  case Fridge extends FloorplanClass(26, "fridge", Placement.Box)
+  case Toilet extends FloorplanClass(27, "toilet", Placement.Box)
+  case Basin extends FloorplanClass(28, "basin", Placement.Box)
+  case Bathtub extends FloorplanClass(29, "bathtub", Placement.Box)
+  case Shower extends FloorplanClass(30, "shower", Placement.Box)
+  case Washer extends FloorplanClass(31, "washer", Placement.Box)
+  case Plant extends FloorplanClass(32, "plant", Placement.Box)
 
   def isNode: Boolean = this != FloorplanClass.NoNode
+
+  def isPlaced: Boolean = placement != Placement.Nowhere
 
 object FloorplanClass:
 
@@ -69,6 +114,9 @@ enum FloorplanRelationship(val id: Int, val recordName: String, val isSymmetric:
   /** A door, outside door or window, and the wall it stands in. */
   case In extends FloorplanRelationship(2, "in", false)
 
+  /** A wall, door, outside door or window, and a room on one side of it. */
+  case Borders extends FloorplanRelationship(3, "borders", false)
+
   def isRelationship: Boolean = this != FloorplanRelationship.NoRelationship
 
 object FloorplanRelationship:
@@ -79,9 +127,9 @@ object FloorplanRelationship:
   def indicator[V: IsFloating](vtype: VType[V])(holds: FloorplanRelationship => Boolean): Tensor1[FloorplanRelationships, V] =
     Tensor1(Axis[FloorplanRelationships], vtype).fromArray(values.map(relationship => if holds(relationship) then 1f else 0f))
 
-/** The nodes of a floor plan, laid out along `Node`: each a class and the two ends of a segment, as a
-  * fraction of the drawing's side. The positions a record does not reach hold [[FloorplanClass.NoNode]]
-  * and are placed nowhere.
+/** The nodes of a floor plan, laid out along `Node`: each a class and its two points (see
+  * [[Placement]]), as a fraction of the drawing's side. A node placed nowhere, and a position the
+  * record does not reach, which holds [[FloorplanClass.NoNode]], has both points at 0.
   */
 case class FloorplanNodes[Node](
     nodeClass: Tensor1[Node, Int32],
@@ -99,7 +147,14 @@ case class FloorplanEdges[Edge](
     relationship: Tensor1[Edge, Int32],
     subject: Tensor1[Edge, Int32],
     obj: Tensor1[Edge, Int32]
-)
+):
+
+  /** Every relationship's rank in `kindRank`, by what it is and the class of the node it starts
+    * from, which is one of `nodeClass`.
+    */
+  def ranked[Node: Label](kindRank: Tensor2[FloorplanRelationships, FloorplanClasses, Float32], nodeClass: Tensor1[Node, Int32])(using Label[Edge]): Tensor1[Edge, Float32] =
+    zipvmap(Axis[Edge])(relationship, nodeClass.slice(Axis[Node].at(subject))):
+      case (related, startsFrom) => kindRank.slice(Axis[FloorplanRelationships].at(related)).slice(Axis[FloorplanClasses].at(startsFrom))
 
 /** What a floor plan's drawing encodes: its nodes, and the relationships between them. */
 case class FloorplanRecord[Node, Edge](nodes: FloorplanNodes[Node], edges: FloorplanEdges[Edge])
@@ -119,21 +174,21 @@ case class FloorplanRecordBatch[S, Node, Edge](
 ):
 
   /** The same records, laid out again in `nodeSlots` and `edgeSlots` positions: their nodes by the
-    * rank of their class, their relationships by the rank of the class of the node they start from,
-    * lowest first, each in a fresh random order within a rank, and the positions they do not reach
-    * last. Drawn on the device.
+    * rank of their class, their relationships by the rank of their kind (see
+    * [[FloorplanEdges.ranked]]), lowest first, each in a fresh random order within a rank, and the
+    * positions they do not reach last. Drawn on the device.
     *
     * @param classRank Ranks [[FloorplanClass.NoNode]] above every class, so that the positions a
     *                  record does not reach come last. Ranking every other class the same lays the
     *                  nodes out in any order.
-    * @param startRank Ranking every class the same lays the relationships out in any order.
+    * @param kindRank Ranking every kind the same lays the relationships out in any order.
     */
   def permuted(
       key: Key,
       nodeSlots: AxisExtent[Node],
       edgeSlots: AxisExtent[Edge],
       classRank: Tensor1[FloorplanClasses, Float32] = FloorplanClass.indicator(VType[Float32])(!_.isNode),
-      startRank: Tensor1[FloorplanClasses, Float32] = FloorplanClass.indicator(VType[Float32])(_ => false)
+      kindRank: Tensor2[FloorplanRelationships, FloorplanClasses, Float32] = FloorplanRecordBatch.anyKind
   )(using Label[S], Label[Node], Label[Edge]): FloorplanRecordBatch[S, Node, Edge] =
     val plans = nodeClass.shape.extent(Axis[S])
     val (heldNodes, heldEdges) = (nodeClass.shape(Axis[Node]), relationship.shape(Axis[Edge]))
@@ -157,8 +212,8 @@ case class FloorplanRecordBatch[S, Node, Edge](
       zipvmap(Axis[S])(paddedRelationship, nothing(subject), nothing(obj), paddedClass, nodeOrders, edgeKeys):
         case (relationship, subject, obj, nodeClass, nodeOrder, key) =>
           val notThere = FloorplanRelationship.indicator(VType[Float32])(!_.isRelationship).slice(Axis[FloorplanRelationships].at(relationship))
-          val startsFrom = startRank.slice(Axis[FloorplanClasses].at(nodeClass.slice(Axis[Node].at(subject))))
-          val order = FloorplanRecordBatch.inOrder(startsFrom + notThere *! (startRank.max + 1f), key.item)
+          val kind = FloorplanEdges(relationship, subject, obj).ranked(kindRank, nodeClass)
+          val order = FloorplanRecordBatch.inOrder(kind + notThere *! (kindRank.max + 1f), key.item)
           val related = relationship.slice(Axis[Edge].at(order))
           // A relationship names the nodes it relates by their position, and a node that sat at
           // `at` before sits at `renamed(at)` now.
@@ -180,6 +235,10 @@ case class FloorplanRecordBatch[S, Node, Edge](
 
 object FloorplanRecordBatch:
 
+  /** Every kind of relationship ranked the same. */
+  def anyKind: Tensor2[FloorplanRelationships, FloorplanClasses, Float32] =
+    Tensor(Shape2(Axis[FloorplanRelationships] -> FloorplanRelationship.values.size, Axis[FloorplanClasses] -> FloorplanClass.values.size), VType[Float32]).fill(0f)
+
   /** A batch of records laid out in order, along `batch`. */
   def of[S: Label, Node: Label, Edge: Label](records: Seq[FloorplanGraph], batch: Axis[S], nodes: AxisExtent[Node], edges: AxisExtent[Edge]): FloorplanRecordBatch[S, Node, Edge] =
     val laidOut = records.map(_.record(nodes, edges))
@@ -195,44 +254,49 @@ object FloorplanRecordBatch:
     val shuffle = dimwit.Random.permutation(slots)(key).asFloat(VType[Float32])
     (rank *! slots.size.toFloat + shuffle).argsort(Axis[L])
 
+/** A corpus of synthetic floor plans, and how much room a record of it needs: the most nodes and
+  * relationships a record of any of its splits holds, which every slot is sized from.
+  */
+enum FloorplanCorpus(val name: String, val repoId: String, val storedSide: Int, val maxNodes: Int, val maxRelationships: Int):
+
+  /** Walls, doors and windows, how the walls are joined and which wall every opening stands in. */
+  case Plain extends FloorplanCorpus("synthetic-floorplans", "benikm91/synthetic-floorplans-for-transcription", 512, 73, 101)
+
+  /** Plans of a newer generator, furnished so that every room shows its kind: besides the walls and
+    * openings, the rooms, which walls and openings border each, and the furniture.
+    */
+  case Furnished extends FloorplanCorpus("synthetic-floorplans-furnished", "benikm91/synthetic-floorplans-with-furnitures-for-transcription", 256, 127, 207)
+
+object FloorplanCorpus:
+
+  /** The corpus a run names on its command line. */
+  def named(name: String): FloorplanCorpus =
+    values.find(_.name == name).getOrElse(sys.error(s"no floor plan corpus named '$name': ${values.map(_.name).mkString(", ")}"))
+
 /** Axis of the floor plans of a part. */
 private trait Plans derives Label
 
-/** DimWit wrapper around the synthetic floor plans
-  * ([[https://huggingface.co/datasets/benikm91/synthetic-floorplans-for-transcription]]), backed by
-  * ScalaPy. Its files are downloaded on first use and read from the Hugging Face cache after.
+/** DimWit wrapper around a [[FloorplanCorpus]], backed by ScalaPy. Its files are downloaded on first
+  * use and read from the Hugging Face cache after.
   *
   * Call `dimwit.initialize()` once before using this loader.
   *
   * {{{
   * dimwit.initialize()
   *
-  * val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(Split.Train, canvas = SyntheticFloorplans.storedSide)
+  * val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Edge])(FloorplanCorpus.Plain, Split.Train, canvas = 128)
   * val batch = data.batches(Axis[Batch] -> 64, afterSteps = 0).next()
   * }}}
   */
 object SyntheticFloorplans:
 
-  /** What a run names the corpus by on its command line and in what it writes. */
-  val name = "synthetic-floorplans"
-  val repoId = "benikm91/synthetic-floorplans-for-transcription"
-
-  /** The side the drawings are stored at in pixels, which a record's points are given in. */
-  val storedSide = 512
-
-  /** The most nodes and relationships a record of the training split holds, which every slot is
-    * sized from.
-    */
-  val maxNodes = 73
-  val maxRelationships = 101
-
-  /** Opens a split, its drawings read at `canvas` pixels a side: [[storedSide]] or a divisor of it,
-    * every pixel then the mean of the block it covers. A part is averaged down the first time it is
-    * read at a side, and kept beside the Hugging Face cache. A record's points are fractions of the
-    * side, so they are the same at any `canvas`.
+  /** Opens a split, its drawings read at `canvas` pixels a side: the corpus's stored side or a
+    * divisor of it, every pixel then the mean of the block it covers. A part is averaged down the
+    * first time it is read at a side, and kept beside the Hugging Face cache. A record's points are
+    * fractions of the side, so they are the same at any `canvas`.
     *
-    * A split is read in its parts — train in nine of 50,000 plans — each read when it is reached, so
-    * that only one part's records are held at a time; its drawings stay memory mapped.
+    * A split is read in its parts of 50,000 plans, each read when it is reached, so that only one
+    * part's records are held at a time; its drawings stay memory mapped.
     */
   def open[W: Label, H: Label, C: Label, Node: Label, Edge: Label](
       width: Axis[W],
@@ -240,18 +304,19 @@ object SyntheticFloorplans:
       channel: Axis[C],
       node: Axis[Node],
       edge: Axis[Edge]
-  )(split: Split, canvas: Int): SyntheticFloorplans[W, H, C, Node, Edge] =
-    require(storedSide % canvas == 0, s"drawings of $storedSide pixels do not average down to $canvas")
-    val parts = module.parts(repoId, split.fileName).as[Seq[py.Dynamic]].map: part =>
+  )(corpus: FloorplanCorpus, split: Split, canvas: Int): SyntheticFloorplans[W, H, C, Node, Edge] =
+    require(corpus.storedSide % canvas == 0, s"drawings of ${corpus.storedSide} pixels do not average down to $canvas")
+    val parts = module.parts(corpus.repoId, split.fileName).as[Seq[py.Dynamic]].map: part =>
       (part.applyDynamic("__getitem__")(0).as[String], part.applyDynamic("__getitem__")(1).as[Int])
-    require(parts.nonEmpty, s"no part of the split '${split.fileName}' in $repoId")
-    new SyntheticFloorplans(parts, canvas)
+    require(parts.nonEmpty, s"no part of the split '${split.fileName}' in ${corpus.repoId}")
+    new SyntheticFloorplans(corpus, parts, canvas)
 
   private[syntheticFloorplansDataset] lazy val module: py.Dynamic =
     PythonModules("synthetic_floorplans", "./syntheticFloorplansDataset/src/main/resources/python")
 
-/** A single split of the synthetic floor plans. Use [[SyntheticFloorplans.open]] to create one. */
+/** A single split of a [[FloorplanCorpus]]. Use [[SyntheticFloorplans.open]] to create one. */
 final class SyntheticFloorplans[W: Label, H: Label, C: Label, Node: Label, Edge: Label] private[syntheticFloorplansDataset] (
+    val corpus: FloorplanCorpus,
     /** Every part of the split, by name, and how many plans it holds, in seed order. */
     val parts: Seq[(String, Int)],
     /** The side the drawings are read at, in pixels. */
@@ -299,15 +364,15 @@ final class SyntheticFloorplans[W: Label, H: Label, C: Label, Node: Label, Edge:
         val pixels = images.applyDynamic("__getitem__")(py.Dynamic.global.slice(from, from + batch.size))
         Batch(liftPyTensor[(S, H, W), UInt8](pixels), recordsIn(parsed, batch, from))
 
-  override def toString: String = s"SyntheticFloorplans($repoId, plans=$numSamples, parts=${parts.size}, canvas=$canvas)"
+  override def toString: String = s"SyntheticFloorplans(${corpus.repoId}, plans=$numSamples, parts=${parts.size}, canvas=$canvas)"
 
   /** A part's drawings, memory mapped, and its records, parsed on the host: each read the first time
     * it is asked for and kept. Training comes back to every part many times, and parsing a part's
     * records takes far longer than training on them.
     */
   private final class Part(name: String):
-    lazy val drawings: py.Dynamic = module.drawings(repoId, name, canvas)
-    lazy val records: py.Dynamic = module.records(repoId, name, storedSide, maxNodes, maxRelationships,
+    lazy val drawings: py.Dynamic = module.drawings(corpus.repoId, name, canvas)
+    lazy val records: py.Dynamic = module.records(corpus.repoId, name, corpus.storedSide, corpus.maxNodes, corpus.maxRelationships,
       FloorplanClass.values.toSeq.map(_.recordName).toPythonCopy, FloorplanRelationship.values.toSeq.map(_.recordName).toPythonCopy)
 
   private val held: IndexedSeq[Part] = parts.map((name, _) => Part(name)).toIndexedSeq
