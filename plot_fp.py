@@ -21,6 +21,7 @@ CONFIGURATIONS = {
     ("d2s", "walls first"): "floorplans-d2s-walls-first",
     ("d2tok", "random"): "floorplans-d2tok-random",
     ("d2tok", "walls first"): "floorplans-d2tok-walls-first",
+    ("d2tok", "position"): "floorplans-d2tok-position",
 }
 # The tolerance the runs are compared at, in pixels of the 128 canvas the models read.
 TOLERANCE = 4
@@ -28,9 +29,10 @@ TOLERANCE = 4
 # Where the learning rate starts falling to zero.
 COOLDOWN = 160_000
 
-# A model is a hue, as in plot_vitruvion.py; a model without an order of its classes is dashed.
+# A model is a hue, as in plot_vitruvion.py, and an order a line style: solid by class, dashed with
+# no order, dotted by position.
 HUES = {"d2s": "#2a78d6", "DETR": "#eb6834", "d2tok": "#1baf7a"}
-DASHED = {"free", "random"}
+STYLES = {"–": "-", "walls first": "-", "free": "--", "random": "--", "position": ":"}
 
 
 def scored(seed_run):
@@ -81,7 +83,7 @@ def across_seeds(frames, column):
 
 def line(ax, key, mean, low, high):
     colour = HUES[key[0]]
-    ax.plot(mean.index, mean, color=colour, linestyle="--" if key[1] in DASHED else "-", marker="o", markersize=3, label=label(key))
+    ax.plot(mean.index, mean, color=colour, linestyle=STYLES[key[1]], marker="o", markersize=3, label=label(key))
     ax.fill_between(mean.index, low, high, color=colour, alpha=0.15, linewidth=0)
     ax.axvline(COOLDOWN, color="#c3c2b7", linewidth=1)
     ax.xaxis.set_major_formatter(lambda step, _: f"{step / 1000:.0f}k")

@@ -19,6 +19,7 @@ CONFIGURATIONS = [
     ("d2s", "walls first", "floorplans-d2s-walls-first"),
     ("d2tok", "random", "floorplans-d2tok-random"),
     ("d2tok", "walls first", "floorplans-d2tok-walls-first"),
+    ("d2tok", "position", "floorplans-d2tok-position"),
 ]
 
 LLM = RUNS / "floorplans-llm-fable-5-1"
