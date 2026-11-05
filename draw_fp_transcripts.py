@@ -58,7 +58,10 @@ def exact(plan):
 
 
 def lastScored(folder):
-    return max(folder.glob("*-test-*.jsonl"), key=lambda path: int(path.stem.rsplit("-", 1)[1]))
+    scored = list(folder.glob("*-test-*.jsonl"))
+    if not scored:
+        sys.exit(f"no test transcripts (*-test-<step>.jsonl) in {folder}")
+    return max(scored, key=lambda path: int(path.stem.rsplit("-", 1)[1]))
 
 
 out, *folders = [arg for arg in sys.argv[1:] if arg != "--disagree"]
