@@ -14,7 +14,6 @@ import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
 import dimwit.tensor.Tensor4
 
-import syntheticFloorplansDataset.FloorplanCorpus
 import syntheticFloorplansDataset.FloorplanGraph
 import syntheticFloorplansDataset.FloorplanScoring
 import syntheticFloorplansDataset.FloorplanTranscripts
@@ -31,7 +30,7 @@ def scoreWordTranscriber(setup: D2TokSetup, size: String, split: Split): Unit =
 
   val checkpoints = TensorTreeCheckpointer.latestIn(setup.checkpointRoot).getOrElse(sys.error(s"no training run in ${setup.checkpointRoot}"))
   println(s"reading ${checkpoints.rootPath}")
-  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(FloorplanCorpus.Plain, split, setup.canvas)
+  val data = SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(setup.corpus, split, setup.canvas)
   println(s"${data.numSamples} plans\n")
 
   val transcriber = Transcriber(setup.words, Axis[Token] -> setup.tokens, TranscribedTogether)
@@ -46,7 +45,7 @@ def scoreWordTranscriber(setup: D2TokSetup, size: String, split: Split): Unit =
       .flatMap(batch => batch.map(sample => FloorplanGraph.of(sample.target).copy(edges = Seq.empty)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val csv = Metrics.Csv("d2tok", FloorplanCorpus.Plain.name, size, split, Runs.parameters(checkpoints.loadLatest[D2TokTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("d2tok", setup.corpus.name, size, split, Runs.parameters(checkpoints.loadLatest[D2TokTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
   val scored = split match
@@ -59,7 +58,7 @@ def scoreWordTranscriber(setup: D2TokSetup, size: String, split: Split): Unit =
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-      println(s"transcripts written to ${FloorplanTranscripts.write("d2tok", FloorplanCorpus.Plain, size, split, step, setup.canvas, drawings)}")
+      println(s"transcripts written to ${FloorplanTranscripts.write("d2tok", setup.corpus, size, split, step, setup.canvas, drawings)}")
 
 /** How many drawings are transcribed together. A batch is one traced computation, so this is what
   * the split costs in calls rather than in work.

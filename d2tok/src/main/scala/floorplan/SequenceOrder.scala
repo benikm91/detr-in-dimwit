@@ -5,6 +5,7 @@ import dimwit.*
 import syntheticFloorplansDataset.FloorplanClass
 import syntheticFloorplansDataset.FloorplanClasses
 import syntheticFloorplansDataset.FloorplanRecordBatch
+import syntheticFloorplansDataset.Placement
 
 import scala.language.implicitConversions
 
@@ -19,8 +20,9 @@ enum SequenceOrder(val name: String):
   /** The order the dataset stores a record's nodes in. */
   case Kept extends SequenceOrder("kept")
 
-  /** Class by class — outside walls, inside walls, outside doors, doors, then windows — and in a
-    * fresh random order within a class: the walls first, then what stands in them.
+  /** Class by class — outside walls, inside walls, outside doors, doors, windows, then the rooms,
+    * then the furniture — and in a fresh random order within a class: the walls first, then what
+    * stands in them.
     */
   case WallsFirst extends SequenceOrder("walls-first")
 
@@ -49,7 +51,10 @@ object SequenceOrder:
     * them, after the ones that are.
     */
   private def classRank: Tensor1[FloorplanClasses, Float32] =
-    val classes = Seq(FloorplanClass.OutsideWall, FloorplanClass.InsideWall, FloorplanClass.OutsideDoor, FloorplanClass.Door, FloorplanClass.Window)
+    val classes =
+      Seq(FloorplanClass.OutsideWall, FloorplanClass.InsideWall, FloorplanClass.OutsideDoor, FloorplanClass.Door, FloorplanClass.Window) ++
+        FloorplanClass.values.filter(nodeClass => nodeClass.isNode && !nodeClass.isPlaced) ++
+        FloorplanClass.values.filter(_.placement == Placement.Box)
     Tensor1(Axis[FloorplanClasses], VType[Float32]).fromArray(FloorplanClass.values.map(nodeClass => classes.indexOf(nodeClass) match
       case -1 => classes.size.toFloat
       case at => at.toFloat

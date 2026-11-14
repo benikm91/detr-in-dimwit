@@ -24,11 +24,11 @@ import syntheticFloorplansDataset.FloorplanCorpus
   */
 
 @main
-def d2tokTrain(corpus: String, size: String, order: String, seed: Int): Unit =
-  if corpus == FloorplanCorpus.Plain.name then
-    val setup = d2tok.floorplan.config.D2TokSetup(D2TokModelConfiguration.named(size))
+def d2tokTrain(corpus: String, size: String, order: String, seed: Int): Unit = floorplans(corpus) match
+  case Some(plans) =>
+    val setup = d2tok.floorplan.config.D2TokSetup(plans, D2TokModelConfiguration.named(size))
     d2tok.floorplan.train.trainWordTranscriber(setup.copy(order = d2tok.floorplan.SequenceOrder.named(order), seed = seed))
-  else
+  case None =>
     val setup = d2tok.sketch.config.D2TokSetup(Corpus.named(corpus), D2TokModelConfiguration.named(size))
     d2tok.sketch.train.trainWordTranscriber(setup.copy(order = d2tok.sketch.SequenceOrder.named(order), seed = seed))
 
@@ -39,15 +39,16 @@ def d2tokEval(corpus: String, size: String): Unit = score(corpus, size, Split.Va
 def d2tokTest(corpus: String, size: String): Unit = score(corpus, size, Split.Test)
 
 @main
-def d2tokDraw(corpus: String, size: String): Unit =
-  if corpus == FloorplanCorpus.Plain.name then d2tok.floorplan.eval.drawWordTranscriber(d2tok.floorplan.config.D2TokSetup(D2TokModelConfiguration.named(size)), size)
-  else d2tok.sketch.eval.drawWordTranscriber(d2tok.sketch.config.D2TokSetup(Corpus.named(corpus), D2TokModelConfiguration.named(size)), size)
+def d2tokDraw(corpus: String, size: String): Unit = floorplans(corpus) match
+  case Some(plans) => d2tok.floorplan.eval.drawWordTranscriber(d2tok.floorplan.config.D2TokSetup(plans, D2TokModelConfiguration.named(size)), size)
+  case None        => d2tok.sketch.eval.drawWordTranscriber(d2tok.sketch.config.D2TokSetup(Corpus.named(corpus), D2TokModelConfiguration.named(size)), size)
 
-private def score(corpus: String, size: String, split: Split): Unit =
-  if corpus == FloorplanCorpus.Plain.name then
-    d2tok.floorplan.eval.scoreWordTranscriber(d2tok.floorplan.config.D2TokSetup(D2TokModelConfiguration.named(size)), size, split)
-  else
-    d2tok.sketch.eval.scoreWordTranscriber(d2tok.sketch.config.D2TokSetup(Corpus.named(corpus), D2TokModelConfiguration.named(size)), size, split)
+private def score(corpus: String, size: String, split: Split): Unit = floorplans(corpus) match
+  case Some(plans) => d2tok.floorplan.eval.scoreWordTranscriber(d2tok.floorplan.config.D2TokSetup(plans, D2TokModelConfiguration.named(size)), size, split)
+  case None        => d2tok.sketch.eval.scoreWordTranscriber(d2tok.sketch.config.D2TokSetup(Corpus.named(corpus), D2TokModelConfiguration.named(size)), size, split)
+
+/** The floor plan corpus a name stands for, if it stands for one rather than for a [[Corpus]] of sketches. */
+private def floorplans(corpus: String): Option[FloorplanCorpus] = FloorplanCorpus.values.find(_.name == corpus)
 
 @main
 def d2tokGraphTrain(size: String, nodeOrder: String, relationshipOrder: String, seed: Int): Unit =

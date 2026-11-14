@@ -31,12 +31,12 @@ class NodeHead[V: IsFloating](params: NodeHead.Params[V]) extends (Tensor2[Query
       endY = embeddings.vmap(Axis[Query])(endY)
     )
 
-  /** The scores settled. A query settling on [[FloorplanClass.NoNode]] answers with no node, which
-    * is placed nowhere.
+  /** The scores settled. A query settling on [[FloorplanClass.NoNode]] answers with no node. A node
+    * that is not there, or of a class that has no place, is placed nowhere.
     */
   def decide(logits: NodeLogits[V]): FloorplanNodes[Query] =
     val nodeClass = logits.nodeClass.argmax(Axis[FloorplanClasses])
-    val drawn = FloorplanClass.indicator(VType[Float32])(_.isNode).slice(Axis[FloorplanClasses].at(nodeClass))
+    val drawn = FloorplanClass.indicator(VType[Float32])(_.isPlaced).slice(Axis[FloorplanClasses].at(nodeClass))
     def placed(scores: Tensor2[Query, Pixel, V]) = Pixels.coordinates(scores.argmax(Axis[Pixel]), canvas) * drawn
     FloorplanNodes(nodeClass, placed(logits.startX), placed(logits.startY), placed(logits.endX), placed(logits.endY))
 

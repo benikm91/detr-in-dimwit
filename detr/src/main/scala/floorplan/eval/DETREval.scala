@@ -17,7 +17,6 @@ import dataset.report
 import deepwit.checkpointing.TensorTreeCheckpointer
 import dimwit.*
 import plotwit.*
-import syntheticFloorplansDataset.FloorplanCorpus
 import syntheticFloorplansDataset.FloorplanDrawing
 import syntheticFloorplansDataset.FloorplanGraph
 import syntheticFloorplansDataset.FloorplanScoring
@@ -75,7 +74,7 @@ def scoreDetector(setup: DETRSetup, size: String, split: Split): Unit =
       .map(sample => (FloorplanGraph.of(sample.target).copy(edges = Seq.empty), FloorplanGraph.of(detect(sample.image))))
       .toSeq
 
-  val csv = Metrics.Csv("detr", FloorplanCorpus.Plain.name, size, split, Runs.parameters(checkpoints.loadLatest[TrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("detr", setup.corpus.name, size, split, Runs.parameters(checkpoints.loadLatest[TrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
   val scored = split match
@@ -88,7 +87,7 @@ def scoreDetector(setup: DETRSetup, size: String, split: Split): Unit =
     csv.append(measured)
     if step == checkpoints.iterations.last then
       measured.foreach(row => RecordScoring.reportAt(row.tolerance, row.scored))
-      println(s"transcripts written to ${FloorplanTranscripts.write("detr", FloorplanCorpus.Plain, size, split, step, setup.canvas, drawings)}")
+      println(s"transcripts written to ${FloorplanTranscripts.write("detr", setup.corpus, size, split, step, setup.canvas, drawings)}")
 
 private[floorplan] def open(setup: DETRSetup, split: Split) =
-  SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(FloorplanCorpus.Plain, split, setup.canvas)
+  SyntheticFloorplans.open(Axis[Width], Axis[Height], Axis[Channel], Axis[Node], Axis[Relationship])(setup.corpus, split, setup.canvas)

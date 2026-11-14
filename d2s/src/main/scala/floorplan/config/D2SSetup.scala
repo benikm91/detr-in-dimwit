@@ -23,8 +23,9 @@ case class D2SSetup(
 
     // Train configuration
     checkpointRoot: String,
-    /** 200k steps of 512 plans, about 228 passes over the training split: 10k steps of warmup, 150k
-      * at the full learning rate and a 40k cooldown, with a checkpoint every 10k.
+    /** 200k steps of 512 plans, about 228 passes over the plain training split and 102 over the
+      * furnished one: 10k steps of warmup, 150k at the full learning rate and a 40k cooldown, with a
+      * checkpoint every 10k.
       */
     checkpointEverySamples: Int = 40_000 * 128,
     numSamples: Int = 800_000 * 128,

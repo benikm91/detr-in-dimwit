@@ -8,6 +8,8 @@ import syntheticFloorplansDataset.FloorplanCorpus
 
 /** Setup for a D2Tok experiment on the synthetic floor plans. */
 case class D2TokSetup(
+    corpus: FloorplanCorpus,
+
     // Model configuration
     numLayers: Int = 3,
     numHeads: Int = 4,
@@ -20,8 +22,9 @@ case class D2TokSetup(
 
     // Train configuration
     checkpointRoot: String,
-    /** 200k steps of 512 plans, about 228 passes over the training split: 10k steps of warmup, 150k
-      * at the full learning rate and a 40k cooldown, with a checkpoint every 10k.
+    /** 200k steps of 512 plans, about 228 passes over the plain training split and 102 over the
+      * furnished one: 10k steps of warmup, 150k at the full learning rate and a 40k cooldown, with a
+      * checkpoint every 10k.
       */
     checkpointEverySamples: Int = 40_000 * 128,
     numSamples: Int = 800_000 * 128,
@@ -44,14 +47,15 @@ case class D2TokSetup(
 ):
 
   val words: Words = Words(canvas)
-  val tokens: Int = words.tokens(FloorplanCorpus.Plain.maxNodes)
+  val tokens: Int = words.tokens(corpus.maxNodes)
 
-  override def toString: String = s"D2TokSetup(${FloorplanCorpus.Plain.repoId}, layers=$numLayers, order=${order.name}, heads=$numHeads, embedding=$embedding, canvas=$canvas, words=${words.size}, tokens=$tokens, samples=$numSamples, batch=$batchSize, seed=$seed)"
+  override def toString: String = s"D2TokSetup(${corpus.repoId}, layers=$numLayers, order=${order.name}, heads=$numHeads, embedding=$embedding, canvas=$canvas, words=${words.size}, tokens=$tokens, samples=$numSamples, batch=$batchSize, seed=$seed)"
 
 object D2TokSetup:
 
-  def apply(size: D2TokModelConfiguration): D2TokSetup = D2TokSetup(
-    checkpointRoot = s"${Runs.checkpointDir}/d2tok/${FloorplanCorpus.Plain.name}-${size.name}",
+  def apply(corpus: FloorplanCorpus, size: D2TokModelConfiguration): D2TokSetup = D2TokSetup(
+    corpus = corpus,
+    checkpointRoot = s"${Runs.checkpointDir}/d2tok/${corpus.name}-${size.name}",
     numLayers = size.numLayers,
     numHeads = size.numHeads,
     embedding = size.embedding

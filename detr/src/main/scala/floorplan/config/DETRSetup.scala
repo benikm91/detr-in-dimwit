@@ -8,13 +8,13 @@ import syntheticFloorplansDataset.FloorplanCorpus
   * model itself.
   */
 case class DETRSetup(
-    /** Where a run of this setup writes its checkpoints. One root per size, so that a run is never
-      * read back into a model of another shape.
+    corpus: FloorplanCorpus,
+
+    /** Where a run of this setup writes its checkpoints. One root per corpus and size, so that a run
+      * is never read back into a model of another shape.
       */
     checkpointRoot: String,
 
-    /** How many objects the decoder may answer with: one query per node a plan can hold. */
-    numQueries: Int = FloorplanCorpus.Plain.maxNodes,
     numLayers: Int = 3,
     numHeads: Int = 4,
     embedding: Int = 128,
@@ -23,8 +23,9 @@ case class DETRSetup(
       */
     canvas: Int = 128,
 
-    /** 200k steps of 512 plans, about 228 passes over the training split: 10k steps of warmup, 150k
-      * at the full learning rate and a 40k cooldown, with a checkpoint every 10k.
+    /** 200k steps of 512 plans, about 228 passes over the plain training split and 102 over the
+      * furnished one: 10k steps of warmup, 150k at the full learning rate and a 40k cooldown, with a
+      * checkpoint every 10k.
       */
     checkpointEverySamples: Int = 40_000 * 128,
     numSamples: Int = 800_000 * 128,
@@ -52,16 +53,19 @@ case class DETRSetup(
 
     seed: Int = 0
 ):
-  require(numQueries >= FloorplanCorpus.Plain.maxNodes, s"$numQueries queries cannot answer for a plan of up to ${FloorplanCorpus.Plain.maxNodes} nodes")
+
+  /** How many objects the decoder may answer with: one query per node a plan can hold. */
+  val numQueries: Int = corpus.maxNodes
 
   override def toString: String =
-    s"DETRSetup(${FloorplanCorpus.Plain.repoId}, layers=$numLayers, heads=$numHeads, embedding=$embedding, canvas=$canvas, " +
+    s"DETRSetup(${corpus.repoId}, layers=$numLayers, heads=$numHeads, embedding=$embedding, canvas=$canvas, " +
       s"queries=$numQueries, samples=$numSamples, batch=$batchSize)"
 
 object DETRSetup:
 
-  def apply(size: DETRModelConfiguration): DETRSetup = DETRSetup(
-    checkpointRoot = s"${Runs.checkpointDir}/detr/${FloorplanCorpus.Plain.name}-${size.name}",
+  def apply(corpus: FloorplanCorpus, size: DETRModelConfiguration): DETRSetup = DETRSetup(
+    corpus = corpus,
+    checkpointRoot = s"${Runs.checkpointDir}/detr/${corpus.name}-${size.name}",
     numLayers = size.numLayers,
     numHeads = size.numHeads,
     embedding = size.embedding
