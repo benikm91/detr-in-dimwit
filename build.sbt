@@ -20,7 +20,7 @@ lazy val munit = "org.scalameta" %% "munit" % "1.0.0" % Test
 
 lazy val root = project
   .in(file("."))
-  .aggregate(dataset, syntheticFloorplansDataset, documentEncoder, detr, detrBucket, d2s, d2g, d2seq, d2tok)
+  .aggregate(dataset, syntheticFloorplansDataset, documentEncoder, detr, detrBucket, d2s, d2g, d2seq, d2tok, d2gtok)
   .settings(
     name := "detr-root",
     publish / skip := true
@@ -103,4 +103,10 @@ lazy val d2tok = project
   .in(file("d2tok"))
   .dependsOn(dataset, syntheticFloorplansDataset, documentEncoder) // A language model of records to set beside d2s, sharing none of its code.
   .settings(name := "d2tok")
+  .settings(modelSettings)
+
+lazy val d2gtok = project
+  .in(file("d2gtok"))
+  .dependsOn(d2tok, d2g) // d2g's relationships, written on top of the nodes d2tok writes.
+  .settings(name := "d2gtok")
   .settings(modelSettings)
