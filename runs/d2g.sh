@@ -30,6 +30,11 @@
 #   SIZE=s CACHE_DIR=... OUTPUT_DIR=$HOME/.detr-cache/output/<new run name> \
 #     sbatch runs/d2g.sh finetune
 #
+# On drawings, `scratch` trains every part together from nothing instead, with no d2s run below it:
+#
+#   CORPUS=rectilinear SIZE=s-deep CACHE_DIR=... OUTPUT_DIR=$HOME/.detr-cache/output/<run name> \
+#     sbatch runs/d2g.sh scratch
+#
 # `runs/queue_d2g.sh` is the usual way in; `sbatch` hands the environment on to the job.
 # CACHE_DIR is where the floor plans land, so that the next job does not download them again.
 # OUTPUT_DIR is where `d2g-<corpus>-<size>-<split>.csv` ends up: what is left of the job once the
@@ -40,8 +45,8 @@
 
 set -euo pipefail
 
-STAGE="${1:?say which stage to run: train, finetune, eval, test or draw}"
-[[ $STAGE == train || $STAGE == finetune || $STAGE == eval || $STAGE == test || $STAGE == draw ]] || { echo "no stage named '$STAGE': train, finetune, eval, test or draw" >&2; exit 2; }
+STAGE="${1:?say which stage to run: train, scratch, finetune, eval, test or draw}"
+[[ $STAGE == train || $STAGE == scratch || $STAGE == finetune || $STAGE == eval || $STAGE == test || $STAGE == draw ]] || { echo "no stage named '$STAGE': train, scratch, finetune, eval, test or draw" >&2; exit 2; }
 
 : "${CACHE_DIR:?set CACHE_DIR to a directory that outlives the job, where the corpora are cached}"
 : "${OUTPUT_DIR:?set OUTPUT_DIR to a directory that outlives the job, where the metrics are written}"
@@ -97,7 +102,7 @@ continueLater() {
   scontrol requeue "$SLURM_JOB_ID"
 }
 # Any other stage has nothing to carry on from, so it ignores the warning and runs to the limit.
-if [[ $STAGE == train || $STAGE == finetune ]]; then trap continueLater USR1; else trap '' USR1; fi
+if [[ $STAGE == train || $STAGE == scratch || $STAGE == finetune ]]; then trap continueLater USR1; else trap '' USR1; fi
 
 module load sarus/1.6.4
 
@@ -146,7 +151,7 @@ sarus run \
     # What produced the metrics beside it: the commits every part of the stack was built from, the
     # JAX that ran them, and the GPUs they ran on. Written before training, so that a run cut short
     # still says what it was.
-    if [[ $stage == train || $stage == finetune ]]; then
+    if [[ $stage == train || $stage == scratch || $stage == finetune ]]; then
       jaxVersion="$(uv run python -c "import jax; print(jax.__version__)" 2>/dev/null || echo unknown)"
       gpus="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | paste -sd ";" - || true)"
       [[ -n $gpus ]] || gpus=unknown
@@ -178,6 +183,7 @@ JSON
 
     case "$stage" in
       train) sbt "d2g/runMain d2gTrain $corpus $size $order $relationshipOrder $seed" ;;
+      scratch) sbt "d2g/runMain d2gTrainFromScratch $corpus $size $order $relationshipOrder $seed" ;;
       finetune) sbt "d2g/runMain d2gFineTune $corpus $size $order $relationshipOrder $seed /finetuned/$(basename "$finetuneFrom")" ;;
       eval) sbt "d2g/runMain d2gEval $corpus $size" ;;
       test) sbt "d2g/runMain d2gTest $corpus $size" ;;
@@ -202,7 +208,7 @@ queueNext() {
   echo "queued $1 as $nextId"
 }
 case "$STAGE" in
-  train | finetune)
+  train | scratch | finetune)
     echo "job finished, checkpoints in $CHECKPOINT_DIR"
     queueNext eval
     ;;

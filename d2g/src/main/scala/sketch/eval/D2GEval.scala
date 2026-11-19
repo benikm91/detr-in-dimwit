@@ -4,7 +4,7 @@ import d2g.*
 import d2g.model.*
 import d2g.sketch.config.*
 import d2g.sketch.model.*
-import d2g.sketch.train.D2GTrainState
+import d2g.sketch.train.SavedParams
 import d2s.eval.chosen
 import d2s.sketch.eval.answeredAt
 import dataset.DrawingDataset
@@ -48,7 +48,7 @@ def scoreTranscriber(setup: D2GSetup, size: String, split: Split): Unit =
       .flatMap(batch => batch.map(sample => RecordGraph.of(sample.target)).zip(transcriber(params, batch.map(_.image))))
       .toSeq
 
-  val csv = Metrics.Csv("d2g", setup.corpus.name, size, split, Runs.parameters(checkpoints.loadLatest[D2GTrainState].get.params), Runs.trainingSeconds(checkpoints.rootPath))
+  val csv = Metrics.Csv("d2g", setup.corpus.name, size, split, Runs.parameters(checkpoints.loadLatest[SavedParams].get.params), Runs.trainingSeconds(checkpoints.rootPath))
   println(s"writing to ${csv.path}")
 
   val scored = split match
@@ -56,7 +56,7 @@ def scoreTranscriber(setup: D2GSetup, size: String, split: Split): Unit =
     case _          => checkpoints.iterations.reverse
   scored.foreach: step =>
     println(s"scoring checkpoint $step")
-    val drawings = transcribed(checkpoints.load[D2GTrainState](step).getOrElse(sys.error(s"no checkpoint $step")).params)
+    val drawings = transcribed(checkpoints.load[SavedParams](step).getOrElse(sys.error(s"no checkpoint $step")).params)
     val measured = Tolerances.map(tolerance => Metrics.Row(step, None, tolerance, drawings.map((target, written) => RecordScoring.score(target, written, tolerance / setup.corpus.canvas))))
     csv.append(measured)
     if step == checkpoints.iterations.last then

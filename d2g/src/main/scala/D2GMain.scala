@@ -14,6 +14,8 @@ import syntheticFloorplansDataset.FloorplanCorpus
   *
   * [[d2gTrain]] trains a run in an order of the nodes and of the relationships, from a seed, so that a
   * setting can be run again.
+  * [[d2gTrainFromScratch]] trains every part of a model of drawings, nodes and relationships
+  * together, from nothing.
   * [[d2gFineTune]] trains every part of a floor plan run further, from one of its checkpoints.
   * [[d2gEval]] scores the newest run of that corpus and size (greedy decoding).
   * [[d2gTest]] scores its last checkpoint on the test split.
@@ -35,6 +37,14 @@ def d2gTrain(corpus: String, size: String, order: String, relationshipOrder: Str
         relationshipOrder = d2g.sketch.RelationshipOrder.named(relationshipOrder),
         seed = seed
       ))
+
+@main
+def d2gTrainFromScratch(corpus: String, size: String, order: String, relationshipOrder: String, seed: Int): Unit =
+  d2g.sketch.train.trainFromScratch(sketchSetup(corpus, size).copy(
+    nodeOrder = d2s.sketch.NodeOrder.named(order),
+    relationshipOrder = d2g.sketch.RelationshipOrder.named(relationshipOrder),
+    seed = seed
+  ))
 
 /** As long as training from scratch, at a learning rate that leaves what the model already knows
   * largely in place.
