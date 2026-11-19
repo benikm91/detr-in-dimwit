@@ -12,8 +12,8 @@
 #SBATCH --requeue
 #SBATCH --open-mode=append
 #
-# Trains the graph transcriber on a corpus of synthetic floor plans, scores every checkpoint, and
-# leaves the metrics as one CSV.
+# Trains the graph transcriber on a corpus of synthetic floor plans or of drawings, scores every
+# checkpoint, and leaves the metrics as one CSV.
 # The batch is split over the GPUs the job gets, so `--gres=gpu:N` sets how much of it each GPU
 # holds, not how big it is. `runs/queue_d2g.sh` asks for as many as the model size needs.
 #
@@ -58,7 +58,7 @@ if [[ $STAGE == finetune ]]; then
   mounts+=(--mount=type=bind,source="$(dirname "$FINETUNE_FROM")",destination=/finetuned,readonly)
 fi
 
-# Which floor plans to train on and how big a model — the names `FloorplanCorpus` and
+# Which corpus to train on and how big a model — the names `FloorplanCorpus`, `Corpus` and
 # `D2SModelConfiguration` know.
 export CORPUS="${CORPUS:-synthetic-floorplans}"
 export SIZE="${SIZE:-s}"
@@ -66,12 +66,14 @@ export SIZE="${SIZE:-s}"
 # Which seed a run trains from, so that a setting can be run again: SEED=1 for a repeat.
 export SEED="${SEED:-0}"
 
-# Which order a run writes the nodes of a record in — the names `d2s.floorplan.NodeOrder.named`
-# knows: free, walls-first or walls-last.
-export ORDER="${ORDER:-free}"
+# Which order a run writes the nodes of a record in, the one of the d2s run below it — the names
+# `d2s.floorplan.NodeOrder.named` knows (free, walls-first or walls-last) on floor plans,
+# `d2s.sketch.NodeOrder.named` (free, simplest-first or simplest-last) on drawings.
+if [[ $CORPUS == synthetic-floorplans* ]]; then export ORDER="${ORDER:-free}"; else export ORDER="${ORDER:-simplest-first}"; fi
 
 # Which order a run writes the relationships of a record in — the names
-# `d2g.floorplan.RelationshipOrder.named` knows: free or by-kind.
+# `d2g.floorplan.RelationshipOrder.named` or `d2g.sketch.RelationshipOrder.named` knows: free or
+# by-kind.
 export RELATIONSHIP_ORDER="${RELATIONSHIP_ORDER:-free}"
 
 # Which branch the container builds, as pushed to GitHub — a change that is not pushed is not

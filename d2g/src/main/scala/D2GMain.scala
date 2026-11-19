@@ -1,47 +1,71 @@
-import d2g.floorplan.RelationshipOrder
-import d2g.floorplan.config.D2GSetup
-import d2g.floorplan.eval.*
-import d2g.floorplan.train.*
 import d2s.config.D2SModelConfiguration
-import d2s.floorplan.NodeOrder
+import dataset.Corpus
 import dataset.DrawingDataset.Split
 import syntheticFloorplansDataset.FloorplanCorpus
 
-/** Entry points for the D2G experiments on a corpus of synthetic floor plans (see
-  * [[FloorplanCorpus]]), at a model configuration (e.g., `s`):
-  * `sbt "d2g/runMain d2gTrain synthetic-floorplans s free free 0"`. See [[D2SModelConfiguration]] for
-  * the sizes, [[NodeOrder.named]] for the orders of the nodes and [[RelationshipOrder.named]] for
-  * those of the relationships.
+/** Entry points for the D2G experiments, on a corpus (e.g., `rectilinear` or `synthetic-floorplans`)
+  * at a model configuration (e.g., `s`): `sbt "d2g/runMain d2gTrain synthetic-floorplans s free free 0"`.
+  *
+  * Each kind of record has a model of its own: the drawing corpora (see [[Corpus]]) are read by
+  * [[d2g.sketch]], the synthetic floor plans (see [[FloorplanCorpus]]) by [[d2g.floorplan]]. The
+  * corpus names which, and the orders are that model's: the nodes' one of [[d2s.sketch.NodeOrder.named]]
+  * or [[d2s.floorplan.NodeOrder.named]], the relationships' one of [[d2g.sketch.RelationshipOrder.named]]
+  * or [[d2g.floorplan.RelationshipOrder.named]]. See [[D2SModelConfiguration]] for the sizes.
   *
   * [[d2gTrain]] trains a run in an order of the nodes and of the relationships, from a seed, so that a
   * setting can be run again.
-  * [[d2gFineTune]] trains every part of such a run further, from one of its checkpoints.
+  * [[d2gFineTune]] trains every part of a floor plan run further, from one of its checkpoints.
   * [[d2gEval]] scores the newest run of that corpus and size (greedy decoding).
   * [[d2gTest]] scores its last checkpoint on the test split.
-  * [[d2gPlot]] shows what it transcribes (visualization).
+  * [[d2gPlot]] shows what a floor plan run transcribes (visualization).
   */
 
 @main
 def d2gTrain(corpus: String, size: String, order: String, relationshipOrder: String, seed: Int): Unit =
-  trainTranscriber(setup(corpus, size).copy(nodeOrder = NodeOrder.named(order), relationshipOrder = RelationshipOrder.named(relationshipOrder), seed = seed))
+  floorplans(corpus) match
+    case Some(plans) =>
+      d2g.floorplan.train.trainTranscriber(floorplanSetup(plans, size).copy(
+        nodeOrder = d2s.floorplan.NodeOrder.named(order),
+        relationshipOrder = d2g.floorplan.RelationshipOrder.named(relationshipOrder),
+        seed = seed
+      ))
+    case None =>
+      d2g.sketch.train.trainTranscriber(sketchSetup(corpus, size).copy(
+        nodeOrder = d2s.sketch.NodeOrder.named(order),
+        relationshipOrder = d2g.sketch.RelationshipOrder.named(relationshipOrder),
+        seed = seed
+      ))
 
 /** As long as training from scratch, at a learning rate that leaves what the model already knows
   * largely in place.
   */
 @main
 def d2gFineTune(corpus: String, size: String, order: String, relationshipOrder: String, seed: Int, checkpoint: String): Unit =
-  fineTuneTranscriber(
-    setup(corpus, size).copy(nodeOrder = NodeOrder.named(order), relationshipOrder = RelationshipOrder.named(relationshipOrder), seed = seed, learningRate = 1e-4f),
+  d2g.floorplan.train.fineTuneTranscriber(
+    floorplanSetup(FloorplanCorpus.named(corpus), size).copy(
+      nodeOrder = d2s.floorplan.NodeOrder.named(order),
+      relationshipOrder = d2g.floorplan.RelationshipOrder.named(relationshipOrder),
+      seed = seed,
+      learningRate = 1e-4f
+    ),
     checkpoint
   )
 
 @main
-def d2gEval(corpus: String, size: String): Unit = scoreTranscriber(setup(corpus, size), size, Split.Validation)
+def d2gEval(corpus: String, size: String): Unit = score(corpus, size, Split.Validation)
 
 @main
-def d2gTest(corpus: String, size: String): Unit = scoreTranscriber(setup(corpus, size), size, Split.Test)
+def d2gTest(corpus: String, size: String): Unit = score(corpus, size, Split.Test)
 
 @main
-def d2gPlot(corpus: String, size: String): Unit = plotTranscriber(setup(corpus, size))
+def d2gPlot(corpus: String, size: String): Unit = d2g.floorplan.eval.plotTranscriber(floorplanSetup(FloorplanCorpus.named(corpus), size))
 
-private def setup(corpus: String, size: String): D2GSetup = D2GSetup(FloorplanCorpus.named(corpus), D2SModelConfiguration.named(size))
+private def score(corpus: String, size: String, split: Split): Unit = floorplans(corpus) match
+  case Some(plans) => d2g.floorplan.eval.scoreTranscriber(floorplanSetup(plans, size), size, split)
+  case None        => d2g.sketch.eval.scoreTranscriber(sketchSetup(corpus, size), size, split)
+
+private def floorplans(corpus: String): Option[FloorplanCorpus] = FloorplanCorpus.values.find(_.name == corpus)
+
+private def floorplanSetup(corpus: FloorplanCorpus, size: String) = d2g.floorplan.config.D2GSetup(corpus, D2SModelConfiguration.named(size))
+
+private def sketchSetup(corpus: String, size: String) = d2g.sketch.config.D2GSetup(Corpus.named(corpus), D2SModelConfiguration.named(size))

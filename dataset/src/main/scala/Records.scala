@@ -147,9 +147,9 @@ case class RecordBatch[S, Node, Edge](
     obj: Tensor2[S, Edge, Int32]
 ):
 
-  /** The same records, laid out again in `nodeSlots` and `edgeSlots` positions: their nodes by the
-    * rank of their class, lowest first, their relationships in any order, each in a fresh random
-    * order within a rank, and the positions they do not reach last.
+  /** The same records, laid out again in `nodeSlots` and `edgeSlots` positions: their nodes and
+    * their relationships each by the rank of their class, lowest first, in a fresh random order
+    * within a rank, and the positions they do not reach last.
     *
     * What has no order is the model's to be indifferent to, which is what drawing a new one every
     * step is for. This one is drawn on the device — nothing is read back to lay it out again.
@@ -157,12 +157,14 @@ case class RecordBatch[S, Node, Edge](
     * @param classRank Ranks [[NodeClass.NoNode]] above every class, so that the positions a record
     *                  does not reach come last. Ranking every other class the same lays the nodes
     *                  out in any order.
+    * @param edgeClassRank The same for the relationships and [[EdgeClass.NoEdge]].
     */
   def permuted(
       key: Key,
       nodeSlots: AxisExtent[Node],
       edgeSlots: AxisExtent[Edge],
-      classRank: Tensor1[NodeClasses, Float32] = NodeClass.indicator(VType[Float32])(!_.isNode)
+      classRank: Tensor1[NodeClasses, Float32] = NodeClass.indicator(VType[Float32])(!_.isNode),
+      edgeClassRank: Tensor1[EdgeClasses, Float32] = EdgeClass.indicator(VType[Float32])(!_.isEdge)
   )(using Label[S], Label[Node], Label[Edge]): RecordBatch[S, Node, Edge] =
     val drawings = nodeClass.shape.extent(Axis[S])
     val padded = paddedTo(nodeSlots, edgeSlots, drawings)
@@ -175,7 +177,7 @@ case class RecordBatch[S, Node, Edge](
     val (edgeClasses, subjects, objs) =
       zipvmap(Axis[S])(padded.edgeClass, padded.subject, padded.obj, nodeOrders, edgeKeys):
         case (edgeClass, subject, obj, nodeOrder, key) =>
-          RecordBatch.permutedEdges(RecordEdges(edgeClass, subject, obj), nodeOrder, key.item)
+          RecordBatch.permutedEdges(RecordEdges(edgeClass, subject, obj), nodeOrder, key.item, edgeClassRank)
     RecordBatch(classes, constructions, startXs, startYs, endXs, endYs, midXs, midYs, edgeClasses, subjects, objs)
 
   /** The same records in as many positions, the ones they do not reach holding nothing. */
@@ -232,15 +234,16 @@ object RecordBatch:
       order
     )
 
-  /** One record's relationships in a fresh random order, naming the nodes by where `nodeOrder`
-    * has just put them.
+  /** One record's relationships by the rank of their class, in a fresh random order within a rank,
+    * naming the nodes by where `nodeOrder` has just put them.
     */
   private def permutedEdges[Node: Label, Edge: Label](
       edges: RecordEdges[Edge],
       nodeOrder: Tensor1[Node, Int32],
-      key: Key
+      key: Key,
+      classRank: Tensor1[EdgeClasses, Float32]
   ): (Tensor1[Edge, Int32], Tensor1[Edge, Int32], Tensor1[Edge, Int32]) =
-    val order = inOrder(EdgeClass.indicator(VType[Float32])(!_.isEdge).slice(Axis[EdgeClasses].at(edges.edgeClass)), key)
+    val order = inOrder(classRank.slice(Axis[EdgeClasses].at(edges.edgeClass)), key)
     val classes = edges.edgeClass.slice(Axis[Edge].at(order))
     // A relationship names the nodes it relates by their position, and a node that sat at `at`
     // before sits at `renamed(at)` now.
