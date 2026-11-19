@@ -24,7 +24,6 @@ import deepwit.optimizer.select
 import deepwit.training.Monitor
 import deepwit.training.tapEvery
 import dimwit.*
-import dimwit.TreeOf.ops.asFloats
 import dimwit.jax.Jax
 import dimwit.optimizer.Adam
 import dimwit.optimizer.AdamW
@@ -37,7 +36,8 @@ import scala.language.implicitConversions
   * of a record — its nodes, then its relationships — predicted from the document and the words
   * before it.
   *
-  * Otherwise a step is the one of [[d2tok.sketch.train.trainWordTranscriber]], and so is its state.
+  * Otherwise a step is the one of [[d2tok.sketch.train.trainWordTranscriber]], but the model runs
+  * in Float32; its state is the same.
   */
 def trainGraphTranscriber(setup: D2TokGraphSetup): Unit =
   println(s"training $setup")
@@ -89,13 +89,13 @@ def trainGraphTranscriber(setup: D2TokGraphSetup): Unit =
       images: Tensor4[S, Width, Height, Channel, Float32],
       records: RecordBatch[S, Node, Relationship]
   )(params: D2Tok.Params[Float32]): Tensor0[Float32] =
-    val model = D2Tok(params.asFloats(VType[Float16]))
-    zipvmap(Axis[S])(images.asFloat(VType[Float16]), records.nodeClass, records.construction, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY, records.edgeClass, records.subject, records.obj):
+    val model = D2Tok(params)
+    zipvmap(Axis[S])(images, records.nodeClass, records.construction, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY, records.edgeClass, records.subject, records.obj):
       case (image, nodeClass, construction, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj) =>
         val record = Record(nodeClass, construction, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj)
         val (written, count) = setup.words.written(record, tokens)
         val read = concatenate(Tensor0(setup.words.start).prependAxis(Axis[Token]), written.slice(Axis[Token].at(0 until tokens.size - 1)), Axis[Token])
-        val scored = model.logits(image, read).asFloat(VType[Float32])
+        val scored = model.logits(image, read)
         val missed = zipvmap(Axis[Token])(scored, written)((scores, word) => -scores.logSoftmax(Axis[Word]).slice(Axis[Word].at(word)))
         (missed * (positions <=! (count - 1)).asFloat(VType[Float32])).sum / count.asFloat(VType[Float32])
     .mean

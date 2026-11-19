@@ -26,7 +26,6 @@ import deepwit.optimizer.select
 import deepwit.training.Monitor
 import deepwit.training.tapEvery
 import dimwit.*
-import dimwit.TreeOf.ops.asFloats
 import dimwit.jax.Jax
 import dimwit.optimizer.Adam
 import dimwit.optimizer.AdamState
@@ -53,7 +52,7 @@ case class SavedParams(params: D2G.Params[Float32])
 /** Trains every part of a graph transcription model from nothing — the document encoder and the
   * nodes together with the relationships, at the cost of the nodes plus that of the relationships.
   *
-  * Otherwise a step is the one of [[trainTranscriber]].
+  * Otherwise a step is the one of [[trainTranscriber]], but the model runs in Float32.
   */
 def trainFromScratch(setup: D2GSetup): Unit =
   println(s"training from scratch $setup")
@@ -101,11 +100,11 @@ def trainFromScratch(setup: D2GSetup): Unit =
       records: RecordBatch[S, Node, Edge],
       asked: Key
   )(params: D2G.Params[Float32]): Tensor0[Float32] =
-    val model = D2G(params.asFloats(VType[Float16]))
-    zipvmap(Axis[S])(images.asFloat(VType[Float16]), records.nodeClass, records.construction, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY, records.edgeClass, records.subject, records.obj):
+    val model = D2G(params)
+    zipvmap(Axis[S])(images, records.nodeClass, records.construction, records.startX, records.startY, records.endX, records.endY, records.midX, records.midY, records.edgeClass, records.subject, records.obj):
       case (image, nodeClass, construction, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj) =>
         val target = Record(nodeClass, construction, startX, startY, endX, endY, midX, midY, edgeClass, subject, obj)
-        val scored = model.logits(image, target, asked).asFloats(VType[Float32])
+        val scored = model.logits(image, target, asked)
         nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target)
     .mean
 
