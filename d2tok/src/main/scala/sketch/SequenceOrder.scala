@@ -48,7 +48,7 @@ object SequenceOrder:
   /** Where every class comes in [[ByClass]]: the classes not listed, [[NodeClass.NoNode]] among them,
     * after the ones that are.
     */
-  private def classRank: Tensor1[NodeClasses, Float32] =
+  def classRank: Tensor1[NodeClasses, Float32] =
     val classes = Seq(NodeClass.Point, NodeClass.Line, NodeClass.Circle, NodeClass.Arc, NodeClass.Annotation)
     Tensor1(Axis[NodeClasses], VType[Float32]).fromArray(NodeClass.values.map(nodeClass => classes.indexOf(nodeClass) match
       case -1 => classes.size.toFloat

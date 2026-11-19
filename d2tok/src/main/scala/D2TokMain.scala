@@ -18,9 +18,10 @@ import syntheticFloorplansDataset.FloorplanCorpus
   * [[d2tokTest]] scores its last checkpoint on the test split.
   * [[d2tokDraw]] writes what every checkpoint transcribed as a picture.
   *
-  * The `d2tokGraph` entry points do the same for the floor plans with their relationships, written
-  * by [[d2tok.floorplangraph]] after the nodes, in an order of their own:
-  * `sbt "d2tok/runMain d2tokGraphTrain s-deep walls-first by-nodes 0"`.
+  * The `d2tokGraph` entry points do the same for records with their relationships, written after the
+  * nodes in an order of their own: the plain floor plans by [[d2tok.floorplangraph]], the drawing
+  * corpora that hold relationships by [[d2tok.sketchgraph]], in a single sequence:
+  * `sbt "d2tok/runMain d2tokGraphTrain rectilinear s-deep class by-kind 0"`.
   */
 
 @main
@@ -51,19 +52,37 @@ private def score(corpus: String, size: String, split: Split): Unit = floorplans
 private def floorplans(corpus: String): Option[FloorplanCorpus] = FloorplanCorpus.values.find(_.name == corpus)
 
 @main
-def d2tokGraphTrain(size: String, nodeOrder: String, relationshipOrder: String, seed: Int): Unit =
-  val setup = D2TokGraphSetup(D2TokModelConfiguration.named(size))
-  d2tok.floorplangraph.train.trainGraphTranscriber(setup.copy(
-    nodeOrder = d2tok.floorplan.SequenceOrder.named(nodeOrder),
-    relationshipOrder = d2tok.floorplangraph.RelationshipOrder.named(relationshipOrder),
-    seed = seed
-  ))
+def d2tokGraphTrain(corpus: String, size: String, nodeOrder: String, relationshipOrder: String, seed: Int): Unit = floorplans(corpus) match
+  case Some(plans) =>
+    d2tok.floorplangraph.train.trainGraphTranscriber(floorplanGraphSetup(plans, size).copy(
+      nodeOrder = d2tok.floorplan.SequenceOrder.named(nodeOrder),
+      relationshipOrder = d2tok.floorplangraph.RelationshipOrder.named(relationshipOrder),
+      seed = seed
+    ))
+  case None =>
+    d2tok.sketchgraph.train.trainGraphTranscriber(sketchGraphSetup(corpus, size).copy(
+      order = d2tok.sketch.SequenceOrder.named(nodeOrder),
+      relationshipOrder = d2tok.sketchgraph.RelationshipOrder.named(relationshipOrder),
+      seed = seed
+    ))
 
 @main
-def d2tokGraphEval(size: String): Unit = d2tok.floorplangraph.eval.scoreGraphTranscriber(D2TokGraphSetup(D2TokModelConfiguration.named(size)), size, Split.Validation)
+def d2tokGraphEval(corpus: String, size: String): Unit = scoreGraph(corpus, size, Split.Validation)
 
 @main
-def d2tokGraphTest(size: String): Unit = d2tok.floorplangraph.eval.scoreGraphTranscriber(D2TokGraphSetup(D2TokModelConfiguration.named(size)), size, Split.Test)
+def d2tokGraphTest(corpus: String, size: String): Unit = scoreGraph(corpus, size, Split.Test)
 
 @main
-def d2tokGraphDraw(size: String): Unit = d2tok.floorplangraph.eval.drawGraphTranscriber(D2TokGraphSetup(D2TokModelConfiguration.named(size)), size)
+def d2tokGraphDraw(corpus: String, size: String): Unit =
+  d2tok.floorplangraph.eval.drawGraphTranscriber(floorplanGraphSetup(FloorplanCorpus.named(corpus), size), size)
+
+private def scoreGraph(corpus: String, size: String, split: Split): Unit = floorplans(corpus) match
+  case Some(plans) => d2tok.floorplangraph.eval.scoreGraphTranscriber(floorplanGraphSetup(plans, size), size, split)
+  case None        => d2tok.sketchgraph.eval.scoreGraphTranscriber(sketchGraphSetup(corpus, size), size, split)
+
+/** [[d2tok.floorplangraph]] writes the plain floor plans alone. */
+private def floorplanGraphSetup(plans: FloorplanCorpus, size: String): D2TokGraphSetup =
+  require(plans == FloorplanCorpus.Plain, s"the relationships of ${plans.name} are not written in words")
+  D2TokGraphSetup(D2TokModelConfiguration.named(size))
+
+private def sketchGraphSetup(corpus: String, size: String) = d2tok.sketchgraph.config.D2TokGraphSetup(Corpus.named(corpus), D2TokModelConfiguration.named(size))

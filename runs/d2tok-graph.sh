@@ -12,19 +12,20 @@
 #SBATCH --requeue
 #SBATCH --open-mode=append
 #
-# Trains the word transcriber that writes the floor plans' relationships after their nodes, scores
-# every checkpoint, and leaves the metrics as one CSV.
+# Trains the word transcriber that writes a record's relationships after its nodes — of the plain
+# floor plans, or of a drawing corpus that holds relationships — scores every checkpoint, and leaves
+# the metrics as one CSV.
 # The batch is split over the GPUs the job gets, so `--gres=gpu:N` sets how much of it each GPU
 # holds, not how big it is.
 #
-#   SIZE=s-deep ORDER=walls-first RELATIONSHIP_ORDER=by-nodes \
+#   CORPUS=rectilinear SIZE=s-deep ORDER=class RELATIONSHIP_ORDER=by-kind \
 #   CACHE_DIR=$HOME/.detr-cache/corpora \
 #   OUTPUT_DIR=$HOME/.detr-cache/output/<run name> \
 #     sbatch runs/d2tok-graph.sh train
 #
 # `sbatch` hands the environment on to the job.
 # CACHE_DIR is where the floor plans land, so that the next job does not download them again.
-# OUTPUT_DIR is where `d2tok-graph-synthetic-floorplans-<size>-<split>.csv` ends up: what is left of the job once the
+# OUTPUT_DIR is where `d2tok-graph-<corpus>-<size>-<split>.csv` ends up: what is left of the job once the
 # instance is wiped. CHECKPOINT_DIR is where the checkpoints go, under OUTPUT_DIR unless it is set
 # otherwise: the scoring job reads them back, and they are yours to delete once it has.
 
@@ -38,18 +39,20 @@ STAGE="${1:?say which stage to run: train, eval, test or draw}"
 export CACHE_DIR OUTPUT_DIR
 export CHECKPOINT_DIR="${CHECKPOINT_DIR:-$OUTPUT_DIR/checkpoints}"
 
-# The one corpus d2tok-graph reads, and how big a model — the names `D2TokModelConfiguration` knows.
-export CORPUS=synthetic-floorplans
+# Which corpus to train on — synthetic-floorplans, or a name `Corpus` knows — and how big a model —
+# the names `D2TokModelConfiguration` knows.
+export CORPUS="${CORPUS:-synthetic-floorplans}"
 export SIZE="${SIZE:-s-deep}"
 
 # Which seed a run trains from, so that a setting can be run again: SEED=1 for a repeat.
 export SEED="${SEED:-0}"
 
-# Which order a run writes the nodes of a record in — the names `d2tok.floorplan.SequenceOrder` knows
-# but position: random, kept or walls-first. And which order the relationships are written in after
-# them — the names `RelationshipOrder` knows: random or by-nodes.
+# Which order a run writes the nodes of a record in, and which order the relationships after them.
+# On floor plans the names `d2tok.floorplan.SequenceOrder` knows but position (random, kept or
+# walls-first), and those `d2tok.floorplangraph.RelationshipOrder` knows (random or by-nodes). On
+# drawings random or class, and those `d2tok.sketchgraph.RelationshipOrder` knows (free or by-kind).
 export ORDER="${ORDER:-random}"
-export RELATIONSHIP_ORDER="${RELATIONSHIP_ORDER:-random}"
+if [[ $CORPUS == synthetic-floorplans ]]; then export RELATIONSHIP_ORDER="${RELATIONSHIP_ORDER:-random}"; else export RELATIONSHIP_ORDER="${RELATIONSHIP_ORDER:-by-kind}"; fi
 
 # Which branch the container builds, as pushed to GitHub — a change that is not pushed is not
 # run. Inherited by the scoring job this one queues, so both build the same one.
@@ -148,10 +151,10 @@ JSON
     fi
 
     case "$stage" in
-      train) sbt "d2tok/runMain d2tokGraphTrain $size $order $relationshipOrder $seed" ;;
-      eval) sbt "d2tok/runMain d2tokGraphEval $size" ;;
-      test) sbt "d2tok/runMain d2tokGraphTest $size" ;;
-      draw) sbt "d2tok/runMain d2tokGraphDraw $size" ;;
+      train) sbt "d2tok/runMain d2tokGraphTrain $corpus $size $order $relationshipOrder $seed" ;;
+      eval) sbt "d2tok/runMain d2tokGraphEval $corpus $size" ;;
+      test) sbt "d2tok/runMain d2tokGraphTest $corpus $size" ;;
+      draw) sbt "d2tok/runMain d2tokGraphDraw $corpus $size" ;;
     esac
   ' d2tok-graph "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" "$SEED" "$ORDER" "$RELATIONSHIP_ORDER" &
 

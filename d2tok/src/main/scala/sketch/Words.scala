@@ -38,6 +38,14 @@ class Words(canvas: Int):
   def written(nodes: RecordNodes[Node], tokens: AxisExtent[Token]): (Tensor1[Token, Int32], Tensor0[Int32]) =
     val slots = nodes.nodeClass.shape(Axis[Node])
     require(tokens.size == this.tokens(slots), s"$slots nodes are written in ${this.tokens(slots)} words, not ${tokens.size}")
+    val (words, said) = ofNodes(nodes)
+    def inLine[W](of: Tensor2[Node, Part, W]) = of.flatten((Axis[Node], Axis[Part])).relabel(Axis[Node |*| Part] -> Axis[Token])
+    Words.inSequence(inLine(words), inLine(said), end)
+
+  /** Every node's words along `Part` — its type, then one word per coordinate its class places — and
+    * which of them it says: none at a position the record does not reach.
+    */
+  def ofNodes(nodes: RecordNodes[Node]): (Tensor2[Node, Part, Int32], Tensor2[Node, Part, Bool]) =
     def perClass(of: NodeClass => Int) = Tensor1(Axis[NodeClasses], VType[Int32]).fromArray(NodeClass.values.map(of)).slice(Axis[NodeClasses].at(nodes.nodeClass))
     val typed = perClass(nodeClass => 2 * classes.indexOf(nodeClass).max(0)) + nodes.construction
     val placed = perClass(nodeClass => if nodeClass.isNode then 1 + 2 * nodeClass.numPoints else 0)
@@ -45,15 +53,7 @@ class Words(canvas: Int):
     val words = zipvmap(Axis[Node])(typed, pixel(nodes.startX), pixel(nodes.startY), pixel(nodes.endX), pixel(nodes.endY), pixel(nodes.midX), pixel(nodes.midY)):
       case (word, sx, sy, ex, ey, mx, my) => stack(Seq(word, sx, sy, ex, ey, mx, my), Axis[Part])
     val parts = Tensor1(Axis[Part]).fromRange(0 until perNode)
-    val written = placed.vmap(Axis[Node])(count => parts <=! (count - 1))
-    val flat = words.flatten((Axis[Node], Axis[Part]))
-    val kept = written.flatten((Axis[Node], Axis[Part]))
-    val at = Tensor1(Axis[Node |*| Part]).fromRange(0 until slots * perNode)
-    val inOrder = flat.slice(Axis[Node |*| Part].at(where(kept, at, at +! slots * perNode).argsort(Axis[Node |*| Part])))
-    val count = kept.asInt(VType[Int32]).sum
-    val ended = concatenate(inOrder, Tensor0(end).prependAxis(Axis[Node |*| Part]), Axis[Node |*| Part]).relabel(Axis[Node |*| Part] -> Axis[Token])
-    val positions = Tensor1(Axis[Token]).fromRange(0 until tokens.size)
-    (where(positions <=! (count - 1), ended, Tensor.like(ended).fill(end)), count + 1)
+    (words, placed.vmap(Axis[Node])(count => parts <=! (count - 1)))
 
   /** The nodes `words` write, up to their end, or to the first word that does not fit where it stands. */
   def read(words: Seq[Int]): Seq[RecordNode] =
@@ -67,3 +67,18 @@ class Words(canvas: Int):
           (RecordNode(nodeClass, isConstruction, points), rest.drop(placed.size))
       case _ => None
     .toSeq
+
+object Words:
+
+  /** The words `said` of `words`, one after the other and then `end`, the positions after it ending
+    * the record again; and how many words that is, its end among them. One position longer than
+    * `words`, for the end.
+    */
+  def inSequence(words: Tensor1[Token, Int32], said: Tensor1[Token, Bool], end: Int): (Tensor1[Token, Int32], Tensor0[Int32]) =
+    val slots = words.shape(Axis[Token])
+    val at = Tensor1(Axis[Token]).fromRange(0 until slots)
+    val inOrder = words.slice(Axis[Token].at(where(said, at, at +! slots).argsort(Axis[Token])))
+    val count = said.asInt(VType[Int32]).sum
+    val ended = concatenate(inOrder, Tensor0(end).prependAxis(Axis[Token]), Axis[Token])
+    val positions = Tensor1(Axis[Token]).fromRange(0 until slots + 1)
+    (where(positions <=! (count - 1), ended, Tensor.like(ended).fill(end)), count + 1)
