@@ -48,10 +48,16 @@ case class D2TokSetup(
 
 object D2TokSetup:
 
-  def apply(corpus: Corpus, size: D2TokModelConfiguration): D2TokSetup = D2TokSetup(
-    corpus = corpus,
-    checkpointRoot = s"${Runs.checkpointDir}/d2tok/${corpus.name}-${size.name}",
-    numLayers = size.numLayers,
-    numHeads = size.numHeads,
-    embedding = size.embedding
-  )
+  /** Vitruvion on the schedule above; a generated corpus on the one d2s, d2g and d2tok-graph train
+    * it on: 125k steps, the last 25k the cooldown.
+    */
+  def apply(corpus: Corpus, size: D2TokModelConfiguration): D2TokSetup =
+    val setup = D2TokSetup(
+      corpus = corpus,
+      checkpointRoot = s"${Runs.checkpointDir}/d2tok/${corpus.name}-${size.name}",
+      numLayers = size.numLayers,
+      numHeads = size.numHeads,
+      embedding = size.embedding
+    )
+    if corpus == Corpus.VitruvionPrimitives then setup
+    else setup.copy(checkpointEverySamples = 20_000 * 128, numSamples = 500_000 * 128, cooldownSamples = 100_000 * 128)
