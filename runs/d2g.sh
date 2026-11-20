@@ -35,6 +35,9 @@
 #   CORPUS=rectilinear SIZE=s-deep CACHE_DIR=... OUTPUT_DIR=$HOME/.detr-cache/output/<run name> \
 #     sbatch runs/d2g.sh scratch
 #
+# A floor plan batch too big for the GPUs is taken in SLICES, one after another, each step on the
+# gradients of them all: SLICES=2 holds half the batch at a time.
+#
 # `runs/queue_d2g.sh` is the usual way in; `sbatch` hands the environment on to the job.
 # CACHE_DIR is where the floor plans land, so that the next job does not download them again.
 # OUTPUT_DIR is where `d2g-<corpus>-<size>-<split>.csv` ends up: what is left of the job once the
@@ -81,12 +84,14 @@ if [[ $CORPUS == synthetic-floorplans* ]]; then export ORDER="${ORDER:-free}"; e
 # by-kind.
 export RELATIONSHIP_ORDER="${RELATIONSHIP_ORDER:-free}"
 
+export SLICES="${SLICES:-1}"
+
 # Which branch the container builds, as pushed to GitHub — a change that is not pushed is not
 # run. Inherited by the scoring job this one queues, so both build the same one.
 export BRANCH="${BRANCH:-main}"
 
 mkdir -p "$CACHE_DIR" "$OUTPUT_DIR" "$CHECKPOINT_DIR"
-echo "running d2g $STAGE on $CORPUS at size $SIZE, order $ORDER, relationship order $RELATIONSHIP_ORDER, seed $SEED, from branch $BRANCH: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
+echo "running d2g $STAGE on $CORPUS at size $SIZE, order $ORDER, relationship order $RELATIONSHIP_ORDER, seed $SEED, in $SLICES slices, from branch $BRANCH: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
 
 # Which run this job is, for looking its id up later by what it ran and where it wrote.
 printf '%s\td2g\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CORPUS" "$SIZE" "$STAGE" "$OUTPUT_DIR" "${SLURM_JOB_ID:-none}" \
@@ -130,6 +135,7 @@ sarus run \
     order="$8"
     relationshipOrder="$9"
     finetuneFrom="${10}"
+    slices="${11}"
 
     export TMPDIR=/tmp
 
@@ -164,6 +170,7 @@ sarus run \
   "order": "$order",
   "relationshipOrder": "$relationshipOrder",
   "finetuneFrom": "$finetuneFrom",
+  "slices": "$slices",
   "slurmJobId": "$slurmJobId",
   "node": "$node",
   "gpus": "$gpus",
@@ -183,13 +190,15 @@ JSON
 
     case "$stage" in
       train) sbt "d2g/runMain d2gTrain $corpus $size $order $relationshipOrder $seed" ;;
-      scratch) sbt "d2g/runMain d2gTrainFromScratch $corpus $size $order $relationshipOrder $seed" ;;
+      scratch)
+        if [[ $slices == 1 ]]; then sbt "d2g/runMain d2gTrainFromScratch $corpus $size $order $relationshipOrder $seed"
+        else sbt "d2g/runMain d2gTrainFromScratchInSlices $corpus $size $order $relationshipOrder $seed $slices"; fi ;;
       finetune) sbt "d2g/runMain d2gFineTune $corpus $size $order $relationshipOrder $seed /finetuned/$(basename "$finetuneFrom")" ;;
       eval) sbt "d2g/runMain d2gEval $corpus $size" ;;
       test) sbt "d2g/runMain d2gTest $corpus $size" ;;
       draw) sbt "d2g/runMain d2gDraw $corpus $size" ;;
     esac
-  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" "$SEED" "$ORDER" "$RELATIONSHIP_ORDER" "${FINETUNE_FROM:-}" &
+  ' d2g "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" "$SEED" "$ORDER" "$RELATIONSHIP_ORDER" "${FINETUNE_FROM:-}" "$SLICES" &
 
 wait $! || trained=$?
 

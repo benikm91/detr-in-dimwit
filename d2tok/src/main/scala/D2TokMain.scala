@@ -21,6 +21,8 @@ import syntheticFloorplansDataset.FloorplanCorpus
   * nodes in an order of their own, in a single sequence: the floor plans by
   * [[d2tok.floorplangraph]], the drawing corpora that hold relationships by [[d2tok.sketchgraph]]:
   * `sbt "d2tok/runMain d2tokGraphTrain rectilinear s-deep class by-kind 0"`.
+  * [[d2tokGraphTrainInSlices]] trains on floor plans for a batch too big for the GPUs, a slice of it
+  * at a time.
   */
 
 @main
@@ -64,6 +66,17 @@ def d2tokGraphTrain(corpus: String, size: String, nodeOrder: String, relationshi
       relationshipOrder = d2tok.sketchgraph.RelationshipOrder.named(relationshipOrder),
       seed = seed
     ))
+
+@main
+def d2tokGraphTrainInSlices(corpus: String, size: String, nodeOrder: String, relationshipOrder: String, seed: Int, slices: Int): Unit =
+  d2tok.floorplangraph.train.trainGraphTranscriberInSlices(
+    floorplanGraphSetup(FloorplanCorpus.named(corpus), size).copy(
+      nodeOrder = d2tok.floorplan.SequenceOrder.named(nodeOrder),
+      relationshipOrder = d2tok.floorplangraph.RelationshipOrder.named(relationshipOrder),
+      seed = seed
+    ),
+    slices
+  )
 
 @main
 def d2tokGraphEval(corpus: String, size: String): Unit = scoreGraph(corpus, size, Split.Validation)

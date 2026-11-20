@@ -23,6 +23,9 @@
 #   OUTPUT_DIR=$HOME/.detr-cache/output/<run name> \
 #     sbatch runs/d2tok-graph.sh train
 #
+# A floor plan batch too big for the GPUs is taken in SLICES, one after another, each step on the
+# gradients of them all: SLICES=4 holds a quarter of the batch at a time.
+#
 # `sbatch` hands the environment on to the job.
 # CACHE_DIR is where the floor plans land, so that the next job does not download them again.
 # OUTPUT_DIR is where `d2tok-graph-<corpus>-<size>-<split>.csv` ends up: what is left of the job once the
@@ -53,12 +56,14 @@ export SEED="${SEED:-0}"
 export ORDER="${ORDER:-random}"
 export RELATIONSHIP_ORDER="${RELATIONSHIP_ORDER:-by-kind}"
 
+export SLICES="${SLICES:-1}"
+
 # Which branch the container builds, as pushed to GitHub — a change that is not pushed is not
 # run. Inherited by the scoring job this one queues, so both build the same one.
 export BRANCH="${BRANCH:-main}"
 
 mkdir -p "$CACHE_DIR" "$OUTPUT_DIR" "$CHECKPOINT_DIR"
-echo "running d2tok-graph $STAGE on $CORPUS at size $SIZE, order $ORDER, relationship order $RELATIONSHIP_ORDER, seed $SEED, from branch $BRANCH: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
+echo "running d2tok-graph $STAGE on $CORPUS at size $SIZE, order $ORDER, relationship order $RELATIONSHIP_ORDER, seed $SEED, in $SLICES slices, from branch $BRANCH: corpora in $CACHE_DIR, checkpoints in $CHECKPOINT_DIR, metrics in $OUTPUT_DIR"
 
 # Which run this job is, for looking its id up later by what it ran and where it wrote.
 printf '%s\td2tok-graph\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$CORPUS" "$SIZE" "$STAGE" "$OUTPUT_DIR" "${SLURM_JOB_ID:-none}" \
@@ -100,6 +105,7 @@ sarus run \
     seed="$7"
     order="$8"
     relationshipOrder="$9"
+    slices="${10}"
 
     export TMPDIR=/tmp
 
@@ -132,6 +138,7 @@ sarus run \
   "seed": "$seed",
   "order": "$order",
   "relationshipOrder": "$relationshipOrder",
+  "slices": "$slices",
   "slurmJobId": "$slurmJobId",
   "node": "$node",
   "gpus": "$gpus",
@@ -150,12 +157,14 @@ JSON
     fi
 
     case "$stage" in
-      train) sbt "d2tok/runMain d2tokGraphTrain $corpus $size $order $relationshipOrder $seed" ;;
+      train)
+        if [[ $slices == 1 ]]; then sbt "d2tok/runMain d2tokGraphTrain $corpus $size $order $relationshipOrder $seed"
+        else sbt "d2tok/runMain d2tokGraphTrainInSlices $corpus $size $order $relationshipOrder $seed $slices"; fi ;;
       eval) sbt "d2tok/runMain d2tokGraphEval $corpus $size" ;;
       test) sbt "d2tok/runMain d2tokGraphTest $corpus $size" ;;
       draw) sbt "d2tok/runMain d2tokGraphDraw $corpus $size" ;;
     esac
-  ' d2tok-graph "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" "$SEED" "$ORDER" "$RELATIONSHIP_ORDER" &
+  ' d2tok-graph "$CORPUS" "$SIZE" "$STAGE" "${SLURM_JOB_ID:-none}" "${SLURMD_NODENAME:-$(hostname)}" "$BRANCH" "$SEED" "$ORDER" "$RELATIONSHIP_ORDER" "$SLICES" &
 
 wait $! || trained=$?
 
