@@ -1,5 +1,4 @@
 import d2tok.config.D2TokModelConfiguration
-import d2tok.floorplangraph.config.D2TokGraphSetup
 import dataset.Corpus
 import dataset.DrawingDataset.Split
 import syntheticFloorplansDataset.FloorplanCorpus
@@ -19,8 +18,8 @@ import syntheticFloorplansDataset.FloorplanCorpus
   * [[d2tokDraw]] writes what every checkpoint transcribed as a picture.
   *
   * The `d2tokGraph` entry points do the same for records with their relationships, written after the
-  * nodes in an order of their own: the plain floor plans by [[d2tok.floorplangraph]], the drawing
-  * corpora that hold relationships by [[d2tok.sketchgraph]], in a single sequence:
+  * nodes in an order of their own, in a single sequence: the floor plans by
+  * [[d2tok.floorplangraph]], the drawing corpora that hold relationships by [[d2tok.sketchgraph]]:
   * `sbt "d2tok/runMain d2tokGraphTrain rectilinear s-deep class by-kind 0"`.
   */
 
@@ -80,9 +79,6 @@ private def scoreGraph(corpus: String, size: String, split: Split): Unit = floor
   case Some(plans) => d2tok.floorplangraph.eval.scoreGraphTranscriber(floorplanGraphSetup(plans, size), size, split)
   case None        => d2tok.sketchgraph.eval.scoreGraphTranscriber(sketchGraphSetup(corpus, size), size, split)
 
-/** [[d2tok.floorplangraph]] writes the plain floor plans alone. */
-private def floorplanGraphSetup(plans: FloorplanCorpus, size: String): D2TokGraphSetup =
-  require(plans == FloorplanCorpus.Plain, s"the relationships of ${plans.name} are not written in words")
-  D2TokGraphSetup(D2TokModelConfiguration.named(size))
+private def floorplanGraphSetup(plans: FloorplanCorpus, size: String) = d2tok.floorplangraph.config.D2TokGraphSetup(plans, D2TokModelConfiguration.named(size))
 
 private def sketchGraphSetup(corpus: String, size: String) = d2tok.sketchgraph.config.D2TokGraphSetup(Corpus.named(corpus), D2TokModelConfiguration.named(size))

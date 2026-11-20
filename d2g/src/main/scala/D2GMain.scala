@@ -14,8 +14,8 @@ import syntheticFloorplansDataset.FloorplanCorpus
   *
   * [[d2gTrain]] trains a run in an order of the nodes and of the relationships, from a seed, so that a
   * setting can be run again.
-  * [[d2gTrainFromScratch]] trains every part of a model of drawings, nodes and relationships
-  * together, from nothing.
+  * [[d2gTrainFromScratch]] trains every part of a model, nodes and relationships together, from
+  * nothing.
   * [[d2gFineTune]] trains every part of a floor plan run further, from one of its checkpoints.
   * [[d2gEval]] scores the newest run of that corpus and size (greedy decoding).
   * [[d2gTest]] scores its last checkpoint on the test split.
@@ -40,25 +40,33 @@ def d2gTrain(corpus: String, size: String, order: String, relationshipOrder: Str
 
 @main
 def d2gTrainFromScratch(corpus: String, size: String, order: String, relationshipOrder: String, seed: Int): Unit =
-  d2g.sketch.train.trainFromScratch(sketchSetup(corpus, size).copy(
-    nodeOrder = d2s.sketch.NodeOrder.named(order),
-    relationshipOrder = d2g.sketch.RelationshipOrder.named(relationshipOrder),
-    seed = seed
-  ))
+  floorplans(corpus) match
+    case Some(plans) =>
+      d2g.floorplan.train.trainWhole(floorplanSetup(plans, size).copy(
+        nodeOrder = d2s.floorplan.NodeOrder.named(order),
+        relationshipOrder = d2g.floorplan.RelationshipOrder.named(relationshipOrder),
+        seed = seed
+      ), startingFrom = None)
+    case None =>
+      d2g.sketch.train.trainFromScratch(sketchSetup(corpus, size).copy(
+        nodeOrder = d2s.sketch.NodeOrder.named(order),
+        relationshipOrder = d2g.sketch.RelationshipOrder.named(relationshipOrder),
+        seed = seed
+      ))
 
 /** As long as training from scratch, at a learning rate that leaves what the model already knows
   * largely in place.
   */
 @main
 def d2gFineTune(corpus: String, size: String, order: String, relationshipOrder: String, seed: Int, checkpoint: String): Unit =
-  d2g.floorplan.train.fineTuneTranscriber(
+  d2g.floorplan.train.trainWhole(
     floorplanSetup(FloorplanCorpus.named(corpus), size).copy(
       nodeOrder = d2s.floorplan.NodeOrder.named(order),
       relationshipOrder = d2g.floorplan.RelationshipOrder.named(relationshipOrder),
       seed = seed,
       learningRate = 1e-4f
     ),
-    checkpoint
+    startingFrom = Some(checkpoint)
   )
 
 @main

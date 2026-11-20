@@ -29,7 +29,6 @@ import dimwit.optimizer.Adam
 import dimwit.optimizer.AdamState
 import dimwit.optimizer.AdamW
 import dimwit.tensor.Tensor4
-import dimwit.TreeOf.ops.asFloats
 import syntheticFloorplansDataset.FloorplanEdges
 import syntheticFloorplansDataset.FloorplanNodes
 import syntheticFloorplansDataset.FloorplanRecord
@@ -39,7 +38,7 @@ import syntheticFloorplansDataset.SyntheticFloorplans
 import java.nio.file.Path
 import scala.language.implicitConversions
 
-case class D2GFineTuneState(
+case class D2GWholeTrainState(
     params: D2G.Params[Float32],
     optimizerState: LearningRateSchedulerState[D2G.Params[Float32], AdamState],
     lossScale: LossScale,
@@ -53,15 +52,18 @@ case class D2GFineTuneState(
   */
 case class SavedParams(params: D2G.Params[Float32])
 
-/** Fine-tunes every part of a graph transcription model on the synthetic floor plans — the
-  * document encoder and the nodes as much as the relationships — starting from `checkpoint`, a
-  * model whose relationships were trained on nodes that did not move.
+/** Trains every part of a graph transcription model on the synthetic floor plans — the document
+  * encoder and the nodes as much as the relationships — at the cost of the nodes plus that of the
+  * relationships.
   *
-  * Otherwise a step is the one of [[trainTranscriber]]: a fresh linearization of every record,
-  * Float16 against Float32 master weights, and the batch split over the devices.
+  * Otherwise a step is the one of [[trainTranscriber]], but the model runs in Float32.
+  *
+  * @param startingFrom A checkpoint of a model to train further, such as one whose relationships
+  *                     were trained on nodes that did not move; with none, the model starts from
+  *                     nothing.
   */
-def fineTuneTranscriber(setup: D2GSetup, checkpoint: String): Unit =
-  println(s"fine-tuning $checkpoint with $setup")
+def trainWhole(setup: D2GSetup, startingFrom: Option[String]): Unit =
+  println(s"training every part, from ${startingFrom.getOrElse("nothing")}, $setup")
 
   dimwit.initialize()
   trait Batch derives Label
@@ -86,6 +88,8 @@ def fineTuneTranscriber(setup: D2GSetup, checkpoint: String): Unit =
       .followBy(CosineDecay(setup.learningRate, setup.finalLearningRate, cooldownSteps))
   val optimizer = LearningRateScheduler(lr => AdamW(Adam(learningRate = lr, beta2 = setup.adamBeta2), setup.weightDecay), schedule)
 
+  val (initKey, dataKey) = Random.Key(setup.seed).splitToTuple(2)
+
   val nodeLoss = RemainingNodeLoss(VType[Float32], setup.canvas, setup.nodeOrder)
   val edgeLoss = RemainingEdgeLoss(VType[Float32], setup.relationshipOrder)
 
@@ -95,18 +99,18 @@ def fineTuneTranscriber(setup: D2GSetup, checkpoint: String): Unit =
       records: FloorplanRecordBatch[S, Node, Edge],
       asked: Key
   )(params: D2G.Params[Float32]): Tensor0[Float32] =
-    val model = D2G(params.asFloats(VType[Float16]))
-    zipvmap(Axis[S])(images.asFloat(VType[Float16]), records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.relationship, records.subject, records.obj):
+    val model = D2G(params)
+    zipvmap(Axis[S])(images, records.nodeClass, records.startX, records.startY, records.endX, records.endY, records.relationship, records.subject, records.obj):
       case (image, nodeClass, startX, startY, endX, endY, relationship, subject, obj) =>
         val target = FloorplanRecord(FloorplanNodes(nodeClass, startX, startY, endX, endY), FloorplanEdges(relationship, subject, obj))
-        val scored = model.logits(image, target, asked).asFloats(VType[Float32])
+        val scored = model.logits(image, target, asked)
         nodeLoss(scored.nodes, target.nodes) + edgeLoss(scored.edges, target)
     .mean
 
   def gradientStep[S: Label](
       pixels: Tensor3[S, Height, Width, UInt8],
       records: FloorplanRecordBatch[S, Node, Edge],
-      state: D2GFineTuneState
+      state: D2GWholeTrainState
   ) =
     val images = drawingsOf(pixels, Axis[Channel])
     val (nextLinearization, forThisStep, forQueries) = state.linearization.splitToTuple(3)
@@ -117,7 +121,7 @@ def fineTuneTranscriber(setup: D2GSetup, checkpoint: String): Unit =
     val gradients = lossScale.unscaled(scaledGradients)
     val (params, optimizerState) = optimizer.update(gradients.clipGlobalNorm(setup.maxGradientNorm), state.params, state.optimizerState)
     val finite = allFinite(gradients)
-    D2GFineTuneState(
+    D2GWholeTrainState(
       select(finite, params, state.params),
       select(finite, optimizerState, state.optimizerState),
       lossScale.next(finite),
@@ -150,7 +154,7 @@ def fineTuneTranscriber(setup: D2GSetup, checkpoint: String): Unit =
     )
 
   /** The run's own folder, continued where it already holds checkpoints, as in [[trainTranscriber]]:
-    * `checkpoint` only matters to a run that has none yet.
+    * `startingFrom` only matters to a run that has none yet.
     */
   val checkpointer = TensorTreeCheckpointer.latestIn(setup.checkpointRoot) match
     case Some(started) => TensorTreeCheckpointer(started.rootPath, overwrite = true)
@@ -158,16 +162,18 @@ def fineTuneTranscriber(setup: D2GSetup, checkpoint: String): Unit =
   val taken = checkpointer.iterations.maxOption.getOrElse(0)
   val initialState =
     if taken == 0 then
-      val initialParams = TensorTreeIO.load[SavedParams](Path.of(checkpoint)).params
-      D2GFineTuneState(initialParams, optimizer.init(initialParams), LossScale.initial(), 0, Random.Key(setup.seed), 0f)
-    else checkpointer.load[D2GFineTuneState](taken).getOrElse(sys.error(s"checkpoint $taken of ${checkpointer.rootPath} will not load"))
+      val initialParams = startingFrom match
+        case Some(checkpoint) => TensorTreeIO.load[SavedParams](Path.of(checkpoint)).params
+        case None             => D2G.Params.init(setup.numLayers, setup.numHeads, setup.embedding, setup.nodeSlots, setup.edgeSlots, setup.queryPool, setup.canvas, initKey)
+      D2GWholeTrainState(initialParams, optimizer.init(initialParams), LossScale.initial(), 0, dataKey, 0f)
+    else checkpointer.load[D2GWholeTrainState](taken).getOrElse(sys.error(s"checkpoint $taken of ${checkpointer.rootPath} will not load"))
   if taken > 0 then println(s"continuing ${checkpointer.rootPath} from step $taken")
   val history = History(checkpointer.rootPath)
   /** Steps skipped all through a run mean the forward pass overflows, which no scale can fix. */
-  val lossScaleMonitor = new Monitor[D2GFineTuneState]:
-    def report(step: Int, state: D2GFineTuneState): String =
+  val lossScaleMonitor = new Monitor[D2GWholeTrainState]:
+    def report(step: Int, state: D2GWholeTrainState): String =
       f"Loss scale: 2^${math.log(state.lossScale.scale.item) / math.log(2)}%.0f, ${state.skippedSteps.item} steps skipped"
-  val monitor = Monitor.ConcatMonitor[D2GFineTuneState](List(
+  val monitor = Monitor.ConcatMonitor[D2GWholeTrainState](List(
     Monitor.StepMonitor(),
     Monitor.LossMonitor(_.loss.item),
     Monitor.LearningRateMonitor(schedule),

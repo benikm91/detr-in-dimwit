@@ -35,16 +35,18 @@ class Words(canvas: Int):
   def written(nodes: FloorplanNodes[Node], tokens: AxisExtent[Token]): (Tensor1[Token, Int32], Tensor0[Int32]) =
     val slots = nodes.nodeClass.shape(Axis[Node])
     require(tokens.size == this.tokens(slots), s"$slots nodes are written in ${this.tokens(slots)} words, not ${tokens.size}")
+    val (words, said) = ofNodes(nodes)
+    def inLine[W](of: Tensor2[Node, Part, W]) = of.flatten((Axis[Node], Axis[Part])).relabel(Axis[Node |*| Part] -> Axis[Token])
+    inSequence(inLine(words), inLine(said), end)
+
+  /** Every node's words along `Part` — its type, then its four coordinates — and which of them it
+    * says: all of them, or none at a position the record does not reach.
+    */
+  def ofNodes(nodes: FloorplanNodes[Node]): (Tensor2[Node, Part, Int32], Tensor2[Node, Part, Bool]) =
     def pixel(coordinate: Tensor1[Node, Float32]) = Pixels.of(coordinate, canvas) +! classes.size
-    val typed = nodes.nodeClass -! 1
-    val words = zipvmap(Axis[Node])(typed, pixel(nodes.startX), pixel(nodes.startY), pixel(nodes.endX), pixel(nodes.endY)):
-      case (word, sx, sy, ex, ey) => stack(Seq(word, sx, sy, ex, ey), Axis[Part])
-    val flat = words.flatten((Axis[Node], Axis[Part]))
-    val ended = concatenate(flat, Tensor0(end).prependAxis(Axis[Node |*| Part]), Axis[Node |*| Part]).relabel(Axis[Node |*| Part] -> Axis[Token])
-    val held = (!(nodes.nodeClass elementEquals_! FloorplanClass.NoNode.id)).asInt(VType[Int32]).sum
-    val count = held * perNode
-    val positions = Tensor1(Axis[Token]).fromRange(0 until tokens.size)
-    (where(positions <=! (count - 1), ended, Tensor.like(ended).fill(end)), count + 1)
+    val isNode = !(nodes.nodeClass elementEquals_! FloorplanClass.NoNode.id)
+    zipvmap(Axis[Node])(nodes.nodeClass -! 1, pixel(nodes.startX), pixel(nodes.startY), pixel(nodes.endX), pixel(nodes.endY), isNode):
+      case (typed, sx, sy, ex, ey, said) => (stack(Seq(typed, sx, sy, ex, ey), Axis[Part]), stack(Seq.fill(perNode)(said), Axis[Part]))
 
   /** The nodes `words` write, up to their end, or to the first word that does not fit where it stands. */
   def read(words: Seq[Int]): Seq[FloorplanNode] =

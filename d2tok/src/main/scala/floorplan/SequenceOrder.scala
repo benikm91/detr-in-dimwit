@@ -50,7 +50,7 @@ object SequenceOrder:
   /** Where every class comes in [[WallsFirst]]: the classes not listed, [[FloorplanClass.NoNode]] among
     * them, after the ones that are.
     */
-  private def classRank: Tensor1[FloorplanClasses, Float32] =
+  def classRank: Tensor1[FloorplanClasses, Float32] =
     val classes =
       Seq(FloorplanClass.OutsideWall, FloorplanClass.InsideWall, FloorplanClass.OutsideDoor, FloorplanClass.Door, FloorplanClass.Window) ++
         FloorplanClass.values.filter(nodeClass => nodeClass.isNode && !nodeClass.isPlaced) ++

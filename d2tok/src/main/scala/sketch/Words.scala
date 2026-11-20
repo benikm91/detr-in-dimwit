@@ -40,7 +40,7 @@ class Words(canvas: Int):
     require(tokens.size == this.tokens(slots), s"$slots nodes are written in ${this.tokens(slots)} words, not ${tokens.size}")
     val (words, said) = ofNodes(nodes)
     def inLine[W](of: Tensor2[Node, Part, W]) = of.flatten((Axis[Node], Axis[Part])).relabel(Axis[Node |*| Part] -> Axis[Token])
-    Words.inSequence(inLine(words), inLine(said), end)
+    inSequence(inLine(words), inLine(said), end)
 
   /** Every node's words along `Part` — its type, then one word per coordinate its class places — and
     * which of them it says: none at a position the record does not reach.
@@ -67,18 +67,3 @@ class Words(canvas: Int):
           (RecordNode(nodeClass, isConstruction, points), rest.drop(placed.size))
       case _ => None
     .toSeq
-
-object Words:
-
-  /** The words `said` of `words`, one after the other and then `end`, the positions after it ending
-    * the record again; and how many words that is, its end among them. One position longer than
-    * `words`, for the end.
-    */
-  def inSequence(words: Tensor1[Token, Int32], said: Tensor1[Token, Bool], end: Int): (Tensor1[Token, Int32], Tensor0[Int32]) =
-    val slots = words.shape(Axis[Token])
-    val at = Tensor1(Axis[Token]).fromRange(0 until slots)
-    val inOrder = words.slice(Axis[Token].at(where(said, at, at +! slots).argsort(Axis[Token])))
-    val count = said.asInt(VType[Int32]).sum
-    val ended = concatenate(inOrder, Tensor0(end).prependAxis(Axis[Token]), Axis[Token])
-    val positions = Tensor1(Axis[Token]).fromRange(0 until slots + 1)
-    (where(positions <=! (count - 1), ended, Tensor.like(ended).fill(end)), count + 1)

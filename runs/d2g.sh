@@ -30,7 +30,7 @@
 #   SIZE=s CACHE_DIR=... OUTPUT_DIR=$HOME/.detr-cache/output/<new run name> \
 #     sbatch runs/d2g.sh finetune
 #
-# On drawings, `scratch` trains every part together from nothing instead, with no d2s run below it:
+# `scratch` trains every part together from nothing instead, with no d2s run below it:
 #
 #   CORPUS=rectilinear SIZE=s-deep CACHE_DIR=... OUTPUT_DIR=$HOME/.detr-cache/output/<run name> \
 #     sbatch runs/d2g.sh scratch

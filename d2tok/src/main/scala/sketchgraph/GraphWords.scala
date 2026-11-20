@@ -65,7 +65,7 @@ class GraphWords(canvas: Int, nodes: Int):
       byRelationship.flatten((Axis[Relationship], Axis[Part])).relabel(Axis[Relationship |*| Part] -> Axis[Token]),
       Axis[Token]
     )
-    Words.inSequence(inLine(numbered, ofRelationships), inLine(saidNumbered, saidOfRelationships), end)
+    inSequence(inLine(numbered, ofRelationships), inLine(saidNumbered, saidOfRelationships), end)
 
   /** The record `words` write, up to their end, or to the first word that does not fit where it
     * stands: a node whose number is not the next one does not, and neither does a relationship

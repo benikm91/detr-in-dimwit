@@ -39,7 +39,7 @@ STAGE="${1:?say which stage to run: train, eval, test or draw}"
 export CACHE_DIR OUTPUT_DIR
 export CHECKPOINT_DIR="${CHECKPOINT_DIR:-$OUTPUT_DIR/checkpoints}"
 
-# Which corpus to train on — synthetic-floorplans, or a name `Corpus` knows — and how big a model —
+# Which corpus to train on — a name `FloorplanCorpus` or `Corpus` knows — and how big a model —
 # the names `D2TokModelConfiguration` knows.
 export CORPUS="${CORPUS:-synthetic-floorplans}"
 export SIZE="${SIZE:-s-deep}"
@@ -48,11 +48,10 @@ export SIZE="${SIZE:-s-deep}"
 export SEED="${SEED:-0}"
 
 # Which order a run writes the nodes of a record in, and which order the relationships after them.
-# On floor plans the names `d2tok.floorplan.SequenceOrder` knows but position (random, kept or
-# walls-first), and those `d2tok.floorplangraph.RelationshipOrder` knows (random or by-nodes). On
-# drawings random or class, and those `d2tok.sketchgraph.RelationshipOrder` knows (free or by-kind).
+# On floor plans random or walls-first, on drawings random or class: the orders that renumber the
+# relationships along with the nodes. The relationships free or by-kind.
 export ORDER="${ORDER:-random}"
-if [[ $CORPUS == synthetic-floorplans ]]; then export RELATIONSHIP_ORDER="${RELATIONSHIP_ORDER:-random}"; else export RELATIONSHIP_ORDER="${RELATIONSHIP_ORDER:-by-kind}"; fi
+export RELATIONSHIP_ORDER="${RELATIONSHIP_ORDER:-by-kind}"
 
 # Which branch the container builds, as pushed to GitHub — a change that is not pushed is not
 # run. Inherited by the scoring job this one queues, so both build the same one.

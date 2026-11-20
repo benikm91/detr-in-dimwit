@@ -1,15 +1,18 @@
 package d2tok.floorplangraph.config
 
-import d2tok.*
 import d2tok.config.D2TokModelConfiguration
 import d2tok.floorplan.SequenceOrder
-import d2tok.floorplan.Words
 import d2tok.floorplangraph.*
 import dataset.Runs
+import dimwit.*
+import syntheticFloorplansDataset.FloorplanClass
+import syntheticFloorplansDataset.FloorplanClasses
 import syntheticFloorplansDataset.FloorplanCorpus
 
-/** Setup for a D2Tok experiment on the synthetic floor plans that writes their relationships too. */
+/** Setup for a D2Tok experiment that writes a floor plan's relationships after its nodes. */
 case class D2TokGraphSetup(
+    corpus: FloorplanCorpus,
+
     // Model configuration
     numLayers: Int = 3,
     numHeads: Int = 4,
@@ -18,57 +21,41 @@ case class D2TokGraphSetup(
       * many pixels a coordinate chooses from.
       */
     canvas: Int = 128,
-    nodeOrder: SequenceOrder = SequenceOrder.Random,
-    relationshipOrder: RelationshipOrder = RelationshipOrder.Random,
+    /** Random or walls-first: the orders that renumber the relationships along with the nodes. */
+    nodeOrder: SequenceOrder = SequenceOrder.WallsFirst,
+    relationshipOrder: RelationshipOrder = RelationshipOrder.ByKind,
 
-    // Train configuration
+    // Train configuration: the schedule of every model on the floor plans.
     checkpointRoot: String,
-    /** 200k steps of 512 plans, about 228 passes over the training split: 10k steps of warmup, 150k
-      * at the full learning rate and a 40k cooldown, with a checkpoint every 10k.
-      */
     checkpointEverySamples: Int = 40_000 * 128,
     numSamples: Int = 800_000 * 128,
     batchSize: Int = 512,
     learningRate: Float = 3e-4f,
-    /** Adam's memory of how large the gradients are, about 1 / (1 − β₂) steps. Short enough that a
-      * sudden growth of the gradients is caught up with within a few dozen steps, rather than
-      * taking steps several times the learning rate for hundreds of them.
-      */
     adamBeta2: Float = 0.98f,
     finalLearningRate: Float = 0f,
-    /** AdamW's decoupled weight decay, taken per step times the learning rate. Strong enough to keep
-      * the weights, and with them the logits and activations, from growing without bound.
-      */
     weightDecay: Float = 0.05f,
     maxGradientNorm: Float = 1f,
-    /** How much of a relationship's target node is spread evenly over every node it could name
-      * instead: naming the right node then has a best score short of certainty, which the training
-      * stops pushing towards.
-      */
-    linkSmoothing: Float = 0.1f,
     warmupSamples: Int = 40_000 * 128,
     cooldownSamples: Int = 160_000 * 128,
     seed: Int = 0
 ):
 
-  // The position order moves the nodes without renumbering the relationships that name them.
-  require(nodeOrder != SequenceOrder.ByPosition, s"the relationships cannot follow the nodes in the order '${nodeOrder.name}'")
+  require(nodeOrder == SequenceOrder.Random || nodeOrder == SequenceOrder.WallsFirst, s"the order ${nodeOrder.name} does not renumber the relationships along with the nodes")
 
-  val words: Words = Words(canvas)
-  val tokens: Int = words.tokens(FloorplanCorpus.Plain.maxNodes)
+  /** The rank of every node class, by which `nodeOrder` lays the nodes out. */
+  def nodeClassRank: Tensor1[FloorplanClasses, Float32] =
+    if nodeOrder == SequenceOrder.WallsFirst then SequenceOrder.classRank else FloorplanClass.indicator(VType[Float32])(!_.isNode)
 
-  val relationshipWords: RelationshipWords = RelationshipWords(FloorplanCorpus.Plain.maxNodes)
-  val relationshipTokens: Int = relationshipWords.tokens(FloorplanCorpus.Plain.maxRelationships)
+  val words: GraphWords = GraphWords(canvas, corpus.maxNodes)
+  val tokens: Int = words.tokens(corpus.maxNodes, corpus.maxRelationships)
 
-  override def toString: String = s"D2TokGraphSetup(${FloorplanCorpus.Plain.repoId}, layers=$numLayers, nodeOrder=${nodeOrder.name}, relationshipOrder=${relationshipOrder.name}, heads=$numHeads, embedding=$embedding, canvas=$canvas, words=${words.size}+${relationshipWords.size}, tokens=$tokens+$relationshipTokens, samples=$numSamples, batch=$batchSize, seed=$seed)"
+  override def toString: String = s"D2TokGraphSetup(${corpus.repoId}, layers=$numLayers, nodeOrder=${nodeOrder.name}, relationshipOrder=$relationshipOrder, heads=$numHeads, embedding=$embedding, canvas=$canvas, words=${words.size}, tokens=$tokens, samples=$numSamples, batch=$batchSize, seed=$seed)"
 
 object D2TokGraphSetup:
 
-  /** What a run names the corpus by on its command line and in what it writes. */
-  val corpus = s"${FloorplanCorpus.Plain.name}-graph"
-
-  def apply(size: D2TokModelConfiguration): D2TokGraphSetup = D2TokGraphSetup(
-    checkpointRoot = s"${Runs.checkpointDir}/d2tok/$corpus-${size.name}",
+  def apply(corpus: FloorplanCorpus, size: D2TokModelConfiguration): D2TokGraphSetup = D2TokGraphSetup(
+    corpus = corpus,
+    checkpointRoot = s"${Runs.checkpointDir}/d2tok-graph/${corpus.name}-${size.name}",
     numLayers = size.numLayers,
     numHeads = size.numHeads,
     embedding = size.embedding
